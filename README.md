@@ -5,23 +5,24 @@
 ## 功能特性
 
 - **富文本编辑器**：基于 TipTap，支持：
+
   - 标题、粗体、斜体、删除线
   - 有序/无序列表、引用
   - 代码块（支持语法高亮，可切换语言）
   - 表格、图片上传
   - Mermaid 流程图
   - 撤销/重做
-
 - **智能搜索**：基于向量检索的语义搜索
+
   - 使用 BGE 嵌入模型
   - ChromaDB 向量数据库
   - 笔记自动索引
-
 - **笔记本管理**：支持多笔记本分类
 
 ## 技术栈
 
 ### 后端
+
 - **FastAPI** - Python Web 框架
 - **SQLAlchemy** - ORM
 - **ChromaDB** - 向量数据库
@@ -29,6 +30,7 @@
 - **MinIO** - 对象存储（图片）
 
 ### 前端
+
 - **Vue 3** + **TypeScript**
 - **Vite** - 构建工具
 - **TipTap** - 富文本编辑器
@@ -113,6 +115,7 @@ docker-compose down
 ```
 
 服务地址：
+
 - 前端：http://localhost
 - 后端 API：http://localhost:8000
 
@@ -120,51 +123,52 @@ docker-compose down
 
 ### 环境变量
 
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `OLLAMA_HOST` | `http://localhost:11434` | Ollama 服务地址 |
-| `OLLAMA_MODEL` | `qwen2.5:7b` | Ollama 模型名称 |
-| `EMBEDDING_MODEL` | `bge-large-zh-v1.5` | 嵌入模型名称 |
-| `EMBEDDING_DEVICE` | `cpu` | 嵌入模型设备 (cpu/cuda) |
-| `CHROMADB_PATH` | `./data/chromadb` | ChromaDB 数据路径 |
-| `CHUNK_SIZE` | `800` | 文档分块大小 |
-| `CHUNK_OVERLAP` | `100` | 分块重叠字符数 |
-| `TOP_K` | `5` | 检索返回数量 |
-| `DATABASE_URL` | `sqlite:///./data/notes.db` | 数据库连接串 |
-| `MINIO_ENDPOINT` | `localhost:9000` | MinIO 服务地址 |
-| `MINIO_ACCESS_KEY` | `minioadmin` | MinIO 访问密钥 |
-| `MINIO_SECRET_KEY` | `minioadmin` | MinIO 密钥 |
-| `MINIO_BUCKET` | `notes-images` | 存储桶名称 |
+| 变量                 | 默认值                        | 说明                    |
+| -------------------- | ----------------------------- | ----------------------- |
+| `OLLAMA_HOST`      | `http://localhost:11434`    | Ollama 服务地址         |
+| `OLLAMA_MODEL`     | `qwen2.5:7b`                | Ollama 模型名称         |
+| `EMBEDDING_MODEL`  | `bge-large-zh-v1.5`         | 嵌入模型名称            |
+| `EMBEDDING_DEVICE` | `cpu`                       | 嵌入模型设备 (cpu/cuda) |
+| `CHROMADB_PATH`    | `./data/chromadb`           | ChromaDB 数据路径       |
+| `CHUNK_SIZE`       | `800`                       | 文档分块大小            |
+| `CHUNK_OVERLAP`    | `100`                       | 分块重叠字符数          |
+| `TOP_K`            | `5`                         | 检索返回数量            |
+| `DATABASE_URL`     | `sqlite:///./data/notes.db` | 数据库连接串            |
+| `MINIO_ENDPOINT`   | `localhost:9000`            | MinIO 服务地址          |
+| `MINIO_ACCESS_KEY` | `minioadmin`                | MinIO 访问密钥          |
+| `MINIO_SECRET_KEY` | `minioadmin`                | MinIO 密钥              |
+| `MINIO_BUCKET`     | `notes-images`              | 存储桶名称              |
 
 ## API 接口
 
 ### 笔记本
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/api/notebooks` | 获取笔记本列表 |
-| POST | `/api/notebooks` | 创建笔记本 |
-| PUT | `/api/notebooks/{id}` | 更新笔记本 |
-| DELETE | `/api/notebooks/{id}` | 删除笔记本 |
+| 方法   | 路径                    | 说明           |
+| ------ | ----------------------- | -------------- |
+| GET    | `/api/notebooks`      | 获取笔记本列表 |
+| POST   | `/api/notebooks`      | 创建笔记本     |
+| PUT    | `/api/notebooks/{id}` | 更新笔记本     |
+| DELETE | `/api/notebooks/{id}` | 删除笔记本     |
 
 ### 笔记
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/api/pages` | 获取笔记列表（可按笔记本筛选） |
-| POST | `/api/pages` | 创建笔记 |
-| GET | `/api/pages/{id}` | 获取笔记详情 |
-| PUT | `/api/pages/{id}` | 更新笔记 |
-| DELETE | `/api/pages/{id}` | 删除笔记 |
-| POST | `/api/pages/{id}/index` | 手动触发 RAG 索引 |
+| 方法   | 路径                      | 说明                           |
+| ------ | ------------------------- | ------------------------------ |
+| GET    | `/api/pages`            | 获取笔记列表（可按笔记本筛选） |
+| POST   | `/api/pages`            | 创建笔记                       |
+| GET    | `/api/pages/{id}`       | 获取笔记详情                   |
+| PUT    | `/api/pages/{id}`       | 更新笔记                       |
+| DELETE | `/api/pages/{id}`       | 删除笔记                       |
+| POST   | `/api/pages/{id}/index` | 手动触发 RAG 索引              |
 
 ### 搜索
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
+| 方法 | 路径            | 说明     |
+| ---- | --------------- | -------- |
 | POST | `/api/search` | 语义搜索 |
 
 请求示例：
+
 ```json
 {
   "query": "如何使用 Python",
@@ -174,8 +178,8 @@ docker-compose down
 
 ### 上传
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
+| 方法 | 路径                  | 说明     |
+| ---- | --------------------- | -------- |
 | POST | `/api/upload/image` | 上传图片 |
 
 ## 项目结构
@@ -246,6 +250,7 @@ npm run dev
 ### Q: Ollama 连接失败
 
 确保 Ollama 服务正在运行：
+
 ```bash
 ollama serve
 ```
