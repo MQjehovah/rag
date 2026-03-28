@@ -1,7 +1,7 @@
 from pydantic_settings import BaseSettings
 from typing import Optional
 class Settings(BaseSettings):
-    ollama_host: str = "http://192.168.31.8:11434"
+    ollama_host: str = "http://192.168.31.34:11434"
     ollama_model: str = "qwen2.5:7b"
     
     embedding_model: str = "bge-large-zh-v1.5"
