@@ -30,7 +30,7 @@
 
 <script setup lang="ts">
 import { watch, onBeforeUnmount } from 'vue'
-import { useEditor, EditorContent } from '@tiptap/vue-3'
+import { useEditor, EditorContent, VueNodeViewRenderer } from '@tiptap/vue-3'
 import StarterKit from '@tiptap/starter-kit'
 import Placeholder from '@tiptap/extension-placeholder'
 import Image from '@tiptap/extension-image'
@@ -38,10 +38,15 @@ import Table from '@tiptap/extension-table'
 import TableRow from '@tiptap/extension-table-row'
 import TableCell from '@tiptap/extension-table-cell'
 import TableHeader from '@tiptap/extension-table-header'
+import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight'
+import { createLowlight, all } from 'lowlight'
+import CodeBlockComponent from './CodeBlockComponent.vue'
 import mermaid from 'mermaid'
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
 import { nextTick } from 'vue'
+
+const lowlight = createLowlight(all)
 
 const props = defineProps<{
   modelValue: string
@@ -58,7 +63,19 @@ mermaid.initialize({
 
 const editor = useEditor({
   extensions: [
-    StarterKit,
+    StarterKit.configure({
+      codeBlock: false,
+    }),
+    CodeBlockLowlight
+      .extend({
+        addNodeView() {
+          return VueNodeViewRenderer(CodeBlockComponent)
+        },
+      })
+      .configure({
+        lowlight,
+        defaultLanguage: 'plaintext',
+      }),
     Placeholder.configure({
       placeholder: '开始写笔记...',
     }),
@@ -236,11 +253,90 @@ onBeforeUnmount(() => {
 }
 
 .editor-content :deep(.ProseMirror pre) {
-  background: #1f2937;
-  color: #f3f4f6;
-  padding: 16px;
+  background: #282c34;
+  color: #abb2bf;
+  padding: 16px 20px;
   border-radius: 8px;
   overflow-x: auto;
+  font-family: 'Fira Code', 'Consolas', monospace;
+  font-size: 14px;
+  line-height: 1.6;
+  margin: 16px 0;
+}
+
+.editor-content :deep(.ProseMirror pre code) {
+  background: transparent;
+  padding: 0;
+  color: inherit;
+  font-size: inherit;
+  font-family: inherit;
+}
+
+.editor-content :deep(.ProseMirror pre code .hljs-comment),
+.editor-content :deep(.ProseMirror pre code .hljs-quote) {
+  color: #5c6370;
+  font-style: italic;
+}
+
+.editor-content :deep(.ProseMirror pre code .hljs-doctag),
+.editor-content :deep(.ProseMirror pre code .hljs-keyword),
+.editor-content :deep(.ProseMirror pre code .hljs-formula) {
+  color: #c678dd;
+}
+
+.editor-content :deep(.ProseMirror pre code .hljs-section),
+.editor-content :deep(.ProseMirror pre code .hljs-name),
+.editor-content :deep(.ProseMirror pre code .hljs-tag),
+.editor-content :deep(.ProseMirror pre code .hljs-selector-tag),
+.editor-content :deep(.ProseMirror pre code .hljs-deletion),
+.editor-content :deep(.ProseMirror pre code .hljs-subst) {
+  color: #e06c75;
+}
+
+.editor-content :deep(.ProseMirror pre code .hljs-literal) {
+  color: #56b6c2;
+}
+
+.editor-content :deep(.ProseMirror pre code .hljs-string),
+.editor-content :deep(.ProseMirror pre code .hljs-regexp),
+.editor-content :deep(.ProseMirror pre code .hljs-addition),
+.editor-content :deep(.ProseMirror pre code .hljs-attribute),
+.editor-content :deep(.ProseMirror pre code .hljs-meta .hljs-string) {
+  color: #98c379;
+}
+
+.editor-content :deep(.ProseMirror pre code .hljs-attr),
+.editor-content :deep(.ProseMirror pre code .hljs-variable),
+.editor-content :deep(.ProseMirror pre code .hljs-template-variable),
+.editor-content :deep(.ProseMirror pre code .hljs-type),
+.editor-content :deep(.ProseMirror pre code .hljs-selector-class),
+.editor-content :deep(.ProseMirror pre code .hljs-selector-attr),
+.editor-content :deep(.ProseMirror pre code .hljs-selector-pseudo),
+.editor-content :deep(.ProseMirror pre code .hljs-number) {
+  color: #d19a66;
+}
+
+.editor-content :deep(.ProseMirror pre code .hljs-symbol),
+.editor-content :deep(.ProseMirror pre code .hljs-bullet),
+.editor-content :deep(.ProseMirror pre code .hljs-link),
+.editor-content :deep(.ProseMirror pre code .hljs-meta),
+.editor-content :deep(.ProseMirror pre code .hljs-selector-id),
+.editor-content :deep(.ProseMirror pre code .hljs-title) {
+  color: #61afef;
+}
+
+.editor-content :deep(.ProseMirror pre code .hljs-built_in),
+.editor-content :deep(.ProseMirror pre code .hljs-title.class_),
+.editor-content :deep(.ProseMirror pre code .hljs-class .hljs-title) {
+  color: #e6c07b;
+}
+
+.editor-content :deep(.ProseMirror pre code .hljs-emphasis) {
+  font-style: italic;
+}
+
+.editor-content :deep(.ProseMirror pre code .hljs-strong) {
+  font-weight: bold;
 }
 
 .editor-content :deep(.ProseMirror ul),
