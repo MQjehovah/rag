@@ -49,10 +49,20 @@
                 :key="page.id"
                 class="page-item"
                 :class="{ active: currentPage?.id === page.id }"
-                @click="selectPage(page)"
               >
-                <span class="page-icon">📄</span>
-                <span class="page-title">{{ page.title || '无标题' }}</span>
+                <div class="page-info" @click="selectPage(page)">
+                  <span class="page-icon">📄</span>
+                  <span class="page-title">{{ page.title || '无标题' }}</span>
+                </div>
+                <el-dropdown trigger="click" @command="(cmd: string) => handlePageCmd(cmd, page)">
+                  <el-button size="small" text class="page-menu-btn">⋮</el-button>
+                  <template #dropdown>
+                    <el-dropdown-menu>
+                      <el-dropdown-item command="index">重新索引</el-dropdown-item>
+                      <el-dropdown-item command="delete" divided>删除</el-dropdown-item>
+                    </el-dropdown-menu>
+                  </template>
+                </el-dropdown>
               </div>
               <div class="add-page" @click="createPage">
                 <span>+ 添加笔记</span>
@@ -76,7 +86,10 @@
             @input="scheduleSave"
           />
           <TipTapEditor v-model="currentPage.content" @update:modelValue="scheduleSave" />
-          <div class="editor-hint">自动保存</div>
+          <div class="editor-footer">
+            <span class="editor-hint">自动保存</span>
+            <el-button size="small" @click="reindexCurrentPage" :loading="indexing">重新索引</el-button>
+          </div>
         </div>
         <div v-else class="empty-state">
           <h2>欢迎使用笔记系统</h2>
@@ -109,7 +122,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage } from 'element-plus'
 import axios from 'axios'
 import TipTapEditor from '../components/TipTapEditor.vue'
@@ -141,6 +154,7 @@ const searchResults = ref<any[]>([])
 
 let saveTimeout: number | null = null
 const notebookPages = ref<Page[]>([])
+const indexing = ref(false)
 
 const loadNotebooks = async () => {
   try {
@@ -216,6 +230,30 @@ const handleNotebookCmd = async (cmd: string, nb: Notebook) => {
   }
 }
 
+const handlePageCmd = async (cmd: string, page: Page) => {
+  if (cmd === 'delete') {
+    try {
+      await axios.delete(`/api/pages/${page.id}`)
+      ElMessage.success('删除成功')
+      pages.value = pages.value.filter(p => p.id !== page.id)
+      notebookPages.value = notebookPages.value.filter(p => p.id !== page.id)
+      if (currentPage.value?.id === page.id) {
+        currentPage.value = null
+      }
+    } catch {
+      ElMessage.error('删除失败')
+    }
+  } else if (cmd === 'index') {
+    try {
+      ElMessage.info('正在索引...')
+      await axios.post(`/api/pages/${page.id}/index`)
+      ElMessage.success('索引完成')
+    } catch {
+      ElMessage.error('索引失败')
+    }
+  }
+}
+
 const createPage = async () => {
   if (!currentNotebook.value) {
     ElMessage.warning('请先选择笔记本')
@@ -259,6 +297,19 @@ const savePage = async () => {
   }
 }
 
+const reindexCurrentPage = async () => {
+  if (!currentPage.value) return
+  indexing.value = true
+  try {
+    await axios.post(`/api/pages/${currentPage.value.id}/index`)
+    ElMessage.success('索引完成')
+  } catch {
+    ElMessage.error('索引失败')
+  } finally {
+    indexing.value = false
+  }
+}
+
 const doSearch = async () => {
   if (!searchQuery.value.trim()) return
   try {
@@ -286,9 +337,23 @@ const openFromSearch = (result: any) => {
   }
 }
 
+const handleKeydown = (e: KeyboardEvent) => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+    e.preventDefault()
+    if (currentPage.value && saveStatus.value !== 'saving') {
+      savePage()
+    }
+  }
+}
+
 onMounted(() => {
   loadNotebooks()
   loadPages()
+  window.addEventListener('keydown', handleKeydown)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', handleKeydown)
 })
 </script>
 
@@ -311,11 +376,14 @@ html, body, #app { height: 100%; }
 .notebook-name { flex: 1; font-weight: 500; }
 .notebook-info .el-button { margin-left: auto; }
 .page-list { padding-left: 20px; }
-.page-item { display: flex; align-items: center; padding: 8px 12px; border-radius: 6px; cursor: pointer; }
+.page-item { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; border-radius: 6px; cursor: pointer; }
 .page-item:hover { background: #f5f7fa; }
 .page-item.active { background: #e6f7ff; }
+.page-info { display: flex; align-items: center; flex: 1; min-width: 0; }
 .page-icon { margin-right: 8px; font-size: 12px; }
 .page-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
+.page-menu-btn { opacity: 0; padding: 0 4px; }
+.page-item:hover .page-menu-btn { opacity: 1; }
 .add-page { padding: 8px 12px; color: #409eff; cursor: pointer; font-size: 14px; }
 .add-page:hover { background: #f5f7fa; }
 .empty-tip { text-align: center; color: #999; padding: 20px; }
@@ -323,7 +391,8 @@ html, body, #app { height: 100%; }
 .editor-wrapper { max-width: 900px; margin: 0 auto; background: #fff; border-radius: 8px; box-shadow: 0 2px 12px rgba(0,0,0,0.1); min-height: calc(100vh - 100px); padding: 30px 40px; }
 .title-input { width: 100%; font-size: 28px; font-weight: 600; border: none; outline: none; padding: 10px 0; margin-bottom: 20px; color: #1f2937; }
 .title-input::placeholder { color: #9ca3af; }
-.editor-hint { margin-top: 30px; padding-top: 20px; border-top: 1px solid #e5e7eb; color: #9ca3af; font-size: 14px; }
+.editor-footer { margin-top: 30px; padding-top: 20px; border-top: 1px solid #e5e7eb; display: flex; justify-content: space-between; align-items: center; }
+.editor-hint { color: #9ca3af; font-size: 14px; }
 .empty-state { text-align: center; color: #999; margin-top: 100px; }
 .search-result { padding: 15px; border-bottom: 1px solid #e4e7ed; cursor: pointer; }
 .search-result:hover { background: #f5f7fa; }

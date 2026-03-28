@@ -1,5 +1,5 @@
 <template>
-  <node-view-wrapper class="code-block">
+  <node-view-wrapper class="code-block" :class="`language-${node.attrs.language || 'plaintext'}`">
     <select contenteditable="false" @change="handleLanguageChange">
       <option disabled :selected="!node.attrs.language">选择语言</option>
       <option value="javascript" :selected="node.attrs.language === 'javascript'">JavaScript</option>
@@ -15,9 +15,10 @@
       <option value="yaml" :selected="node.attrs.language === 'yaml'">YAML</option>
       <option value="html" :selected="node.attrs.language === 'html'">HTML</option>
       <option value="css" :selected="node.attrs.language === 'css'">CSS</option>
+      <option value="mermaid" :selected="node.attrs.language === 'mermaid'">Mermaid</option>
       <option value="plaintext" :selected="node.attrs.language === 'plaintext'">Plain Text</option>
     </select>
-    <pre><code><node-view-content as="code" /></code></pre>
+    <pre spellcheck="false"><code spellcheck="false"><node-view-content as="code" /></code></pre>
   </node-view-wrapper>
 </template>
 

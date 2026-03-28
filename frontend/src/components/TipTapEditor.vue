@@ -93,14 +93,20 @@ const editor = useEditor({
   content: props.modelValue,
   onUpdate: ({ editor }) => {
     emit('update:modelValue', editor.getHTML())
-    nextTick(() => renderMermaid())
+    nextTick(() => {
+      renderMermaid()
+      disableSpellcheck()
+    })
   },
 })
 
 watch(() => props.modelValue, (newValue) => {
   if (editor.value && editor.value.getHTML() !== newValue) {
     editor.value.commands.setContent(newValue || '')
-    nextTick(() => renderMermaid())
+    nextTick(() => {
+      renderMermaid()
+      disableSpellcheck()
+    })
   }
 })
 
@@ -110,24 +116,39 @@ const renderMermaid = async () => {
   const editorEl = document.querySelector('.ProseMirror')
   if (!editorEl) return
   
-  const diagramDivs = editorEl.querySelectorAll('.mermaid-diagram')
+  const mermaidBlocks = editorEl.querySelectorAll('.language-mermaid')
   
-  for (const diagramDiv of diagramDivs) {
-    if (diagramDiv.getAttribute('data-rendered') === 'true') continue
+  for (const block of mermaidBlocks) {
+    const codeBlock = block.querySelector('code')
+    if (!codeBlock) continue
     
-    const codeText = diagramDiv.getAttribute('data-code') || ''
+    const codeText = codeBlock.textContent || ''
     if (!codeText.trim()) continue
-    
-    diagramDiv.setAttribute('data-rendered', 'true')
     
     try {
       const id = `mermaid-${Math.random().toString(36).substr(2, 9)}`
       const { svg } = await mermaid.render(id, codeText)
+      
+      let diagramDiv = block.querySelector('.mermaid-diagram')
+      if (!diagramDiv) {
+        diagramDiv = document.createElement('div')
+        diagramDiv.className = 'mermaid-diagram'
+        block.appendChild(diagramDiv)
+      }
       diagramDiv.innerHTML = svg
     } catch (e) {
       console.error('Mermaid error:', e)
     }
   }
+}
+
+const disableSpellcheck = () => {
+  const editorEl = document.querySelector('.ProseMirror')
+  if (!editorEl) return
+  
+  editorEl.querySelectorAll('pre, code').forEach(el => {
+    el.setAttribute('spellcheck', 'false')
+  })
 }
 
 const handleImageUpload = () => {
@@ -152,14 +173,20 @@ const handleImageUpload = () => {
 
 const insertMermaid = () => {
   const template = `graph TD
-A[开始] --> B{判断}
-B -->|Yes| C[成功]
-B -->|No| D[失败]`
+    A[开始] --> B{判断}
+    B -->|Yes| C[成功]
+    B -->|No| D[失败]`
   
-  const html = `<pre class="mermaid-block"><code class="language-mermaid">${template}</code></pre><div class="mermaid-diagram" data-code="${template}"></div><p></p>`
-  editor.value?.chain().focus().insertContent(html).run()
+  editor.value?.chain().focus().toggleCodeBlock().run()
   
-  nextTick(() => renderMermaid())
+  const { $from } = editor.value!.state.selection
+  const node = $from.node()
+  if (node.type.name === 'codeBlock') {
+    editor.value?.chain().focus().updateAttributes('codeBlock', { language: 'mermaid' }).run()
+    editor.value?.chain().focus().insertContent(template).run()
+  }
+  
+  setTimeout(() => renderMermaid(), 200)
 }
 
 onBeforeUnmount(() => {
@@ -377,8 +404,12 @@ onBeforeUnmount(() => {
   background: #fff;
   padding: 20px;
   border-radius: 8px;
-  margin: 16px 0;
+  margin-top: 16px;
   text-align: center;
+}
+
+.editor-content :deep(.ProseMirror .language-mermaid) {
+  border: 2px solid #89b4fa;
 }
 
 .editor-content :deep(.ProseMirror pre.mermaid-block) {
