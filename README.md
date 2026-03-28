@@ -55,7 +55,7 @@
 # Windows: 访问 https://ollama.ai 下载
 
 # 下载嵌入模型
-ollama pull bge-large-zh-v1.5
+ollama pull modelscope.cn/Embedding-GGUF/bge-large-zh-v1.5:latest
 ```
 
 ### 2. 配置环境变量
