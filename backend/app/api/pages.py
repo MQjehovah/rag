@@ -45,8 +45,10 @@ async def create_page(data: PageCreate, db: Session = Depends(get_db), rag = Dep
     if data.content:
         try:
             embedding_service, vector_store = rag
-            embedding = await embedding_service.encode(f"{data.title}\n{data.content}")
-            await vector_store.add_page(page.id, page.title, page.content, embedding)
+            text = f"{data.title}\n{data.content}"
+            chunks = await embedding_service.encode_chunks(text)
+            if chunks:
+                await vector_store.add_page_chunks(page.id, page.title, chunks)
         except:
             pass
     
@@ -89,8 +91,10 @@ async def update_page(page_id: str, data: PageUpdate, db: Session = Depends(get_
     
     try:
         embedding_service, vector_store = rag
-        embedding = await embedding_service.encode(f"{page.title}\n{page.content}")
-        await vector_store.add_page(page.id, page.title, page.content, embedding)
+        text = f"{page.title}\n{page.content}"
+        chunks = await embedding_service.encode_chunks(text)
+        if chunks:
+            await vector_store.add_page_chunks(page.id, page.title, chunks)
     except:
         pass
     
@@ -123,8 +127,13 @@ async def index_page(page_id: str, db: Session = Depends(get_db), rag = Depends(
     
     try:
         embedding_service, vector_store = rag
-        embedding = await embedding_service.encode(f"{page.title}\n{page.content}")
-        await vector_store.add_page(page.id, page.title, page.content, embedding)
-        return {"message": "索引成功"}
+        text = f"{page.title}\n{page.content}"
+        chunks = await embedding_service.encode_chunks(text)
+        
+        if chunks:
+            await vector_store.add_page_chunks(page.id, page.title, chunks)
+            return {"message": f"索引成功，共 {len(chunks)} 个分块"}
+        else:
+            return {"message": "内容为空，未创建索引"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"索引失败: {str(e)}")
