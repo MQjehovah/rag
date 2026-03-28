@@ -98,6 +98,12 @@ const editor = useEditor({
       disableSpellcheck()
     })
   },
+  onCreate: () => {
+    nextTick(() => {
+      renderMermaid()
+      disableSpellcheck()
+    })
+  },
 })
 
 watch(() => props.modelValue, (newValue) => {
@@ -146,9 +152,9 @@ const disableSpellcheck = () => {
   const editorEl = document.querySelector('.ProseMirror')
   if (!editorEl) return
   
-  editorEl.querySelectorAll('pre, code').forEach(el => {
-    el.setAttribute('spellcheck', 'false')
-  })
+  editorEl.setAttribute('spellcheck', 'false')
+  editorEl.setAttribute('autocorrect', 'off')
+  editorEl.setAttribute('autocomplete', 'off')
 }
 
 const handleImageUpload = () => {
