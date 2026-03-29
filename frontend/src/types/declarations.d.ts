@@ -9,6 +9,10 @@ declare module '@tiptap/extension-code-block-lowlight' {
   export default extension
 }
 
+declare module 'tiptap-markdown' {
+  export const Markdown: any
+}
+
 declare module '*.vue' {
   import type { DefineComponent } from 'vue'
   const component: DefineComponent<{}, {}, any>

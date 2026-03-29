@@ -41,6 +41,7 @@ import TableHeader from '@tiptap/extension-table-header'
 import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight'
 import { createLowlight, all } from 'lowlight'
 import CodeBlockComponent from './CodeBlockComponent.vue'
+import { Markdown } from 'tiptap-markdown'
 import mermaid from 'mermaid'
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
@@ -89,10 +90,15 @@ const editor = useEditor({
     TableRow,
     TableCell,
     TableHeader,
+    Markdown.configure({
+      html: true,
+      breaks: true,
+      linkify: true,
+    }),
   ],
   content: props.modelValue,
   onUpdate: ({ editor }) => {
-    emit('update:modelValue', editor.getHTML())
+    emit('update:modelValue', editor.storage.markdown.getMarkdown())
     nextTick(() => {
       renderMermaid()
       disableSpellcheck()
@@ -107,7 +113,7 @@ const editor = useEditor({
 })
 
 watch(() => props.modelValue, (newValue) => {
-  if (editor.value && editor.value.getHTML() !== newValue) {
+  if (editor.value && editor.value.storage.markdown.getMarkdown() !== newValue) {
     editor.value.commands.setContent(newValue || '')
     nextTick(() => {
       renderMermaid()
