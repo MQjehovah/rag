@@ -79,7 +79,7 @@ source venv/bin/activate  # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 
 # 启动服务
-python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+docker-compose up -d build
 ```
 
 后端启动后访问 http://localhost:8000/docs 查看 API 文档。
