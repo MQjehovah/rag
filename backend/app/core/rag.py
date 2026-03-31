@@ -1,51 +1,69 @@
 import httpx
 import chromadb
-from chromadb.config import Settings
+from chromadb.config import Settings as ChromaSettings
 from typing import List, Dict, Any, Optional
 from app.config import settings
+from langchain_community.document_loaders import UnstructuredMarkdownLoader
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+import tempfile
+import os
+
 
 class EmbeddingService:
     def __init__(self):
         self.client = httpx.AsyncClient(timeout=60.0)
         self.model = settings.embedding_model
-        self.ollama_host = settings.ollama_host
-        self.max_length = 400
-    
+        self.api_url = settings.embedding_api_url
+        self.splitter = RecursiveCharacterTextSplitter(
+            chunk_size=settings.chunk_size,
+            chunk_overlap=settings.chunk_overlap,
+            separators=["##", "#", "\n\n", "\n", " ", ""]
+        )
+
     async def encode(self, text: str) -> List[float]:
-        if len(text) > self.max_length:
-            text = text[:self.max_length]
-        
-        url = f"{self.ollama_host}/api/embeddings"
-        payload = {"model": self.model, "prompt": text}
-        response = await self.client.post(url, json=payload)
+        # OpenAI兼容API格式
+        payload = {"input": text, "model": self.model}
+        response = await self.client.post(self.api_url, json=payload)
         response.raise_for_status()
-        return response.json().get("embedding", [])
-    
-    async def encode_chunks(self, text: str, overlap: int = 50) -> List[tuple]:
-        """分段编码，返回 [(chunk_text, embedding), ...]"""
-        chunks = []
-        text_len = len(text)
-        
-        if text_len <= self.max_length:
-            emb = await self.encode(text)
-            return [(text, emb)] if emb else []
-        
-        start = 0
-        while start < text_len:
-            end = min(start + self.max_length, text_len)
-            chunk = text[start:end]
-            
-            if chunk.strip():
-                try:
-                    emb = await self.encode(chunk)
-                    if emb:
-                        chunks.append((chunk, emb))
-                except Exception as e:
-                    print(f"Encode chunk error: {e}")
-            
-            start = end - overlap if end < text_len else text_len
-        
-        return chunks
+        data = response.json()
+        return data.get("data", [{}])[0].get("embedding", [])
+
+    def load_markdown(self, content: str, title: str = "") -> List[str]:
+        """使用 UnstructuredMarkdownLoader 加载并切片 markdown 内容"""
+        # 写入临时文件
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False) as f:
+            f.write(content)
+            temp_path = f.name
+
+        try:
+            loader = UnstructuredMarkdownLoader(temp_path)
+            docs = loader.load()
+
+            # 合并文档内容
+            full_text = "\n\n".join([doc.page_content for doc in docs])
+            if title:
+                full_text = f"# {title}\n\n{full_text}"
+
+            # 切片
+            chunks = self.splitter.split_text(full_text)
+            return [chunk for chunk in chunks if chunk.strip()]
+        finally:
+            os.unlink(temp_path)
+
+    async def encode_chunks(self, content: str, title: str = "") -> List[tuple]:
+        """加载、切片并编码 markdown 内容"""
+        chunks = self.load_markdown(content, title)
+        result = []
+
+        for chunk_text in chunks:
+            try:
+                emb = await self.encode(chunk_text)
+                if emb:
+                    result.append((chunk_text, emb))
+            except Exception as e:
+                print(f"Encode chunk error: {e}")
+
+        return result
     
     async def close(self):
         await self.client.aclose()
@@ -54,7 +72,7 @@ class VectorStore:
     def __init__(self):
         self.client = chromadb.PersistentClient(
             path=settings.chromadb_path,
-            settings=Settings(anonymized_telemetry=False)
+            settings=ChromaSettings(anonymized_telemetry=False)
         )
         self.collection = self.client.get_or_create_collection(
             name="pages",

@@ -45,8 +45,7 @@ async def create_page(data: PageCreate, db: Session = Depends(get_db), rag = Dep
     if data.content:
         try:
             embedding_service, vector_store = rag
-            text = f"{data.title}\n{data.content}"
-            chunks = await embedding_service.encode_chunks(text)
+            chunks = await embedding_service.encode_chunks(data.content, data.title)
             if chunks:
                 await vector_store.add_page_chunks(page.id, page.title, chunks)
         except:
@@ -91,8 +90,7 @@ async def update_page(page_id: str, data: PageUpdate, db: Session = Depends(get_
     
     try:
         embedding_service, vector_store = rag
-        text = f"{page.title}\n{page.content}"
-        chunks = await embedding_service.encode_chunks(text)
+        chunks = await embedding_service.encode_chunks(page.content, page.title)
         if chunks:
             await vector_store.add_page_chunks(page.id, page.title, chunks)
     except:
@@ -127,9 +125,8 @@ async def index_page(page_id: str, db: Session = Depends(get_db), rag = Depends(
     
     try:
         embedding_service, vector_store = rag
-        text = f"{page.title}\n{page.content}"
-        chunks = await embedding_service.encode_chunks(text)
-        
+        chunks = await embedding_service.encode_chunks(page.content, page.title)
+
         if chunks:
             await vector_store.add_page_chunks(page.id, page.title, chunks)
             return {"message": f"索引成功，共 {len(chunks)} 个分块"}
