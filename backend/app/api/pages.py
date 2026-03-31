@@ -35,22 +35,12 @@ def get_rag_services():
     return _embedding_service, _vector_store
 
 @router.post("", response_model=PageResponse)
-async def create_page(data: PageCreate, db: Session = Depends(get_db), rag = Depends(get_rag_services)):
+async def create_page(data: PageCreate, db: Session = Depends(get_db)):
     """创建笔记"""
     page = Page(id=str(uuid.uuid4()), title=data.title, content=data.content, notebook_id=data.notebook_id)
     db.add(page)
     db.commit()
     db.refresh(page)
-    
-    if data.content:
-        try:
-            embedding_service, vector_store = rag
-            chunks = await embedding_service.encode_chunks(data.content, data.title)
-            if chunks:
-                await vector_store.add_page_chunks(page.id, page.title, chunks)
-        except:
-            pass
-    
     return page
 
 @router.get("", response_model=List[PageResponse])
@@ -71,12 +61,12 @@ async def get_page(page_id: str, db: Session = Depends(get_db)):
     return page
 
 @router.put("/{page_id}", response_model=PageResponse)
-async def update_page(page_id: str, data: PageUpdate, db: Session = Depends(get_db), rag = Depends(get_rag_services)):
+async def update_page(page_id: str, data: PageUpdate, db: Session = Depends(get_db)):
     """更新笔记"""
     page = db.query(Page).filter(Page.id == page_id).first()
     if not page:
         raise HTTPException(status_code=404, detail="笔记不存在")
-    
+
     if data.title is not None:
         page.title = data.title
     if data.content is not None:
@@ -84,18 +74,9 @@ async def update_page(page_id: str, data: PageUpdate, db: Session = Depends(get_
     if data.notebook_id is not None:
         page.notebook_id = data.notebook_id
     page.updated_at = datetime.now()
-    
+
     db.commit()
     db.refresh(page)
-    
-    try:
-        embedding_service, vector_store = rag
-        chunks = await embedding_service.encode_chunks(page.content, page.title)
-        if chunks:
-            await vector_store.add_page_chunks(page.id, page.title, chunks)
-    except:
-        pass
-    
     return page
 
 @router.delete("/{page_id}")

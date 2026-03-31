@@ -7,6 +7,9 @@ from langchain_community.document_loaders import UnstructuredMarkdownLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 import tempfile
 import os
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class EmbeddingService:
@@ -30,8 +33,8 @@ class EmbeddingService:
 
     def load_markdown(self, content: str, title: str = "") -> List[str]:
         """使用 UnstructuredMarkdownLoader 加载并切片 markdown 内容"""
-        # 写入临时文件
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False) as f:
+        # 写入临时文件，指定 UTF-8 编码
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False, encoding='utf-8') as f:
             f.write(content)
             temp_path = f.name
 
@@ -61,7 +64,7 @@ class EmbeddingService:
                 if emb:
                     result.append((chunk_text, emb))
             except Exception as e:
-                print(f"Encode chunk error: {e}")
+                logger.error(f"Encode chunk error: {str(e).encode('utf-8', errors='replace').decode('utf-8')}")
 
         return result
     
