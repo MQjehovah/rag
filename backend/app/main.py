@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
-from app.api import pages, search, upload, notebooks
+from app.api import pages, search, upload, notebooks, graph
 
 app = FastAPI(
     title="Notes RAG System",
@@ -22,6 +22,7 @@ app.include_router(pages.router)
 app.include_router(notebooks.router)
 app.include_router(search.router)
 app.include_router(upload.router)
+app.include_router(graph.router)
 
 @app.get("/")
 async def root():

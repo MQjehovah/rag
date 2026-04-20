@@ -25,6 +25,16 @@ class Page(Base):
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 
+class GraphEdge(Base):
+    __tablename__ = 'graph_edges'
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    source_id = Column(String(36), ForeignKey('pages.id'), nullable=False, index=True)
+    target_id = Column(String(36), ForeignKey('pages.id'), nullable=False, index=True)
+    weight = Column(String(20), default='1.0')
+    edge_type = Column(String(50), default='similarity')
+    created_at = Column(DateTime, default=datetime.now)
+
 def get_engine(database_url: str = "sqlite:///./data/notes.db"):
     if database_url.startswith("sqlite"):
         os.makedirs("./data", exist_ok=True)
@@ -35,14 +45,7 @@ def get_engine(database_url: str = "sqlite:///./data/notes.db"):
     return create_engine(database_url, pool_pre_ping=True)
 
 def init_db(engine):
-    inspector = inspect(engine)
-    tables = inspector.get_table_names()
-    
-    if 'pages' not in tables or 'notebooks' not in tables:
-        Base.metadata.drop_all(engine)
-        Base.metadata.create_all(engine)
-    else:
-        Base.metadata.create_all(engine)
+    Base.metadata.create_all(engine)
 
 def get_session(engine):
     Session = sessionmaker(bind=engine)

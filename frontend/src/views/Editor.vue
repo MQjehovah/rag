@@ -12,6 +12,7 @@
       <div class="header-actions">
         <el-tag type="success" v-if="saveStatus === 'saved'">已保存</el-tag>
         <el-tag type="warning" v-else-if="saveStatus === 'saving'">保存中...</el-tag>
+        <el-button @click="$router.push('/graph')">知识图谱</el-button>
         <el-button type="primary" @click="showNewNotebook = true">新建笔记本</el-button>
       </div>
     </header>
@@ -108,12 +109,17 @@
     </el-dialog>
 
     <!-- 搜索结果对话框 -->
-    <el-dialog v-model="showSearch" title="搜索结果" width="600px">
+    <el-dialog v-model="showSearch" title="搜索结果" width="700px">
       <div v-if="searchResults.length > 0">
         <div v-for="result in searchResults" :key="result.id" class="search-result" @click="openFromSearch(result)">
-          <div class="result-title">{{ result.title }}</div>
+          <div class="result-header">
+            <span class="result-title">{{ result.title }}</span>
+            <el-tag size="small" :type="getSourceTagType(result.source)">{{ result.source }}</el-tag>
+          </div>
           <div class="result-content">{{ result.content }}</div>
-          <el-tag size="small">相似度: {{ (result.score * 100).toFixed(1) }}%</el-tag>
+          <div class="result-footer">
+            <el-tag size="small" type="info">得分: {{ result.score?.toFixed(3) }}</el-tag>
+          </div>
         </div>
       </div>
       <el-empty v-else description="未找到相关笔记" />
@@ -310,6 +316,13 @@ const reindexCurrentPage = async () => {
   }
 }
 
+const getSourceTagType = (source: string) => {
+  if (source.includes('graph')) return 'success'
+  if (source.includes('keyword')) return 'warning'
+  if (source.includes('vector')) return 'primary'
+  return 'info'
+}
+
 const doSearch = async () => {
   if (!searchQuery.value.trim()) return
   try {
@@ -398,4 +411,13 @@ html, body, #app { height: 100%; }
 .search-result:hover { background: #f5f7fa; }
 .result-title { font-weight: bold; margin-bottom: 5px; }
 .result-content { color: #666; font-size: 14px; margin-bottom: 8px; }
+.result-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 5px;
+}
+.result-footer {
+  margin-top: 5px;
+}
 </style>

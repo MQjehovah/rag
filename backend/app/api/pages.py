@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
 from sqlalchemy.orm import Session
 from typing import List, Optional
 import uuid
@@ -34,13 +34,27 @@ def get_rag_services():
         _vector_store = VectorStore()
     return _embedding_service, _vector_store
 
+async def background_index_page(page_id: str, title: str, content: str):
+    try:
+        emb_svc = EmbeddingService()
+        vec_store = VectorStore()
+        chunks = await emb_svc.encode_chunks(content, title)
+        if chunks:
+            await vec_store.add_page_chunks(page_id, title, chunks)
+        await emb_svc.close()
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"Auto-index failed for {page_id}: {e}")
+
 @router.post("", response_model=PageResponse)
-async def create_page(data: PageCreate, db: Session = Depends(get_db)):
+async def create_page(data: PageCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     """创建笔记"""
     page = Page(id=str(uuid.uuid4()), title=data.title, content=data.content, notebook_id=data.notebook_id)
     db.add(page)
     db.commit()
     db.refresh(page)
+    if page.content and page.content.strip():
+        background_tasks.add_task(background_index_page, page.id, page.title, page.content)
     return page
 
 @router.get("", response_model=List[PageResponse])
@@ -61,7 +75,7 @@ async def get_page(page_id: str, db: Session = Depends(get_db)):
     return page
 
 @router.put("/{page_id}", response_model=PageResponse)
-async def update_page(page_id: str, data: PageUpdate, db: Session = Depends(get_db)):
+async def update_page(page_id: str, data: PageUpdate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     """更新笔记"""
     page = db.query(Page).filter(Page.id == page_id).first()
     if not page:
@@ -77,6 +91,8 @@ async def update_page(page_id: str, data: PageUpdate, db: Session = Depends(get_
 
     db.commit()
     db.refresh(page)
+    if page.content and page.content.strip():
+        background_tasks.add_task(background_index_page, page.id, page.title, page.content)
     return page
 
 @router.delete("/{page_id}")

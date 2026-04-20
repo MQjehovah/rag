@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional
+from typing import List, Optional
 from datetime import datetime
 
 class NotebookBase(BaseModel):
@@ -36,3 +36,38 @@ class PageResponse(PageBase):
     
     class Config:
         from_attributes = True
+
+class GraphNodeResponse(BaseModel):
+    id: str
+    title: str
+    notebook_id: Optional[str] = None
+    link_count: int = 0
+
+class GraphEdgeResponse(BaseModel):
+    id: str
+    source_id: str
+    target_id: str
+    weight: float
+    edge_type: str
+
+class GraphDataResponse(BaseModel):
+    nodes: List[GraphNodeResponse]
+    edges: List[GraphEdgeResponse]
+
+class GraphStatsResponse(BaseModel):
+    total_nodes: int
+    total_edges: int
+    avg_connections: float
+    clusters: int
+
+class EnhancedSearchResult(BaseModel):
+    id: str
+    title: str
+    content: str
+    score: float
+    source: str
+
+class EnhancedSearchResponse(BaseModel):
+    results: List[EnhancedSearchResult]
+    total: int
+    graph_expanded: int
