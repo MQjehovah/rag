@@ -3,10 +3,10 @@ from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 from collections import defaultdict
 from sqlalchemy import or_
-import re
-import math
+from sqlalchemy.orm import Session
+import logging
 
-from app.core.rag import EmbeddingService, VectorStore
+from app.core.rag import EmbeddingService, VectorStore, RerankerService
 from app.core.graph import GraphBuilder
 from app.models.database import Page, GraphEdge, Notebook, get_session, get_engine, init_db
 from app.models.schema import EnhancedSearchResult, EnhancedSearchResponse
@@ -15,18 +15,11 @@ from app.config import settings
 
 router = APIRouter(prefix="/api/search", tags=["搜索"])
 
-_embedding_service = None
-_vector_store = None
 _engine = None
 _session = None
+_reranker = None
 
-def get_rag_services():
-    global _embedding_service, _vector_store
-    if _embedding_service is None:
-        _embedding_service = EmbeddingService()
-    if _vector_store is None:
-        _vector_store = VectorStore()
-    return _embedding_service, _vector_store
+logger = logging.getLogger(__name__)
 
 def get_db():
     global _engine, _session
@@ -37,6 +30,20 @@ def get_db():
         _session = get_session(_engine)
     return _session
 
+def get_reranker():
+    global _reranker
+    if _reranker is None:
+        _reranker = RerankerService()
+    return _reranker
+
+def _get_visible_page_ids(db, current_user) -> set:
+    if "__local_admin__" in current_user["groups"]:
+        return set(p[0] for p in db.query(Page.id).all())
+    visible_nb_ids = db.query(Notebook.id).filter(
+        or_(Notebook.group_id.in_(current_user["groups"]), Notebook.group_id.is_(None))
+    ).subquery()
+    return set(p[0] for p in db.query(Page.id).filter(Page.notebook_id.in_(visible_nb_ids)).all())
+
 
 class SearchRequest(BaseModel):
     query: str
@@ -44,118 +51,154 @@ class SearchRequest(BaseModel):
 
 
 @router.post("")
-async def search(request: SearchRequest, rag=Depends(get_rag_services), db=Depends(get_db), current_user=Depends(get_current_user)):
-    embedding_service, vector_store = rag
+async def search(request: SearchRequest, db: Session = Depends(get_db), reranker_svc=Depends(get_reranker), current_user=Depends(get_current_user)):
+    embedding_service = EmbeddingService()
 
     try:
         query_embedding = await embedding_service.encode(request.query)
     except Exception as e:
+        await embedding_service.close()
         raise HTTPException(status_code=500, detail=f"Embedding失败: {str(e)}")
+
+    visible_ids = _get_visible_page_ids(db, current_user)
 
     scores: Dict[str, Dict[str, Any]] = {}
 
+    vec_store = VectorStore(db)
     try:
-        vec_results = await vector_store.search(query_embedding, request.top_k * 3)
-        vec_page_ids = set()
-        for i, (doc_id, meta, dist) in enumerate(zip(
-            vec_results.get("ids", []),
-            vec_results.get("metadatas", []),
-            vec_results.get("distances", []),
-        )):
-            page_id = meta.get("page_id", doc_id) if meta else doc_id
-            vec_page_ids.add(page_id)
+        vec_results = await vec_store.search(query_embedding, settings.vector_recall_k)
+        for item in vec_results:
+            page_id = item["page_id"]
+            if page_id not in visible_ids:
+                continue
+            sim = 1.0 - item["distance"]
             if page_id not in scores:
-                scores[page_id] = {"title": "", "content": "", "score": 0.0, "sources": set()}
-            sim = 1 - dist if dist else 0
+                scores[page_id] = {"score": 0.0, "sources": set(), "content_snippet": item["content"][:300]}
             scores[page_id]["score"] += sim * 3.0
             scores[page_id]["sources"].add("vector")
-        if vec_page_ids:
-            vec_pages = db.query(Page).filter(Page.id.in_(vec_page_ids)).all()
-            for p in vec_pages:
-                if p.id in scores and not scores[p.id]["title"]:
-                    scores[p.id]["title"] = p.title or ""
-                    scores[p.id]["content"] = p.content or ""
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Vector search error: {e}")
 
     try:
         query_kw = GraphBuilder.extract_keywords(request.query, 10)
-        if "__local_admin__" in current_user["groups"]:
-            pages = db.query(Page).all()
-        else:
-            visible_nb_ids = db.query(Notebook.id).filter(
-                or_(Notebook.group_id.in_(current_user["groups"]), Notebook.group_id.is_(None))
-            ).subquery()
-            pages = db.query(Page).filter(Page.notebook_id.in_(visible_nb_ids)).all()
-        for p in pages:
-            text = (p.title or "") + " " + (p.content or "")
-            page_kw = GraphBuilder.extract_keywords(text, 20)
-            overlap = query_kw & page_kw
-            if overlap:
-                kw_score = len(overlap) / max(len(query_kw), 1)
-                if p.id not in scores:
-                    scores[p.id] = {"title": p.title, "content": p.content or "", "score": 0.0, "sources": set()}
-                title_bonus = 0.5 if any(kw in (p.title or "") for kw in overlap) else 0.0
-                scores[p.id]["score"] += (kw_score + title_bonus) * 2.0
-                scores[p.id]["sources"].add("keyword")
-                scores[p.id]["title"] = scores[p.id]["title"] or p.title or ""
-                scores[p.id]["content"] = scores[p.id]["content"] or p.content or ""
-    except Exception:
-        pass
+        if query_kw:
+            kw_like_conditions = []
+            params = {}
+            for i, kw in enumerate(query_kw):
+                kw_like_conditions.append(f"keywords LIKE :kw{i}")
+                params[f"kw{i}"] = f"%{kw}%"
+
+            if kw_like_conditions:
+                from sqlalchemy import text as sql_text
+                where_clause = " OR ".join(kw_like_conditions)
+                if visible_ids:
+                    placeholders = ",".join([f":vid{i}" for i in range(len(visible_ids))])
+                    for i, vid in enumerate(visible_ids):
+                        params[f"vid{i}"] = vid
+                    where_clause = f"({where_clause}) AND id IN ({placeholders})"
+
+                result = db.execute(
+                    sql_text(f"SELECT id, title, content, keywords FROM pages WHERE {where_clause}"),
+                    params
+                )
+                for row in result.fetchall():
+                    pid = row[0]
+                    if pid not in visible_ids:
+                        continue
+                    page_kw = set(row[3].split(",")) if row[3] else set()
+                    overlap = query_kw & page_kw
+                    if overlap:
+                        kw_score = len(overlap) / max(len(query_kw), 1)
+                        title_bonus = 0.5 if any(kw in (row[1] or "") for kw in overlap) else 0.0
+                        if pid not in scores:
+                            scores[pid] = {"score": 0.0, "sources": set(), "content_snippet": (row[2] or "")[:300]}
+                        scores[pid]["score"] += (kw_score + title_bonus) * 2.0
+                        scores[pid]["sources"].add("keyword")
+    except Exception as e:
+        logger.warning(f"Keyword search error: {e}")
+
+    if not scores:
+        await embedding_service.close()
+        return EnhancedSearchResponse(results=[], total=0, graph_expanded=0)
+
+    candidate_ids = list(scores.keys())
+    candidate_pages = db.query(Page).filter(Page.id.in_(candidate_ids)).all()
+    page_map = {p.id: p for p in candidate_pages}
+
+    rerank_candidates = []
+    for pid in candidate_ids:
+        p = page_map.get(pid)
+        if p:
+            rerank_candidates.append({
+                "id": pid,
+                "text": (p.title or "") + " " + (p.content or "")[:500],
+            })
+
+    if rerank_candidates and len(rerank_candidates) > 1:
+        try:
+            docs = [c["text"] for c in rerank_candidates]
+            rerank_results = await reranker_svc.rerank(request.query, docs, top_k=request.top_k * 2)
+            rerank_scores = {}
+            for r in rerank_results:
+                idx = r.get("index", 0)
+                if idx < len(rerank_candidates):
+                    pid = rerank_candidates[idx]["id"]
+                    rerank_scores[pid] = r.get("relevance_score", 0.0)
+
+            for pid in candidate_ids:
+                rs = rerank_scores.get(pid, 0.0)
+                if pid in scores:
+                    scores[pid]["score"] += rs * 5.0
+                    scores[pid]["sources"].add("reranker")
+        except Exception as e:
+            logger.warning(f"Reranker error: {e}")
 
     graph_expanded = 0
     try:
-        seed_ids = list(scores.keys())
-        edges = db.query(GraphEdge).all()
-        adj: Dict[str, List[tuple]] = defaultdict(list)
-        for e in edges:
-            adj[e.source_id].append((e.target_id, float(e.weight)))
-            adj[e.target_id].append((e.source_id, float(e.weight)))
+        seed_ids = list(scores.keys())[:20]
+        if seed_ids and len(seed_ids) > 1:
+            edges = db.query(GraphEdge).filter(
+                (GraphEdge.source_id.in_(seed_ids)) | (GraphEdge.target_id.in_(seed_ids))
+            ).all()
+            adj: Dict[str, List[tuple]] = defaultdict(list)
+            for e in edges:
+                adj[e.source_id].append((e.target_id, float(e.weight)))
+                adj[e.target_id].append((e.source_id, float(e.weight)))
 
-        pages_map: Dict[str, Any] = {}
-        if "__local_admin__" in current_user["groups"]:
-            for p in db.query(Page).all():
-                pages_map[p.id] = p
-        else:
-            visible_nb_ids = db.query(Notebook.id).filter(
-                or_(Notebook.group_id.in_(current_user["groups"]), Notebook.group_id.is_(None))
-            ).subquery()
-            for p in db.query(Page).filter(Page.notebook_id.in_(visible_nb_ids)).all():
-                pages_map[p.id] = p
-
-        for seed_id in seed_ids:
-            for neighbor_id, edge_weight in adj.get(seed_id, []):
-                decay = 0.5
-                if neighbor_id not in scores:
-                    p = pages_map.get(neighbor_id)
-                    if p:
-                        scores[neighbor_id] = {
-                            "title": p.title or "",
-                            "content": (p.content or "")[:200],
-                            "score": 0.0,
-                            "sources": set(),
-                        }
-                    graph_expanded += 1
-                if neighbor_id in scores:
-                    seed_score = scores[seed_id]["score"]
-                    scores[neighbor_id]["score"] += seed_score * decay * edge_weight
-                    scores[neighbor_id]["sources"].add("graph")
-    except Exception:
-        pass
+            for seed_id in seed_ids:
+                for neighbor_id, edge_weight in adj.get(seed_id, []):
+                    if neighbor_id in visible_ids and neighbor_id not in scores:
+                        p = page_map.get(neighbor_id)
+                        if p is None:
+                            p = db.query(Page).filter(Page.id == neighbor_id).first()
+                        if p:
+                            scores[neighbor_id] = {
+                                "score": scores[seed_id]["score"] * 0.5 * edge_weight,
+                                "sources": {"graph"},
+                                "content_snippet": (p.content or "")[:200],
+                            }
+                            page_map[neighbor_id] = p
+                            graph_expanded += 1
+    except Exception as e:
+        logger.warning(f"Graph expansion error: {e}")
 
     sorted_results = sorted(scores.items(), key=lambda x: x[1]["score"], reverse=True)
     top_results = sorted_results[:request.top_k]
 
     results = []
     for page_id, data in top_results:
+        p = page_map.get(page_id)
+        title = p.title if p else ""
+        content = data.get("content_snippet", (p.content or "")[:300] if p else "")
         results.append(EnhancedSearchResult(
             id=page_id,
-            title=data["title"],
-            content=data["content"][:300] if data["content"] else "",
+            title=title,
+            content=content[:300],
             score=round(data["score"], 4),
             source="+".join(sorted(data["sources"])) if data["sources"] else "unknown",
         ))
 
+    await embedding_service.close()
     return EnhancedSearchResponse(
         results=results,
         total=len(results),

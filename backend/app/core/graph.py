@@ -1,9 +1,12 @@
 import math
 import logging
 import re
+import json
+import numpy as np
 from collections import Counter
 from typing import List, Dict, Tuple, Set
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 
 from app.models.database import Page, GraphEdge
 
@@ -23,6 +26,7 @@ class GraphBuilder:
     WEIGHT_NOTEBOOK = 0.5
     SIMILARITY_THRESHOLD = 0.3
     KEYWORD_TOP = 15
+    ANN_CANDIDATE_LIMIT = 50
 
     @staticmethod
     def extract_keywords(text: str, top_k: int = 15) -> Set[str]:
@@ -36,15 +40,15 @@ class GraphBuilder:
         return set(w for w, _ in counter.most_common(top_k))
 
     @staticmethod
-    def cosine_similarity(v1: List[float], v2: List[float]) -> float:
-        if not v1 or not v2 or len(v1) != len(v2):
-            return 0.0
-        dot = sum(a * b for a, b in zip(v1, v2))
-        n1 = math.sqrt(sum(a * a for a in v1))
-        n2 = math.sqrt(sum(b * b for b in v2))
+    def cosine_similarity(v1, v2) -> float:
+        a = np.array(v1)
+        b = np.array(v2)
+        dot = np.dot(a, b)
+        n1 = np.linalg.norm(a)
+        n2 = np.linalg.norm(b)
         if n1 == 0 or n2 == 0:
             return 0.0
-        return dot / (n1 * n2)
+        return float(dot / (n1 * n2))
 
     @staticmethod
     def jaccard_similarity(s1: Set[str], s2: Set[str]) -> float:
@@ -71,51 +75,93 @@ class GraphBuilder:
     def build_graph(
         self,
         pages: List[Page],
-        embeddings: Dict[str, List[float]],
         db: Session,
     ) -> int:
         db.query(GraphEdge).delete()
+        db.flush()
 
-        page_keywords: Dict[str, Set[str]] = {}
+        page_data: Dict[str, Dict] = {}
+
         for p in pages:
-            page_keywords[p.id] = self.extract_keywords(
-                (p.title or "") + " " + (p.content or ""),
-                self.KEYWORD_TOP,
-            )
+            text = (p.title or "") + " " + (p.content or "")
+            keywords = self.extract_keywords(text, self.KEYWORD_TOP)
+            page_data[p.id] = {
+                "page": p,
+                "keywords": keywords,
+                "embedding": None,
+            }
 
+        for p in pages:
+            result = db.execute(
+                text("SELECT embedding FROM page_chunks WHERE page_id = :pid ORDER BY chunk_index LIMIT 1"),
+                {"pid": p.id}
+            ).fetchone()
+            if result and result[0]:
+                try:
+                    page_data[p.id]["embedding"] = json.loads(result[0])
+                except Exception:
+                    pass
+
+        page_list = list(page_data.values())
+        n = len(page_list)
         edges_created = 0
-        for i, p1 in enumerate(pages):
-            for j, p2 in enumerate(pages):
-                if j <= i:
+        batch_edges = []
+
+        for i in range(n):
+            pd1 = page_list[i]
+            emb1 = pd1["embedding"]
+            if not emb1:
+                continue
+
+            for j in range(i + 1, n):
+                pd2 = page_list[j]
+                emb2 = pd2["embedding"]
+                if not emb2:
                     continue
 
-                e1 = embeddings.get(p1.id, [])
-                e2 = embeddings.get(p2.id, [])
-                if not e1 or not e2:
+                vec_sim = self.cosine_similarity(emb1, emb2)
+                if vec_sim < 0.3:
                     continue
 
-                vec_sim = self.cosine_similarity(e1, e2)
                 kw_sim = self.jaccard_similarity(
-                    page_keywords.get(p1.id, set()),
-                    page_keywords.get(p2.id, set()),
+                    pd1["keywords"],
+                    pd2["keywords"],
                 )
                 same_nb = (
-                    p1.notebook_id
-                    and p1.notebook_id == p2.notebook_id
+                    pd1["page"].notebook_id
+                    and pd1["page"].notebook_id == pd2["page"].notebook_id
                 )
 
                 weight = self.compute_edge_weight(vec_sim, kw_sim, same_nb)
                 if weight < self.SIMILARITY_THRESHOLD:
                     continue
 
-                edge = GraphEdge(
-                    source_id=p1.id,
-                    target_id=p2.id,
-                    weight=str(round(weight, 4)),
-                    edge_type="similarity",
-                )
-                db.add(edge)
+                batch_edges.append({
+                    "source_id": pd1["page"].id,
+                    "target_id": pd2["page"].id,
+                    "weight": round(weight, 4),
+                })
                 edges_created += 1
+
+                if len(batch_edges) >= 500:
+                    self._batch_insert_edges(db, batch_edges)
+                    batch_edges = []
+
+        if batch_edges:
+            self._batch_insert_edges(db, batch_edges)
 
         db.commit()
         return edges_created
+
+    def _batch_insert_edges(self, db: Session, edges: List[Dict]):
+        import uuid
+        for e in edges:
+            edge = GraphEdge(
+                id=str(uuid.uuid4()),
+                source_id=e["source_id"],
+                target_id=e["target_id"],
+                weight=e["weight"],
+                edge_type="similarity",
+            )
+            db.add(edge)
+        db.flush()

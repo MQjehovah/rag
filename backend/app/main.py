@@ -6,8 +6,8 @@ from app.api import pages, search, upload, notebooks, graph, auth
 
 app = FastAPI(
     title="Notes RAG System",
-    description="笔记系统 + 自动RAG索引",
-    version="1.0.0"
+    description="笔记系统 + 自动RAG索引 + 企业级搜索",
+    version="2.0.0"
 )
 
 app.add_middleware(
@@ -27,7 +27,7 @@ app.include_router(auth.router)
 
 @app.get("/")
 async def root():
-    return {"message": "Notes RAG System", "version": "1.0.0"}
+    return {"message": "Notes RAG System", "version": "2.0.0"}
 
 @app.get("/health")
 async def health():

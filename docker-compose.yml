@@ -1,6 +1,22 @@
 version: '2.2'
 
 services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: notesrag
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   backend:
     build: ./backend
     ports:
@@ -8,6 +24,7 @@ services:
     volumes:
       - ./data:/app/data
     environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@db:5432/notesrag
       - OLLAMA_HOST=http://host.docker.internal:11434
       - LDAP_SERVER_URL=${LDAP_SERVER_URL:-}
       - LDAP_BIND_DN=${LDAP_BIND_DN:-}
@@ -16,6 +33,9 @@ services:
       - LDAP_GROUP_BASE_DN=${LDAP_GROUP_BASE_DN:-}
       - JWT_SECRET_KEY=${JWT_SECRET_KEY:-change-me-in-production}
       - LOCAL_ADMIN_PASSWORD=${LOCAL_ADMIN_PASSWORD:-}
+    depends_on:
+      db:
+        condition: service_healthy
 
   frontend:
     build: ./frontend
@@ -23,3 +43,6 @@ services:
       - "80:80"
     depends_on:
       - backend
+
+volumes:
+  pgdata:

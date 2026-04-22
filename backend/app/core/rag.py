@@ -1,15 +1,23 @@
 import httpx
-import chromadb
-from chromadb.config import Settings as ChromaSettings
-from typing import List, Dict, Any, Optional
+import json
+import numpy as np
+from typing import List, Dict, Any, Optional, Tuple
 from app.config import settings
-from langchain_community.document_loaders import UnstructuredMarkdownLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-import tempfile
-import os
+from sqlalchemy.orm import Session
+from sqlalchemy import text
 import logging
+import re
+from collections import Counter
 
 logger = logging.getLogger(__name__)
+
+try:
+    import jieba
+    import jieba.analyse
+    JIEBA_AVAILABLE = True
+except ImportError:
+    JIEBA_AVAILABLE = False
 
 
 class EmbeddingService:
@@ -24,99 +32,195 @@ class EmbeddingService:
         )
 
     async def encode(self, text: str) -> List[float]:
-        # OpenAI兼容API格式
         payload = {"input": text, "model": self.model}
         response = await self.client.post(self.api_url, json=payload)
         response.raise_for_status()
         data = response.json()
         return data.get("data", [{}])[0].get("embedding", [])
 
-    def load_markdown(self, content: str, title: str = "") -> List[str]:
-        """使用 UnstructuredMarkdownLoader 加载并切片 markdown 内容"""
-        # 写入临时文件，指定 UTF-8 编码
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False, encoding='utf-8') as f:
-            f.write(content)
-            temp_path = f.name
-
-        try:
-            loader = UnstructuredMarkdownLoader(temp_path)
-            docs = loader.load()
-
-            # 合并文档内容
-            full_text = "\n\n".join([doc.page_content for doc in docs])
-            if title:
-                full_text = f"# {title}\n\n{full_text}"
-
-            # 切片
-            chunks = self.splitter.split_text(full_text)
-            return [chunk for chunk in chunks if chunk.strip()]
-        finally:
-            os.unlink(temp_path)
-
-    async def encode_chunks(self, content: str, title: str = "") -> List[tuple]:
-        """加载、切片并编码 markdown 内容"""
-        chunks = self.load_markdown(content, title)
-        result = []
-
-        for chunk_text in chunks:
+    async def encode_batch(self, texts: List[str], batch_size: int = 32) -> List[List[float]]:
+        results = []
+        for i in range(0, len(texts), batch_size):
+            batch = texts[i:i + batch_size]
+            payload = {"input": batch, "model": self.model}
             try:
-                emb = await self.encode(chunk_text)
-                if emb:
-                    result.append((chunk_text, emb))
+                response = await self.client.post(self.api_url, json=payload)
+                response.raise_for_status()
+                data = response.json()
+                embeddings = [d.get("embedding", []) for d in data.get("data", [])]
+                results.extend(embeddings)
             except Exception as e:
-                logger.error(f"Encode chunk error: {str(e).encode('utf-8', errors='replace').decode('utf-8')}")
+                logger.error(f"Batch encode error: {e}")
+                for _ in batch:
+                    results.append([])
+        return results
 
+    def split_text(self, content: str, title: str = "") -> List[str]:
+        full_text = f"# {title}\n\n{content}" if title else content
+        chunks = self.splitter.split_text(full_text)
+        return [chunk for chunk in chunks if chunk.strip()]
+
+    async def encode_chunks(self, content: str, title: str = "") -> List[Tuple[str, List[float]]]:
+        chunks = self.split_text(content, title)
+        if not chunks:
+            return []
+
+        embeddings = await self.encode_batch(chunks)
+        result = []
+        for chunk_text, emb in zip(chunks, embeddings):
+            if emb:
+                result.append((chunk_text, emb))
         return result
-    
+
+    @staticmethod
+    def extract_keywords(text: str, top_k: int = 15) -> set:
+        if not text or not text.strip():
+            return set()
+        if JIEBA_AVAILABLE:
+            tags = jieba.analyse.extract_tags(text, topK=top_k)
+            return set(tags)
+        words = re.findall(r'[\u4e00-\u9fff]{2,}|[a-zA-Z]{3,}', text.lower())
+        counter = Counter(words)
+        return set(w for w, _ in counter.most_common(top_k))
+
     async def close(self):
         await self.client.aclose()
 
+
 class VectorStore:
-    def __init__(self):
-        self.client = chromadb.PersistentClient(
-            path=settings.chromadb_path,
-            settings=ChromaSettings(anonymized_telemetry=False)
-        )
-        self.collection = self.client.get_or_create_collection(
-            name="pages",
-            metadata={"hnsw:space": "cosine"}
-        )
-    
-    async def add_page(self, page_id: str, title: str, content: str, embedding: List[float], chunk_index: int = 0):
-        doc_id = f"{page_id}_{chunk_index}" if chunk_index > 0 else page_id
-        self.collection.upsert(
-            ids=[doc_id],
-            embeddings=[embedding],
-            documents=[f"{title}\n{content}"],
-            metadatas=[{"title": title, "page_id": page_id, "chunk_index": chunk_index}]
-        )
-    
-    async def add_page_chunks(self, page_id: str, title: str, chunks: List[tuple]):
-        """添加分块向量"""
-        # 先删除旧的分块
-        await self.delete_page(page_id)
-        
+    def __init__(self, db: Session):
+        self.db = db
+
+    async def add_page_chunks(self, page_id: str, chunks: List[Tuple[str, List[float]]]):
+        self.delete_page_chunks(page_id)
+
         for i, (chunk_text, embedding) in enumerate(chunks):
-            await self.add_page(page_id, title, chunk_text, embedding, i)
-    
-    async def delete_page(self, page_id: str):
-        # 删除所有相关分块
-        all_ids = self.collection.get()["ids"]
-        ids_to_delete = [id for id in all_ids if id == page_id or id.startswith(f"{page_id}_")]
-        if ids_to_delete:
-            self.collection.delete(ids=ids_to_delete)
-    
-    async def search(self, query_embedding: List[float], top_k: int = 5) -> Dict[str, Any]:
-        results = self.collection.query(
-            query_embeddings=[query_embedding],
-            n_results=top_k
+            import uuid
+            chunk_id = str(uuid.uuid4())
+            emb_json = json.dumps(embedding)
+            emb_str = "[" + ",".join(str(v) for v in embedding) + "]"
+
+            self.db.execute(
+                text(
+                    "INSERT INTO page_chunks (id, page_id, chunk_index, content, embedding, embedding_vec) "
+                    "VALUES (:id, :page_id, :chunk_index, :content, :embedding, :embedding_vec::vector)"
+                ),
+                {
+                    "id": chunk_id,
+                    "page_id": page_id,
+                    "chunk_index": i,
+                    "content": chunk_text,
+                    "embedding": emb_json,
+                    "embedding_vec": emb_str,
+                }
+            )
+        self.db.flush()
+
+    def delete_page_chunks(self, page_id: str):
+        self.db.execute(
+            text("DELETE FROM page_chunks WHERE page_id = :page_id"),
+            {"page_id": page_id}
         )
-        return {
-            "ids": results.get("ids", [[]])[0],
-            "documents": results.get("documents", [[]])[0],
-            "metadatas": results.get("metadatas", [[]])[0],
-            "distances": results.get("distances", [[]])[0]
-        }
-    
-    async def get_count(self) -> int:
-        return self.collection.count()
+        self.db.flush()
+
+    async def search(self, query_embedding: List[float], top_k: int = 50) -> List[Dict[str, Any]]:
+        emb_str = "[" + ",".join(str(v) for v in query_embedding) + "]"
+
+        dialect = self.db.bind.dialect.name
+
+        if dialect == "postgresql":
+            try:
+                result = self.db.execute(text(
+                    "SELECT pc.page_id, pc.content, pc.chunk_index, "
+                    "pc.embedding_vec <=> :query_emb::vector AS distance "
+                    "FROM page_chunks pc "
+                    "ORDER BY pc.embedding_vec <=> :query_emb::vector "
+                    "LIMIT :limit"
+                ), {"query_emb": emb_str, "limit": top_k})
+
+                rows = result.fetchall()
+                results = []
+                for row in rows:
+                    results.append({
+                        "page_id": row[0],
+                        "content": row[1],
+                        "chunk_index": row[2],
+                        "distance": float(row[3]),
+                    })
+                return results
+            except Exception as e:
+                logger.warning(f"pgvector search failed, falling back: {e}")
+
+        result = self.db.execute(
+            text("SELECT id, page_id, content, chunk_index, embedding FROM page_chunks")
+        )
+        rows = result.fetchall()
+
+        query_vec = np.array(query_embedding)
+        query_norm = np.linalg.norm(query_vec)
+        if query_norm == 0:
+            return []
+
+        candidates = []
+        for row in rows:
+            try:
+                emb = json.loads(row[4]) if row[4] else None
+                if emb:
+                    vec = np.array(emb)
+                    vec_norm = np.linalg.norm(vec)
+                    if vec_norm > 0:
+                        sim = float(np.dot(query_vec, vec) / (query_norm * vec_norm))
+                        dist = 1.0 - sim
+                        candidates.append({
+                            "page_id": row[1],
+                            "content": row[2],
+                            "chunk_index": row[3],
+                            "distance": dist,
+                        })
+            except Exception:
+                continue
+
+        candidates.sort(key=lambda x: x["distance"])
+        return candidates[:top_k]
+
+    async def get_chunk_count(self, page_id: str = None) -> int:
+        if page_id:
+            result = self.db.execute(
+                text("SELECT COUNT(*) FROM page_chunks WHERE page_id = :pid"),
+                {"pid": page_id}
+            )
+        else:
+            result = self.db.execute(text("SELECT COUNT(*) FROM page_chunks"))
+        return result.scalar()
+
+
+class RerankerService:
+    def __init__(self):
+        self.client = httpx.AsyncClient(timeout=30.0)
+        self.api_url = settings.reranker_api_url
+        self.model = settings.reranker_model
+
+    async def rerank(self, query: str, documents: List[str], top_k: int = None) -> List[Dict[str, Any]]:
+        if not documents:
+            return []
+
+        if not self.api_url:
+            return [{"index": i, "relevance_score": 1.0} for i in range(len(documents))]
+
+        try:
+            payload = {
+                "model": self.model,
+                "query": query,
+                "documents": documents,
+                "top_k": top_k or len(documents),
+            }
+            response = await self.client.post(self.api_url, json=payload)
+            response.raise_for_status()
+            data = response.json()
+            return data.get("results", [])
+        except Exception as e:
+            logger.warning(f"Reranker call failed: {e}")
+            return [{"index": i, "relevance_score": 1.0} for i in range(len(documents))]
+
+    async def close(self):
+        await self.client.aclose()

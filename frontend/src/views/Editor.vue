@@ -23,7 +23,7 @@
         <div class="sidebar-header">
           <span>笔记本</span>
         </div>
-        
+
         <div class="notebook-list">
           <div
             v-for="nb in notebooks"
@@ -43,7 +43,7 @@
                 </template>
               </el-dropdown>
             </div>
-            
+
             <div v-if="currentNotebook?.id === nb.id" class="page-list">
               <div
                 v-for="page in notebookPages"
@@ -65,12 +65,15 @@
                   </template>
                 </el-dropdown>
               </div>
+              <div v-if="hasMorePages" class="add-page" @click="loadMorePages">
+                <span>加载更多...</span>
+              </div>
               <div class="add-page" @click="createPage">
                 <span>+ 添加笔记</span>
               </div>
             </div>
           </div>
-          
+
           <div v-if="notebooks.length === 0" class="empty-tip">
             暂无笔记本
           </div>
@@ -138,6 +141,13 @@ interface Notebook {
   name: string
 }
 
+interface PageListItem {
+  id: string
+  title: string
+  notebook_id: string | null
+  updated_at: string
+}
+
 interface Page {
   id: string
   notebook_id: string | null
@@ -147,7 +157,7 @@ interface Page {
 }
 
 const notebooks = ref<Notebook[]>([])
-const pages = ref<Page[]>([])
+const notebookPages = ref<PageListItem[]>([])
 const currentNotebook = ref<Notebook | null>(null)
 const currentPage = ref<Page | null>(null)
 const saveStatus = ref<'saved' | 'saving' | 'unsaved'>('saved')
@@ -159,8 +169,12 @@ const showSearch = ref(false)
 const searchResults = ref<any[]>([])
 
 let saveTimeout: number | null = null
-const notebookPages = ref<Page[]>([])
 const indexing = ref(false)
+const currentPageNum = ref(1)
+const totalPages = ref(0)
+const pageSize = 50
+
+const hasMorePages = ref(false)
 
 const loadNotebooks = async () => {
   try {
@@ -171,13 +185,30 @@ const loadNotebooks = async () => {
   }
 }
 
-const loadPages = async () => {
+const loadPages = async (reset = true) => {
+  if (!currentNotebook.value) return
   try {
-    const res = await http.get('/api/pages')
-    pages.value = res.data
+    const page = reset ? 1 : currentPageNum.value + 1
+    const res = await http.get('/api/pages', {
+      params: { notebook_id: currentNotebook.value.id, page, page_size: pageSize }
+    })
+    const data = res.data
+    if (reset) {
+      notebookPages.value = data.items
+      currentPageNum.value = 1
+    } else {
+      notebookPages.value.push(...data.items)
+      currentPageNum.value = page
+    }
+    totalPages.value = Math.ceil(data.total / pageSize)
+    hasMorePages.value = currentPageNum.value < totalPages.value
   } catch (e) {
     ElMessage.error('加载笔记失败')
   }
+}
+
+const loadMorePages = () => {
+  loadPages(false)
 }
 
 const selectNotebook = async (nb: Notebook) => {
@@ -187,18 +218,23 @@ const selectNotebook = async (nb: Notebook) => {
     return
   }
   currentNotebook.value = nb
-  notebookPages.value = pages.value.filter(p => p.notebook_id === nb.id)
-  
+  await loadPages(true)
+
   if (notebookPages.value.length === 0) {
     await createPage()
   }
 }
 
-const selectPage = (page: Page) => {
+const selectPage = async (page: PageListItem) => {
   if (saveStatus.value === 'unsaved' && currentPage.value) {
-    savePage()
+    await savePage()
   }
-  currentPage.value = { ...page }
+  try {
+    const res = await http.get(`/api/pages/${page.id}`)
+    currentPage.value = res.data
+  } catch (e) {
+    ElMessage.error('加载笔记内容失败')
+  }
 }
 
 const handleCreateNotebook = async () => {
@@ -227,21 +263,20 @@ const handleNotebookCmd = async (cmd: string, nb: Notebook) => {
       if (currentNotebook.value?.id === nb.id) {
         currentNotebook.value = null
         notebookPages.value = []
+        currentPage.value = null
       }
       loadNotebooks()
-      loadPages()
     } catch {
       ElMessage.error('删除失败')
     }
   }
 }
 
-const handlePageCmd = async (cmd: string, page: Page) => {
+const handlePageCmd = async (cmd: string, page: PageListItem) => {
   if (cmd === 'delete') {
     try {
       await http.delete(`/api/pages/${page.id}`)
       ElMessage.success('删除成功')
-      pages.value = pages.value.filter(p => p.id !== page.id)
       notebookPages.value = notebookPages.value.filter(p => p.id !== page.id)
       if (currentPage.value?.id === page.id) {
         currentPage.value = null
@@ -271,8 +306,7 @@ const createPage = async () => {
       content: '',
       notebook_id: currentNotebook.value.id
     })
-    pages.value.unshift(res.data)
-    notebookPages.value.unshift(res.data)
+    notebookPages.value.unshift({ id: res.data.id, title: res.data.title, notebook_id: res.data.notebook_id, updated_at: res.data.updated_at })
     currentPage.value = res.data
     ElMessage.success('创建成功')
   } catch (e) {
@@ -295,8 +329,10 @@ const savePage = async () => {
       content: currentPage.value.content
     })
     saveStatus.value = 'saved'
-    const idx = pages.value.findIndex(p => p.id === currentPage.value!.id)
-    if (idx >= 0) pages.value[idx] = { ...currentPage.value }
+    const idx = notebookPages.value.findIndex(p => p.id === currentPage.value!.id)
+    if (idx >= 0) {
+      notebookPages.value[idx] = { ...notebookPages.value[idx], title: currentPage.value.title }
+    }
   } catch (e) {
     ElMessage.error('保存失败')
     saveStatus.value = 'unsaved'
@@ -317,6 +353,7 @@ const reindexCurrentPage = async () => {
 }
 
 const getSourceTagType = (source: string) => {
+  if (source.includes('reranker')) return 'danger'
   if (source.includes('graph')) return 'success'
   if (source.includes('keyword')) return 'warning'
   if (source.includes('vector')) return 'primary'
@@ -334,19 +371,20 @@ const doSearch = async () => {
   }
 }
 
-const openFromSearch = (result: any) => {
-  const page = pages.value.find(p => p.id === result.id)
-  if (page) {
-    currentPage.value = { ...page }
-    currentNotebook.value = notebooks.value.find(n => n.id === page.notebook_id) || null
-    notebookPages.value = pages.value.filter(p => p.notebook_id === currentNotebook.value?.id)
+const openFromSearch = async (result: any) => {
+  try {
+    const res = await http.get(`/api/pages/${result.id}`)
+    const page = res.data
+    currentPage.value = page
+
+    const nb = notebooks.value.find(n => n.id === page.notebook_id)
+    if (nb && currentNotebook.value?.id !== nb.id) {
+      currentNotebook.value = nb
+      await loadPages(true)
+    }
     showSearch.value = false
-  } else {
-    http.get(`/api/pages/${result.id}`).then(res => {
-      pages.value.unshift(res.data)
-      currentPage.value = res.data
-      showSearch.value = false
-    })
+  } catch {
+    ElMessage.error('打开笔记失败')
   }
 }
 
@@ -361,7 +399,6 @@ const handleKeydown = (e: KeyboardEvent) => {
 
 onMounted(() => {
   loadNotebooks()
-  loadPages()
   window.addEventListener('keydown', handleKeydown)
 })
 

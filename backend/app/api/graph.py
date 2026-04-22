@@ -3,11 +3,10 @@ from sqlalchemy.orm import Session
 from sqlalchemy import or_
 from typing import List, Dict, Any
 from collections import Counter, defaultdict
-import math
 
-from app.models.database import Page, GraphEdge, Notebook, get_session, get_engine, init_db
+from app.models.database import Page, GraphEdge, Notebook, PageChunk, get_session, get_engine, init_db
 from app.models.schema import GraphDataResponse, GraphNodeResponse, GraphEdgeResponse, GraphStatsResponse
-from app.core.rag import EmbeddingService, VectorStore
+from app.core.rag import EmbeddingService
 from app.core.graph import GraphBuilder
 from app.core.jwt_utils import get_current_user
 from app.config import settings
@@ -40,8 +39,10 @@ def _get_visible_pages(db, current_user):
 async def get_graph_data(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     pages = _get_visible_pages(db, current_user)
     visible_ids = {p.id for p in pages}
-    edges = db.query(GraphEdge).all()
-    edges = [e for e in edges if e.source_id in visible_ids and e.target_id in visible_ids]
+    edges = db.query(GraphEdge).filter(
+        GraphEdge.source_id.in_(visible_ids)
+    ).all()
+    edges = [e for e in edges if e.target_id in visible_ids]
 
     edge_map: Dict[str, int] = Counter()
     for e in edges:
@@ -75,12 +76,13 @@ async def get_graph_stats(db: Session = Depends(get_db), current_user=Depends(ge
     pages = _get_visible_pages(db, current_user)
     visible_ids = {p.id for p in pages}
     total_nodes = len(pages)
-    all_edges = db.query(GraphEdge).all()
-    edges = [e for e in all_edges if e.source_id in visible_ids and e.target_id in visible_ids]
+    all_edges = db.query(GraphEdge).filter(
+        GraphEdge.source_id.in_(visible_ids)
+    ).all()
+    edges = [e for e in all_edges if e.target_id in visible_ids]
     total_edges = len(edges)
     avg_conn = (total_edges * 2 / total_nodes) if total_nodes > 0 else 0.0
 
-    edges = [e for e in edges if e.source_id in visible_ids and e.target_id in visible_ids]
     visited: set = set()
     adj: Dict[str, List[str]] = defaultdict(list)
     for e in edges:
@@ -118,20 +120,6 @@ async def rebuild_graph(db: Session = Depends(get_db), current_user=Depends(get_
     if not pages:
         return {"message": "没有笔记，跳过构建"}
 
-    embedding_service = EmbeddingService()
-    embeddings: Dict[str, List[float]] = {}
-    for p in pages:
-        try:
-            text = (p.title or "") + " " + (p.content or "")
-            if text.strip():
-                emb = await embedding_service.encode(text)
-                if emb:
-                    embeddings[p.id] = emb
-        except Exception:
-            pass
-
-    await embedding_service.close()
-
     builder = GraphBuilder()
-    count = builder.build_graph(pages, embeddings, db)
+    count = builder.build_graph(pages, db)
     return {"message": f"图谱构建完成，共 {count} 条边"}

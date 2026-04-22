@@ -2,6 +2,7 @@ from pydantic import BaseModel
 from typing import List, Optional
 from datetime import datetime
 
+
 class NotebookBase(BaseModel):
     name: str
 
@@ -13,7 +14,7 @@ class NotebookResponse(NotebookBase):
     group_id: Optional[str] = None
     created_at: datetime
     updated_at: datetime
-    
+
     class Config:
         from_attributes = True
 
@@ -34,9 +35,25 @@ class PageResponse(PageBase):
     id: str
     created_at: datetime
     updated_at: datetime
-    
+
     class Config:
         from_attributes = True
+
+class PageListItem(BaseModel):
+    id: str
+    title: str = '无标题'
+    notebook_id: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+class PageListResponse(BaseModel):
+    items: List[PageListItem]
+    total: int
+    page: int
+    page_size: int
 
 class GraphNodeResponse(BaseModel):
     id: str
