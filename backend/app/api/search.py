@@ -2,13 +2,15 @@ from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 from collections import defaultdict
+from sqlalchemy import or_
 import re
 import math
 
 from app.core.rag import EmbeddingService, VectorStore
 from app.core.graph import GraphBuilder
-from app.models.database import Page, GraphEdge, get_session, get_engine, init_db
+from app.models.database import Page, GraphEdge, Notebook, get_session, get_engine, init_db
 from app.models.schema import EnhancedSearchResult, EnhancedSearchResponse
+from app.core.jwt_utils import get_current_user
 from app.config import settings
 
 router = APIRouter(prefix="/api/search", tags=["搜索"])
@@ -42,7 +44,7 @@ class SearchRequest(BaseModel):
 
 
 @router.post("")
-async def search(request: SearchRequest, rag=Depends(get_rag_services), db=Depends(get_db)):
+async def search(request: SearchRequest, rag=Depends(get_rag_services), db=Depends(get_db), current_user=Depends(get_current_user)):
     embedding_service, vector_store = rag
 
     try:
@@ -54,23 +56,37 @@ async def search(request: SearchRequest, rag=Depends(get_rag_services), db=Depen
 
     try:
         vec_results = await vector_store.search(query_embedding, request.top_k * 3)
+        vec_page_ids = set()
         for i, (doc_id, meta, dist) in enumerate(zip(
             vec_results.get("ids", []),
             vec_results.get("metadatas", []),
             vec_results.get("distances", []),
         )):
             page_id = meta.get("page_id", doc_id) if meta else doc_id
+            vec_page_ids.add(page_id)
             if page_id not in scores:
                 scores[page_id] = {"title": "", "content": "", "score": 0.0, "sources": set()}
             sim = 1 - dist if dist else 0
             scores[page_id]["score"] += sim * 3.0
             scores[page_id]["sources"].add("vector")
+        if vec_page_ids:
+            vec_pages = db.query(Page).filter(Page.id.in_(vec_page_ids)).all()
+            for p in vec_pages:
+                if p.id in scores and not scores[p.id]["title"]:
+                    scores[p.id]["title"] = p.title or ""
+                    scores[p.id]["content"] = p.content or ""
     except Exception:
         pass
 
     try:
         query_kw = GraphBuilder.extract_keywords(request.query, 10)
-        pages = db.query(Page).all()
+        if "__local_admin__" in current_user["groups"]:
+            pages = db.query(Page).all()
+        else:
+            visible_nb_ids = db.query(Notebook.id).filter(
+                or_(Notebook.group_id.in_(current_user["groups"]), Notebook.group_id.is_(None))
+            ).subquery()
+            pages = db.query(Page).filter(Page.notebook_id.in_(visible_nb_ids)).all()
         for p in pages:
             text = (p.title or "") + " " + (p.content or "")
             page_kw = GraphBuilder.extract_keywords(text, 20)
@@ -96,7 +112,16 @@ async def search(request: SearchRequest, rag=Depends(get_rag_services), db=Depen
             adj[e.source_id].append((e.target_id, float(e.weight)))
             adj[e.target_id].append((e.source_id, float(e.weight)))
 
-        pages_map = {p.id: p for p in db.query(Page).all()}
+        pages_map: Dict[str, Any] = {}
+        if "__local_admin__" in current_user["groups"]:
+            for p in db.query(Page).all():
+                pages_map[p.id] = p
+        else:
+            visible_nb_ids = db.query(Notebook.id).filter(
+                or_(Notebook.group_id.in_(current_user["groups"]), Notebook.group_id.is_(None))
+            ).subquery()
+            for p in db.query(Page).filter(Page.notebook_id.in_(visible_nb_ids)).all():
+                pages_map[p.id] = p
 
         for seed_id in seed_ids:
             for neighbor_id, edge_weight in adj.get(seed_id, []):

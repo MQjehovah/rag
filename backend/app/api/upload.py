@@ -1,4 +1,4 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
 from fastapi.responses import FileResponse
 from typing import Optional
 import uuid
@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 
 from app.config import settings
+from app.core.jwt_utils import get_current_user
 
 router = APIRouter(prefix="/api/upload", tags=["文件上传"])
 
@@ -40,7 +41,7 @@ except ImportError:
     minio_client = None
 
 @router.post("/image")
-async def upload_image(file: UploadFile = File(...)):
+async def upload_image(file: UploadFile = File(...), current_user=Depends(get_current_user)):
     """上传图片"""
     if not file.content_type or not file.content_type.startswith('image/'):
         raise HTTPException(status_code=400, detail="仅支持图片文件")
@@ -85,7 +86,7 @@ async def upload_image(file: UploadFile = File(...)):
     return {"url": url, "name": f"{date_dir}/{file_name}"}
 
 @router.get("/images/{date_dir}/{file_name}")
-async def get_image(date_dir: str, file_name: str):
+async def get_image(date_dir: str, file_name: str, current_user=Depends(get_current_user)):
     """获取本地图片"""
     file_path = UPLOAD_DIR / date_dir / file_name
     if not file_path.exists():

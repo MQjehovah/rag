@@ -6,10 +6,11 @@ class NotebookBase(BaseModel):
     name: str
 
 class NotebookCreate(NotebookBase):
-    pass
+    group_id: Optional[str] = None
 
 class NotebookResponse(NotebookBase):
     id: str
+    group_id: Optional[str] = None
     created_at: datetime
     updated_at: datetime
     
@@ -71,3 +72,23 @@ class EnhancedSearchResponse(BaseModel):
     results: List[EnhancedSearchResult]
     total: int
     graph_expanded: int
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+class UserResponse(BaseModel):
+    id: str
+    username: str
+    email: str = ""
+    display_name: str = ""
+    is_local: bool = False
+    groups: List[str] = []
+    is_active: bool = True
+
+class LoginResponse(BaseModel):
+    token: str
+    user: UserResponse
+
+class GroupResponse(BaseModel):
+    group_name: str

@@ -6,6 +6,10 @@
         <router-link to="/" class="nav-link" active-class="active">笔记</router-link>
         <router-link to="/graph" class="nav-link" active-class="active">知识图谱</router-link>
       </div>
+      <div class="nav-user" v-if="isLoggedIn">
+        <span class="nav-username">{{ authStore.user?.display_name || authStore.user?.username }}</span>
+        <el-button size="small" @click="handleLogout">退出</el-button>
+      </div>
     </nav>
     <main class="app-main">
       <router-view />
@@ -15,10 +19,19 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
+import { useAuthStore } from './stores/auth'
 
 const route = useRoute()
-const showNav = computed(() => route.path !== '/')
+const router = useRouter()
+const authStore = useAuthStore()
+const showNav = computed(() => route.path !== '/' && route.path !== '/login')
+const isLoggedIn = computed(() => authStore.isLoggedIn)
+
+const handleLogout = () => {
+  authStore.logout()
+  router.push('/login')
+}
 </script>
 
 <style>
@@ -65,6 +78,16 @@ body {
   background: #ecf5ff;
   color: #409eff;
   font-weight: 500;
+}
+.nav-user {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.nav-username {
+  font-size: 14px;
+  color: #606266;
 }
 .app-main {
   flex: 1;

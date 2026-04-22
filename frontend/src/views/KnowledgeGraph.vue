@@ -29,7 +29,7 @@
 import { ref, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import axios from 'axios'
+import http from '../api/http'
 import * as d3 from 'd3'
 
 interface GraphNode {
@@ -62,7 +62,7 @@ const notebookColors = [
   '#14b8a6', '#e11d48', '#7c3aed', '#0ea5e9', '#d946ef',
 ]
 
-let simulation: d3.Simulation<GraphNode, undefined> | null = null
+let simulation: d3.Simulation<any, undefined> | null = null
 let zoomBehavior: d3.ZoomBehavior<SVGSVGElement, unknown> | null = null
 let nodes: GraphNode[] = []
 let edges: GraphEdge[] = []
@@ -71,14 +71,14 @@ let svgSelection: d3.Selection<SVGSVGElement, unknown, null, undefined> | null =
 
 const loadStats = async () => {
   try {
-    const res = await axios.get('/api/graph/stats')
+    const res = await http.get('/api/graph/stats')
     stats.value = res.data
   } catch {}
 }
 
 const loadData = async () => {
   try {
-    const res = await axios.get('/api/graph/data')
+    const res = await http.get('/api/graph/data')
     nodes = res.data.nodes || []
     edges = res.data.edges || []
     await loadStats()
@@ -173,7 +173,7 @@ const renderGraph = () => {
       node.attr('opacity', 1)
       link.attr('stroke', '#e5e7eb').attr('stroke-width', 1)
     })
-    .on('click', (event, d) => {
+    .on('click', (_event, d) => {
       router.push({ path: '/', query: { pageId: d.id } })
     })
     .call(d3.drag<SVGCircleElement, typeof simNodes[0]>()
@@ -245,7 +245,7 @@ const zoomFit = () => {
 const rebuildGraph = async () => {
   rebuilding.value = true
   try {
-    const res = await axios.post('/api/graph/rebuild')
+    const res = await http.post('/api/graph/rebuild')
     ElMessage.success(res.data.message)
     await loadData()
   } catch {

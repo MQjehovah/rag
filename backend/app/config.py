@@ -25,6 +25,21 @@ class Settings(BaseSettings):
     minio_secret_key: str = "xzyz2022!"
     minio_bucket: str = "xzrobotserver"
     minio_secure: bool = False
+
+    ldap_server_url: str = ""
+    ldap_bind_dn: str = ""
+    ldap_bind_password: str = ""
+    ldap_user_base_dn: str = ""
+    ldap_group_base_dn: str = ""
+    ldap_user_filter: str = "(uid={username})"
+    ldap_group_filter: str = "(member={user_dn})"
+    ldap_group_map_admin: str = ""
+
+    jwt_secret_key: str = "change-me-in-production"
+    jwt_expire_minutes: int = 1440
+
+    local_admin_username: str = "admin"
+    local_admin_password: str = ""
     
     class Config:
         env_file = ".env"

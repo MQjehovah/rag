@@ -16,3 +16,6 @@ langchain-text-splitters>=0.3.0
 unstructured>=0.15.0
 markdown>=3.4.0
 jieba>=0.42.1
+ldap3>=2.9.1
+python-jose[cryptography]>=3.3.0
+passlib[bcrypt]>=1.7.4

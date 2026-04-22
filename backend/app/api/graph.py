@@ -1,13 +1,15 @@
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.orm import Session
+from sqlalchemy import or_
 from typing import List, Dict, Any
 from collections import Counter, defaultdict
 import math
 
-from app.models.database import Page, GraphEdge, get_session, get_engine, init_db
+from app.models.database import Page, GraphEdge, Notebook, get_session, get_engine, init_db
 from app.models.schema import GraphDataResponse, GraphNodeResponse, GraphEdgeResponse, GraphStatsResponse
 from app.core.rag import EmbeddingService, VectorStore
 from app.core.graph import GraphBuilder
+from app.core.jwt_utils import get_current_user
 from app.config import settings
 
 router = APIRouter(prefix="/api/graph", tags=["知识图谱"])
@@ -25,10 +27,21 @@ def get_db():
     return _session
 
 
+def _get_visible_pages(db, current_user):
+    if "__local_admin__" in current_user["groups"]:
+        return db.query(Page).all()
+    visible_nb_ids = db.query(Notebook.id).filter(
+        or_(Notebook.group_id.in_(current_user["groups"]), Notebook.group_id.is_(None))
+    ).subquery()
+    return db.query(Page).filter(Page.notebook_id.in_(visible_nb_ids)).all()
+
+
 @router.get("/data")
-async def get_graph_data(db: Session = Depends(get_db)):
-    pages = db.query(Page).all()
+async def get_graph_data(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    pages = _get_visible_pages(db, current_user)
+    visible_ids = {p.id for p in pages}
     edges = db.query(GraphEdge).all()
+    edges = [e for e in edges if e.source_id in visible_ids and e.target_id in visible_ids]
 
     edge_map: Dict[str, int] = Counter()
     for e in edges:
@@ -58,12 +71,16 @@ async def get_graph_data(db: Session = Depends(get_db)):
 
 
 @router.get("/stats")
-async def get_graph_stats(db: Session = Depends(get_db)):
-    total_nodes = db.query(Page).count()
-    total_edges = db.query(GraphEdge).count()
+async def get_graph_stats(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    pages = _get_visible_pages(db, current_user)
+    visible_ids = {p.id for p in pages}
+    total_nodes = len(pages)
+    all_edges = db.query(GraphEdge).all()
+    edges = [e for e in all_edges if e.source_id in visible_ids and e.target_id in visible_ids]
+    total_edges = len(edges)
     avg_conn = (total_edges * 2 / total_nodes) if total_nodes > 0 else 0.0
 
-    edges = db.query(GraphEdge).all()
+    edges = [e for e in edges if e.source_id in visible_ids and e.target_id in visible_ids]
     visited: set = set()
     adj: Dict[str, List[str]] = defaultdict(list)
     for e in edges:
@@ -81,9 +98,8 @@ async def get_graph_stats(db: Session = Depends(get_db)):
                 if nb not in visited:
                     stack.append(nb)
 
-    all_page_ids = {p.id for p in db.query(Page).all()}
     clusters = 0
-    for pid in all_page_ids:
+    for pid in visible_ids:
         if pid not in visited:
             dfs(pid)
             clusters += 1
@@ -97,8 +113,8 @@ async def get_graph_stats(db: Session = Depends(get_db)):
 
 
 @router.post("/rebuild")
-async def rebuild_graph(db: Session = Depends(get_db)):
-    pages = db.query(Page).all()
+async def rebuild_graph(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    pages = _get_visible_pages(db, current_user)
     if not pages:
         return {"message": "没有笔记，跳过构建"}
 

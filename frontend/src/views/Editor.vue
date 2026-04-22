@@ -130,7 +130,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage } from 'element-plus'
-import axios from 'axios'
+import http from '../api/http'
 import TipTapEditor from '../components/TipTapEditor.vue'
 
 interface Notebook {
@@ -164,7 +164,7 @@ const indexing = ref(false)
 
 const loadNotebooks = async () => {
   try {
-    const res = await axios.get('/api/notebooks')
+    const res = await http.get('/api/notebooks')
     notebooks.value = res.data
   } catch (e) {
     ElMessage.error('加载笔记本失败')
@@ -173,7 +173,7 @@ const loadNotebooks = async () => {
 
 const loadPages = async () => {
   try {
-    const res = await axios.get('/api/pages')
+    const res = await http.get('/api/pages')
     pages.value = res.data
   } catch (e) {
     ElMessage.error('加载笔记失败')
@@ -207,7 +207,7 @@ const handleCreateNotebook = async () => {
     return
   }
   try {
-    const res = await axios.post('/api/notebooks', { name: newNotebookName.value })
+    const res = await http.post('/api/notebooks', { name: newNotebookName.value })
     notebooks.value.unshift(res.data)
     newNotebookName.value = ''
     showNewNotebook.value = false
@@ -222,7 +222,7 @@ const handleCreateNotebook = async () => {
 const handleNotebookCmd = async (cmd: string, nb: Notebook) => {
   if (cmd === 'delete') {
     try {
-      await axios.delete(`/api/notebooks/${nb.id}`)
+      await http.delete(`/api/notebooks/${nb.id}`)
       ElMessage.success('删除成功')
       if (currentNotebook.value?.id === nb.id) {
         currentNotebook.value = null
@@ -239,7 +239,7 @@ const handleNotebookCmd = async (cmd: string, nb: Notebook) => {
 const handlePageCmd = async (cmd: string, page: Page) => {
   if (cmd === 'delete') {
     try {
-      await axios.delete(`/api/pages/${page.id}`)
+      await http.delete(`/api/pages/${page.id}`)
       ElMessage.success('删除成功')
       pages.value = pages.value.filter(p => p.id !== page.id)
       notebookPages.value = notebookPages.value.filter(p => p.id !== page.id)
@@ -252,7 +252,7 @@ const handlePageCmd = async (cmd: string, page: Page) => {
   } else if (cmd === 'index') {
     try {
       ElMessage.info('正在索引...')
-      await axios.post(`/api/pages/${page.id}/index`)
+      await http.post(`/api/pages/${page.id}/index`)
       ElMessage.success('索引完成')
     } catch {
       ElMessage.error('索引失败')
@@ -266,7 +266,7 @@ const createPage = async () => {
     return
   }
   try {
-    const res = await axios.post('/api/pages', {
+    const res = await http.post('/api/pages', {
       title: '无标题',
       content: '',
       notebook_id: currentNotebook.value.id
@@ -290,7 +290,7 @@ const savePage = async () => {
   if (!currentPage.value) return
   saveStatus.value = 'saving'
   try {
-    await axios.put(`/api/pages/${currentPage.value.id}`, {
+    await http.put(`/api/pages/${currentPage.value.id}`, {
       title: currentPage.value.title,
       content: currentPage.value.content
     })
@@ -307,7 +307,7 @@ const reindexCurrentPage = async () => {
   if (!currentPage.value) return
   indexing.value = true
   try {
-    await axios.post(`/api/pages/${currentPage.value.id}/index`)
+    await http.post(`/api/pages/${currentPage.value.id}/index`)
     ElMessage.success('索引完成')
   } catch {
     ElMessage.error('索引失败')
@@ -326,7 +326,7 @@ const getSourceTagType = (source: string) => {
 const doSearch = async () => {
   if (!searchQuery.value.trim()) return
   try {
-    const res = await axios.post('/api/search', { query: searchQuery.value, top_k: 10 })
+    const res = await http.post('/api/search', { query: searchQuery.value, top_k: 10 })
     searchResults.value = res.data.results || []
     showSearch.value = true
   } catch (e) {
@@ -342,7 +342,7 @@ const openFromSearch = (result: any) => {
     notebookPages.value = pages.value.filter(p => p.notebook_id === currentNotebook.value?.id)
     showSearch.value = false
   } else {
-    axios.get(`/api/pages/${result.id}`).then(res => {
+    http.get(`/api/pages/${result.id}`).then(res => {
       pages.value.unshift(res.data)
       currentPage.value = res.data
       showSearch.value = false
