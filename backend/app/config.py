@@ -6,18 +6,18 @@ class Settings(BaseSettings):
     ollama_host: str = "http://localhost:11434"
     ollama_model: str = "qwen2.5:7b"
 
-    embedding_api_url: str = "http://192.168.31.34:8000/v1/embeddings"
-    embedding_model: str = "bge-large-zh-v1.5"
+    embedding_api_url: str = "http://localhost:11434/api/embed"
+    embedding_model: str = "modelscope.cn/Embedding-GGUF/bge-large-zh-v1.5:latest"
     embedding_dimensions: int = 1024
 
-    chunk_size: int = 800
-    chunk_overlap: int = 100
+    chunk_size: int = 300
+    chunk_overlap: int = 50
 
     top_k: int = 5
     vector_recall_k: int = 50
 
-    reranker_api_url: str = "http://192.168.31.34:8001/v1/rerank"
-    reranker_model: str = "bge-reranker-v2-m3"
+    reranker_api_url: str = ""
+    reranker_model: str = ""
 
     host: str = "0.0.0.0"
     port: int = 8000
@@ -44,6 +44,12 @@ class Settings(BaseSettings):
 
     local_admin_username: str = "admin"
     local_admin_password: str = ""
+
+    dingtalk_app_key: str = ""
+    dingtalk_app_secret: str = ""
+    dingtalk_agent_id: str = ""
+    dingtalk_knowledge_base_id: str = ""
+    dingtalk_operator_id: str = ""
 
     class Config:
         env_file = ".env"

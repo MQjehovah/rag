@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, Column, String, Text, DateTime, ForeignKey, Boolean, Integer, Float, Index
+from sqlalchemy import create_engine, Column, String, Text, DateTime, ForeignKey, Boolean, Integer, Float, Index, inspect, text as sqlalchemy_text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from datetime import datetime
@@ -93,38 +93,56 @@ def get_engine(database_url: str):
     return create_engine(database_url, pool_pre_ping=True, pool_size=20, max_overflow=10, connect_args=connect_args)
 
 
+def _migrate_schema(engine):
+    inspector = inspect(engine)
+    for table in Base.metadata.sorted_tables:
+        if not inspector.has_table(table.name):
+            continue
+        existing = {c["name"] for c in inspector.get_columns(table.name)}
+        expected = {col.name for col in table.columns}
+        missing = expected - existing
+        if missing:
+            for col in table.columns:
+                if col.name in missing:
+                    col_type = col.type.compile(engine.dialect)
+                    alter_sql = f'ALTER TABLE {table.name} ADD COLUMN {col.name} {col_type}'
+                    if not col.nullable and col.server_default is None:
+                        alter_sql += " DEFAULT ''"
+                    with engine.begin() as conn:
+                        conn.execute(sqlalchemy_text(alter_sql))
+                    logger.info(f"Added column {col.name} to table {table.name}")
+
+
 def init_db(engine):
     Base.metadata.create_all(engine)
+    _migrate_schema(engine)
 
     try:
         with engine.begin() as conn:
             dialect = engine.dialect.name
             if dialect == "postgresql":
-                from sqlalchemy import text
-                conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-                conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+                conn.execute(sqlalchemy_text("CREATE EXTENSION IF NOT EXISTS vector"))
 
-                table_name = "page_chunks"
-                has_embedding_col = False
+                has_embedding_vec = False
                 try:
-                    result = conn.execute(text(
-                        f"SELECT column_name FROM information_schema.columns "
-                        f"WHERE table_name='{table_name}' AND column_name='embedding_vec'"
+                    result = conn.execute(sqlalchemy_text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_name='page_chunks' AND column_name='embedding_vec'"
                     ))
-                    has_embedding_col = result.fetchone() is not None
+                    has_embedding_vec = result.fetchone() is not None
                 except Exception:
                     pass
 
-                if not has_embedding_col:
+                if not has_embedding_vec:
                     try:
-                        conn.execute(text(
+                        conn.execute(sqlalchemy_text(
                             "ALTER TABLE page_chunks ADD COLUMN embedding_vec vector(1024)"
                         ))
                     except Exception:
                         pass
 
                 try:
-                    conn.execute(text(
+                    conn.execute(sqlalchemy_text(
                         "CREATE INDEX IF NOT EXISTS ix_page_chunks_embedding_hnsw "
                         "ON page_chunks USING hnsw (embedding_vec vector_cosine_ops)"
                     ))
@@ -132,7 +150,7 @@ def init_db(engine):
                     pass
 
                 try:
-                    conn.execute(text(
+                    conn.execute(sqlalchemy_text(
                         "UPDATE page_chunks SET embedding_vec = embedding::vector WHERE embedding IS NOT NULL AND embedding_vec IS NULL"
                     ))
                 except Exception:

@@ -13,6 +13,7 @@
         <el-tag type="success" v-if="saveStatus === 'saved'">已保存</el-tag>
         <el-tag type="warning" v-else-if="saveStatus === 'saving'">保存中...</el-tag>
         <el-button @click="$router.push('/graph')">知识图谱</el-button>
+        <el-button @click="showDingTalk = true">钉钉同步</el-button>
         <el-button type="primary" @click="showNewNotebook = true">新建笔记本</el-button>
       </div>
     </header>
@@ -127,6 +128,42 @@
       </div>
       <el-empty v-else description="未找到相关笔记" />
     </el-dialog>
+
+    <!-- 钉钉同步对话框 -->
+    <el-dialog v-model="showDingTalk" title="钉钉知识库同步" width="500px">
+      <div v-if="syncStatus.running">
+        <el-alert type="info" :closable="false" show-icon>
+          <template #title>{{ syncStatus.progress }}</template>
+        </el-alert>
+        <el-progress
+          :percentage="syncStatus.total > 0 ? Math.round(syncStatus.imported / syncStatus.total * 100) : 0"
+          :format="() => `${syncStatus.imported}/${syncStatus.total}`"
+          style="margin-top: 15px"
+        />
+      </div>
+      <div v-else>
+        <el-form label-width="100px">
+          <el-form-item label="导入到笔记本">
+            <el-input v-model="dtNotebookName" placeholder="笔记本名称（不存在则自动创建）" />
+          </el-form-item>
+          <el-form-item label="知识库ID">
+            <el-input v-model="dtSpaceId" placeholder="留空则同步所有知识库" />
+          </el-form-item>
+        </el-form>
+        <div v-if="syncStatus.last_sync" style="color: #999; font-size: 12px; margin-top: 10px">
+          上次同步: {{ syncStatus.last_sync }} | 成功: {{ syncStatus.imported }} | 失败: {{ syncStatus.errors }}
+        </div>
+        <div v-if="syncStatus.progress && !syncStatus.running" style="margin-top: 10px">
+          <el-tag :type="syncStatus.errors > 0 ? 'warning' : 'success'">{{ syncStatus.progress }}</el-tag>
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="showDingTalk = false">关闭</el-button>
+        <el-button type="primary" @click="startDingTalkSync" :loading="syncStatus.running" :disabled="syncStatus.running">
+          {{ syncStatus.running ? '同步中...' : '开始同步' }}
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -167,6 +204,11 @@ const showNewNotebook = ref(false)
 const newNotebookName = ref('')
 const showSearch = ref(false)
 const searchResults = ref<any[]>([])
+const showDingTalk = ref(false)
+const dtNotebookName = ref('钉钉知识库')
+const dtSpaceId = ref('')
+const syncStatus = ref<any>({ running: false, progress: '', total: 0, imported: 0, errors: 0, last_sync: '' })
+let syncPollTimer: number | null = null
 
 let saveTimeout: number | null = null
 const indexing = ref(false)
@@ -358,6 +400,34 @@ const getSourceTagType = (source: string) => {
   if (source.includes('keyword')) return 'warning'
   if (source.includes('vector')) return 'primary'
   return 'info'
+}
+
+const pollSyncStatus = async () => {
+  try {
+    const res = await http.get('/api/dingtalk/status')
+    syncStatus.value = res.data
+    if (!res.data.running && syncPollTimer) {
+      clearInterval(syncPollTimer)
+      syncPollTimer = null
+      if (res.data.imported > 0) {
+        loadNotebooks()
+      }
+    }
+  } catch { /* ignore */ }
+}
+
+const startDingTalkSync = async () => {
+  try {
+    await http.post('/api/dingtalk/sync', {
+      notebook_name: dtNotebookName.value,
+      space_id: dtSpaceId.value || undefined,
+    })
+    syncPollTimer = window.setInterval(pollSyncStatus, 2000)
+    ElMessage.success('同步已启动')
+  } catch (e: any) {
+    const msg = e?.response?.data?.detail || '启动同步失败'
+    ElMessage.error(msg)
+  }
 }
 
 const doSearch = async () => {

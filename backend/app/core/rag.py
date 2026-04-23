@@ -31,29 +31,56 @@ class EmbeddingService:
             separators=["##", "#", "\n\n", "\n", " ", ""]
         )
 
+    @property
+    def _is_ollama(self) -> bool:
+        return "/api/embed" in self.api_url
+
     async def encode(self, text: str) -> List[float]:
-        payload = {"input": text, "model": self.model}
-        response = await self.client.post(self.api_url, json=payload)
-        response.raise_for_status()
-        data = response.json()
-        return data.get("data", [{}])[0].get("embedding", [])
+        if self._is_ollama:
+            payload = {"input": text, "model": self.model}
+            response = await self.client.post(self.api_url, json=payload)
+            response.raise_for_status()
+            data = response.json()
+            return data.get("embeddings", [[]])[0]
+        else:
+            payload = {"input": text, "model": self.model}
+            response = await self.client.post(self.api_url, json=payload)
+            response.raise_for_status()
+            data = response.json()
+            return data.get("data", [{}])[0].get("embedding", [])
 
     async def encode_batch(self, texts: List[str], batch_size: int = 32) -> List[List[float]]:
-        results = []
-        for i in range(0, len(texts), batch_size):
-            batch = texts[i:i + batch_size]
-            payload = {"input": batch, "model": self.model}
-            try:
-                response = await self.client.post(self.api_url, json=payload)
-                response.raise_for_status()
-                data = response.json()
-                embeddings = [d.get("embedding", []) for d in data.get("data", [])]
-                results.extend(embeddings)
-            except Exception as e:
-                logger.error(f"Batch encode error: {e}")
-                for _ in batch:
-                    results.append([])
-        return results
+        if self._is_ollama:
+            results = []
+            for i in range(0, len(texts), batch_size):
+                batch = texts[i:i + batch_size]
+                payload = {"input": batch, "model": self.model}
+                try:
+                    response = await self.client.post(self.api_url, json=payload)
+                    response.raise_for_status()
+                    data = response.json()
+                    results.extend(data.get("embeddings", []))
+                except Exception as e:
+                    logger.error(f"Batch encode error: {e}")
+                    for _ in batch:
+                        results.append([])
+            return results
+        else:
+            results = []
+            for i in range(0, len(texts), batch_size):
+                batch = texts[i:i + batch_size]
+                payload = {"input": batch, "model": self.model}
+                try:
+                    response = await self.client.post(self.api_url, json=payload)
+                    response.raise_for_status()
+                    data = response.json()
+                    embeddings = [d.get("embedding", []) for d in data.get("data", [])]
+                    results.extend(embeddings)
+                except Exception as e:
+                    logger.error(f"Batch encode error: {e}")
+                    for _ in batch:
+                        results.append([])
+            return results
 
     def split_text(self, content: str, title: str = "") -> List[str]:
         full_text = f"# {title}\n\n{content}" if title else content
@@ -65,12 +92,15 @@ class EmbeddingService:
         if not chunks:
             return []
 
-        embeddings = await self.encode_batch(chunks)
-        result = []
-        for chunk_text, emb in zip(chunks, embeddings):
-            if emb:
-                result.append((chunk_text, emb))
-        return result
+        results = []
+        for chunk_text in chunks:
+            try:
+                emb = await self.encode(chunk_text)
+                if emb:
+                    results.append((chunk_text, emb))
+            except Exception as e:
+                logger.error(f"Encode chunk error: {e}")
+        return results
 
     @staticmethod
     def extract_keywords(text: str, top_k: int = 15) -> set:
@@ -94,26 +124,44 @@ class VectorStore:
     async def add_page_chunks(self, page_id: str, chunks: List[Tuple[str, List[float]]]):
         self.delete_page_chunks(page_id)
 
+        dialect = self.db.bind.dialect.name
+        has_vector_col = dialect == "postgresql"
+
         for i, (chunk_text, embedding) in enumerate(chunks):
             import uuid
             chunk_id = str(uuid.uuid4())
             emb_json = json.dumps(embedding)
             emb_str = "[" + ",".join(str(v) for v in embedding) + "]"
 
-            self.db.execute(
-                text(
-                    "INSERT INTO page_chunks (id, page_id, chunk_index, content, embedding, embedding_vec) "
-                    "VALUES (:id, :page_id, :chunk_index, :content, :embedding, :embedding_vec::vector)"
-                ),
-                {
-                    "id": chunk_id,
-                    "page_id": page_id,
-                    "chunk_index": i,
-                    "content": chunk_text,
-                    "embedding": emb_json,
-                    "embedding_vec": emb_str,
-                }
-            )
+            if has_vector_col:
+                self.db.execute(
+                    text(
+                        "INSERT INTO page_chunks (id, page_id, chunk_index, content, embedding, embedding_vec) "
+                        "VALUES (:id, :page_id, :chunk_index, :content, :embedding, :embedding_vec::vector)"
+                    ),
+                    {
+                        "id": chunk_id,
+                        "page_id": page_id,
+                        "chunk_index": i,
+                        "content": chunk_text,
+                        "embedding": emb_json,
+                        "embedding_vec": emb_str,
+                    }
+                )
+            else:
+                self.db.execute(
+                    text(
+                        "INSERT INTO page_chunks (id, page_id, chunk_index, content, embedding) "
+                        "VALUES (:id, :page_id, :chunk_index, :content, :embedding)"
+                    ),
+                    {
+                        "id": chunk_id,
+                        "page_id": page_id,
+                        "chunk_index": i,
+                        "content": chunk_text,
+                        "embedding": emb_json,
+                    }
+                )
         self.db.flush()
 
     def delete_page_chunks(self, page_id: str):
