@@ -59,8 +59,15 @@ async def _do_sync(notebook_id: str, space_id: str = None):
         engine = get_engine(settings.database_url)
         db = get_session(engine)
 
-        SYNC_STATUS["progress"] = "获取文档列表..."
-        docs = await client.collect_all_docs(space_id)
+        SYNC_STATUS["progress"] = "正在获取文档列表..."
+
+        collected_docs = []
+        async def on_doc_collected(doc, count):
+            collected_docs.append(doc)
+            SYNC_STATUS["total"] = count
+            SYNC_STATUS["progress"] = f"正在获取文档 ({count})..."
+
+        docs = await client.collect_all_docs(space_id, on_progress=on_doc_collected)
         SYNC_STATUS["total"] = len(docs)
         SYNC_STATUS["progress"] = f"发现 {len(docs)} 个文档，开始导入..."
 

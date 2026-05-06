@@ -3,7 +3,7 @@ import io
 import logging
 import zipfile
 import xml.etree.ElementTree as ET
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Callable, Awaitable
 
 from alibabacloud_dingtalk.wiki_2_0.client import Client as WikiClient
 from alibabacloud_dingtalk.wiki_2_0 import models as wiki_models
@@ -44,6 +44,8 @@ class DingTalkClient:
         self._http = httpx.AsyncClient(timeout=30.0)
         self._last_call = 0.0
         self._dentry_cache: Dict[str, Dict[str, str]] = {}
+        self._on_progress: Optional[Callable] = None
+        self._collected_count: int = 0
 
     async def _throttle(self):
         now = asyncio.get_event_loop().time()
@@ -262,9 +264,15 @@ class DingTalkClient:
             return None
         return self._extract_text(data, extension)
 
-    async def collect_all_docs(self, workspace_id: str = None) -> List[Dict[str, Any]]:
+    async def collect_all_docs(
+        self, workspace_id: str = None,
+        on_progress: Optional[Callable[[Dict[str, Any], int], Awaitable[None]]] = None,
+    ) -> List[Dict[str, Any]]:
         target_id = workspace_id or settings.dingtalk_knowledge_base_id
         logger.info(f"Starting DingTalk sync, workspace_id={target_id or 'all'}")
+
+        self._on_progress = on_progress
+        self._collected_count = 0
 
         spaces = await self.list_workspaces()
 
@@ -327,14 +335,21 @@ class DingTalkClient:
                 continue
 
             if content and content.strip():
-                docs.append({
+                doc = {
                     "id": node_id,
                     "title": name,
                     "content": content,
                     "space_name": workspace_name,
                     "path": current_path,
-                })
+                }
+                docs.append(doc)
+                self._collected_count += 1
                 logger.info(f"  Collected: {name} ({len(content)} chars)")
+                if self._on_progress:
+                    try:
+                        await self._on_progress(doc, self._collected_count)
+                    except Exception:
+                        pass
             else:
                 logger.warning(f"  Empty content: {name}")
 

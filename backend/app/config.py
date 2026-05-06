@@ -43,7 +43,7 @@ class Settings(BaseSettings):
     jwt_expire_minutes: int = 1440
 
     local_admin_username: str = "admin"
-    local_admin_password: str = ""
+    local_admin_password: str = "123456"
 
     dingtalk_app_key: str = ""
     dingtalk_app_secret: str = ""
