@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
 from sqlalchemy.orm import Session
-from sqlalchemy import or_
+from sqlalchemy import or_, text
 from typing import List, Optional
 import uuid
 from datetime import datetime
@@ -66,6 +66,17 @@ def _check_page_access(page, current_user, db):
         if nb and nb.group_id and nb.group_id not in current_user["groups"]:
             raise HTTPException(status_code=403, detail="无权访问该笔记")
 
+def _check_page_access_by_nb(notebook_id, current_user, db):
+    if "__local_admin__" in current_user["groups"]:
+        return
+    if notebook_id:
+        row = db.execute(
+            text("SELECT group_id FROM notebooks WHERE id = :nid"),
+            {"nid": notebook_id},
+        ).fetchone()
+        if row and row[0] and row[0] not in current_user["groups"]:
+            raise HTTPException(status_code=403, detail="无权访问该笔记")
+
 @router.post("", response_model=PageResponse)
 async def create_page(data: PageCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     if data.notebook_id:
@@ -89,7 +100,8 @@ async def list_pages(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    query = db.query(Page)
+    cols = (Page.id, Page.title, Page.notebook_id, Page.created_at, Page.updated_at)
+    query = db.query(*cols)
     if notebook_id:
         query = query.filter(Page.notebook_id == notebook_id)
     if "__local_admin__" not in current_user["groups"]:
@@ -99,16 +111,16 @@ async def list_pages(
         query = query.filter(Page.notebook_id.in_(visible_nb_ids))
 
     total = query.count()
-    items = query.order_by(Page.updated_at.desc()).offset((page - 1) * page_size).limit(page_size).all()
+    rows = query.order_by(Page.updated_at.desc()).offset((page - 1) * page_size).limit(page_size).all()
 
     return PageListResponse(
         items=[PageListItem(
-            id=p.id,
-            title=p.title,
-            notebook_id=p.notebook_id,
-            created_at=p.created_at,
-            updated_at=p.updated_at,
-        ) for p in items],
+            id=r.id,
+            title=r.title,
+            notebook_id=r.notebook_id,
+            created_at=r.created_at,
+            updated_at=r.updated_at,
+        ) for r in rows],
         total=total,
         page=page,
         page_size=page_size,
@@ -116,11 +128,17 @@ async def list_pages(
 
 @router.get("/{page_id}", response_model=PageResponse)
 async def get_page(page_id: str, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
-    page = db.query(Page).filter(Page.id == page_id).first()
-    if not page:
+    row = db.execute(
+        text("SELECT id, title, content, notebook_id, created_at, updated_at FROM pages WHERE id = :pid"),
+        {"pid": page_id},
+    ).fetchone()
+    if not row:
         raise HTTPException(status_code=404, detail="笔记不存在")
-    _check_page_access(page, current_user, db)
-    return page
+    _check_page_access_by_nb(row[3], current_user, db)
+    return PageResponse(
+        id=row[0], title=row[1], content=row[2],
+        notebook_id=row[3], created_at=row[4], updated_at=row[5],
+    )
 
 @router.put("/{page_id}", response_model=PageResponse)
 async def update_page(page_id: str, data: PageUpdate, background_tasks: BackgroundTasks, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
