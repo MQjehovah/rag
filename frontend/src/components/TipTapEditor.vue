@@ -29,7 +29,7 @@
 </template>
 
 <script setup lang="ts">
-import { watch, onBeforeUnmount } from 'vue'
+import { watch, onBeforeUnmount, nextTick } from 'vue'
 import { useEditor, EditorContent, VueNodeViewRenderer } from '@tiptap/vue-3'
 import StarterKit from '@tiptap/starter-kit'
 import Placeholder from '@tiptap/extension-placeholder'
@@ -43,9 +43,21 @@ import { createLowlight, all } from 'lowlight'
 import CodeBlockComponent from './CodeBlockComponent.vue'
 import { Markdown } from 'tiptap-markdown'
 import mermaid from 'mermaid'
-import axios from 'axios'
+import http from '../api/http'
 import { ElMessage } from 'element-plus'
-import { nextTick } from 'vue'
+import { Plugin, PluginKey } from 'prosemirror-state'
+
+const uploadAndInsert = (view: any, file: File) => {
+  const formData = new FormData()
+  formData.append('file', file)
+  http.post('/api/upload/image', formData).then(res => {
+    view.dispatch(view.state.tr.replaceSelectionWith(
+      view.state.schema.nodes.image.create({ src: res.data.url })
+    ))
+  }).catch(() => {
+    ElMessage.error('图片上传失败')
+  })
+}
 
 const lowlight = createLowlight(all)
 
@@ -80,7 +92,42 @@ const editor = useEditor({
     Placeholder.configure({
       placeholder: '开始写笔记...',
     }),
-    Image.configure({
+    Image.extend({
+      addProseMirrorPlugins() {
+        return [
+          new Plugin({
+            key: new PluginKey('imagePasteDrop'),
+            props: {
+              handlePaste(view, event) {
+                const items = event.clipboardData?.items
+                if (!items) return false
+                for (const item of items) {
+                  if (item.type.startsWith('image/')) {
+                    event.preventDefault()
+                    const file = item.getAsFile()
+                    if (file) uploadAndInsert(view, file)
+                    return true
+                  }
+                }
+                return false
+              },
+              handleDrop(view, event) {
+                const files = event.dataTransfer?.files
+                if (!files) return false
+                for (const file of files) {
+                  if (file.type.startsWith('image/')) {
+                    event.preventDefault()
+                    uploadAndInsert(view, file)
+                    return true
+                  }
+                }
+                return false
+              },
+            },
+          }),
+        ]
+      },
+    }).configure({
       inline: true,
       allowBase64: true,
     }),
@@ -174,7 +221,7 @@ const handleImageUpload = () => {
     try {
       const formData = new FormData()
       formData.append('file', file)
-      const res = await axios.post('/api/upload/image', formData)
+      const res = await http.post('/api/upload/image', formData)
       editor.value.chain().focus().setImage({ src: res.data.url }).run()
     } catch {
       ElMessage.error('图片上传失败')

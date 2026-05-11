@@ -42,7 +42,7 @@ async def background_index_page(page_id: str, title: str, content: str):
         chunks = await emb_svc.encode_chunks(content, title)
         if chunks:
             vec_store = VectorStore(db)
-            await vec_store.add_page_chunks(page_id, title, chunks)
+            await vec_store.add_page_chunks(page_id, chunks)
 
             keywords = EmbeddingService.extract_keywords(
                 (title or "") + " " + (content or ""), 20
@@ -88,8 +88,6 @@ async def create_page(data: PageCreate, background_tasks: BackgroundTasks, db: S
     db.add(page)
     db.commit()
     db.refresh(page)
-    if page.content and page.content.strip():
-        background_tasks.add_task(background_index_page, page.id, page.title, page.content)
     return page
 
 @router.get("", response_model=PageListResponse)
@@ -157,8 +155,6 @@ async def update_page(page_id: str, data: PageUpdate, background_tasks: Backgrou
 
     db.commit()
     db.refresh(page)
-    if page.content and page.content.strip():
-        background_tasks.add_task(background_index_page, page.id, page.title, page.content)
     return page
 
 @router.delete("/{page_id}")
@@ -187,7 +183,7 @@ async def index_page(page_id: str, db: Session = Depends(get_db), current_user=D
         chunks = await emb_svc.encode_chunks(page.content, page.title)
 
         if chunks:
-            await vec_store.add_page_chunks(page.id, page.title, chunks)
+            await vec_store.add_page_chunks(page.id, chunks)
             keywords = EmbeddingService.extract_keywords(
                 (page.title or "") + " " + (page.content or ""), 20
             )

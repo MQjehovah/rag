@@ -84,7 +84,7 @@ async def upload_image(file: UploadFile = File(...), current_user=Depends(get_cu
     return {"url": url, "name": f"{date_dir}/{file_name}"}
 
 @router.get("/images/{date_dir}/{file_name}")
-async def get_image(date_dir: str, file_name: str, current_user=Depends(get_current_user)):
+async def get_image(date_dir: str, file_name: str):
     file_path = UPLOAD_DIR / date_dir / file_name
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="图片不存在")

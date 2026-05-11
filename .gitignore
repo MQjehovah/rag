@@ -11,3 +11,6 @@ dist/
 chromadb/
 
 .claude/
+
+.env
+.env.local

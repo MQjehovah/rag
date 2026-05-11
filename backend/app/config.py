@@ -51,6 +51,10 @@ class Settings(BaseSettings):
     dingtalk_knowledge_base_id: str = ""
     dingtalk_operator_id: str = ""
 
+    llm_api_url: str = ""
+    llm_api_key: str = ""
+    llm_model: str = ""
+
     class Config:
         env_file = ".env"
 
