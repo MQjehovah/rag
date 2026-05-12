@@ -83,8 +83,8 @@ class GraphBuilder:
         page_data: Dict[str, Dict] = {}
 
         for p in pages:
-            text = (p.title or "") + " " + (p.content or "")
-            keywords = self.extract_keywords(text, self.KEYWORD_TOP)
+            page_text = (p.title or "") + " " + (p.content or "")
+            keywords = self.extract_keywords(page_text, self.KEYWORD_TOP)
             page_data[p.id] = {
                 "page": p,
                 "keywords": keywords,

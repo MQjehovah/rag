@@ -102,15 +102,75 @@ class EmbeddingService:
                 logger.error(f"Encode chunk error: {e}")
         return results
 
+    STOP_WORDS = {
+        "the", "and", "for", "are", "but", "not", "you", "all", "can", "had",
+        "her", "was", "one", "our", "out", "has", "have", "from", "been",
+        "some", "them", "than", "its", "over", "such", "that", "with", "will",
+        "this", "each", "make", "like", "into", "many", "then", "they",
+        "what", "about", "which", "their", "would", "there", "could",
+        "other", "after", "first", "well", "also", "back", "class", "void",
+        "public", "static", "return", "final", "import", "null", "true",
+        "false", "override", "system", "error", "info", "warn", "debug",
+        "trace", "long", "int", "string", "bool", "float", "double",
+        "item", "list", "map", "set", "get", "put", "add", "new", "del",
+        "self", "def", "func", "var", "let", "const", "log", "timestamp",
+        "description", "name", "value", "key", "data", "result", "content",
+        "type", "text", "field", "table", "column", "row", "index",
+        "create", "update", "delete", "select", "insert", "default",
+        "com", "org", "http", "https", "www", "png", "jpg", "svg", "img",
+        "src", "href", "div", "span", "class", "style", "width", "height",
+        "padding", "margin", "border", "color", "font", "size", "align",
+        "aliyuncs", "zhangjiakou", "img", "image", "aliyun", "oss",
+        "void", "class", "override", "public", "private", "protected",
+        "system", "out", "println", "string", "integer", "boolean",
+        "datetime", "varchar", "bigint", "float", "double", "text",
+        "create", "update", "summary", "operation", "timestamp",
+        "postmapping", "validated", "user", "users", "userservice",
+        "logback", "mdc", "pattern", "response", "filter", "boot",
+        "spring", "bean", "config", "component", "service", "controller",
+        "repository", "entity", "mapper", "dto", "vo", "pojo",
+        "xxx", "aaa", "bbb", "ccc", "ddd", "eee", "fff", "ggg",
+        "res", "req", "resp", "ctx", "ctx", "cfg", "env", "tmp",
+        "pause", "echo", "bash", "logs", "opt", "upload", "download",
+        "zip", "tar", "gz", "file", "files", "path", "dir", "mkdir",
+        "clean", "test", "main", "app", "run", "start", "stop",
+    }
+
     @staticmethod
-    def extract_keywords(text: str, top_k: int = 15) -> set:
+    def extract_keywords(text: str, top_k: int = 15, fine_grained: bool = False) -> set:
         if not text or not text.strip():
             return set()
+        import re as _re
+        cleaned = _re.sub(r'```[\s\S]*?```', '', text)
+        cleaned = _re.sub(r'`[^`]*`', '', cleaned)
+        cleaned = _re.sub(r'https?://\S+', '', cleaned)
+        cleaned = _re.sub(r'[^\u4e00-\u9fff\w]', ' ', cleaned)
         if JIEBA_AVAILABLE:
-            tags = jieba.analyse.extract_tags(text, topK=top_k)
-            return set(tags)
-        words = re.findall(r'[\u4e00-\u9fff]{2,}|[a-zA-Z]{3,}', text.lower())
-        counter = Counter(words)
+            import jieba.analyse
+            import jieba as _jieba
+            tags = jieba.analyse.extract_tags(cleaned, topK=top_k * 3, withWeight=True)
+            result = set()
+            for tag, weight in tags:
+                if tag.lower() not in EmbeddingService.STOP_WORDS and len(tag) >= 2:
+                    result.add(tag)
+                if len(result) >= top_k:
+                    break
+            if fine_grained:
+                seg_words = _jieba.lcut(text)
+                for w in seg_words:
+                    w = w.strip()
+                    if len(w) >= 2 and w.lower() not in EmbeddingService.STOP_WORDS:
+                        if _re.match(r'[\u4e00-\u9fff]+', w) or _re.match(r'[a-zA-Z]{3,}', w):
+                            result.add(w)
+                for kw in list(result):
+                    if len(kw) >= 4 and _re.match(r'[\u4e00-\u9fff]+', kw):
+                        sub_words = _jieba.lcut(kw)
+                        for sw in sub_words:
+                            if len(sw) >= 2 and sw != kw and sw.lower() not in EmbeddingService.STOP_WORDS:
+                                result.add(sw)
+            return result
+        words = _re.findall(r'[\u4e00-\u9fff]{2,}|[a-zA-Z]{4,}', cleaned.lower())
+        counter = Counter(w for w in words if w not in EmbeddingService.STOP_WORDS)
         return set(w for w, _ in counter.most_common(top_k))
 
     async def close(self):

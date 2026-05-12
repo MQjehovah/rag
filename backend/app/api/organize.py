@@ -84,13 +84,18 @@ async def _call_llm_json(messages: list) -> dict:
         resp.raise_for_status()
         data = resp.json()
         content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+        logger.info(f"[organize] LLM raw response ({len(content)} chars): {content[:3000]}")
         try:
             return json.loads(content)
         except json.JSONDecodeError:
             import re
             m = re.search(r'\{[\s\S]*\}', content)
             if m:
-                return json.loads(m.group())
+                try:
+                    return json.loads(m.group())
+                except json.JSONDecodeError:
+                    pass
+            logger.warning(f"[organize] Failed to parse LLM response: {content[:500]}")
             return {}
 
 
@@ -200,6 +205,7 @@ async def run_organize(db: Session) -> Generator[str, None, None]:
 
         try:
             result = await _call_llm_json([{"role": "user", "content": prompt}])
+            logger.info(f"[organize] Batch {batch_num} parsed result: {json.dumps(result, ensure_ascii=False)[:3000]}")
             stats = _apply_actions(db, result, batch)
             for k in all_stats:
                 all_stats[k] += stats.get(k, 0)

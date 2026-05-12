@@ -7,7 +7,6 @@ from sqlalchemy.orm import Session
 import logging
 
 from app.core.rag import EmbeddingService, VectorStore, RerankerService
-from app.core.graph import GraphBuilder
 from app.models.database import Page, GraphEdge, Notebook, get_session, get_engine, init_db
 from app.models.schema import EnhancedSearchResult, EnhancedSearchResponse
 from app.core.jwt_utils import get_current_user
@@ -62,8 +61,7 @@ async def search(request: SearchRequest, db: Session = Depends(get_db), reranker
 
     visible_ids = _get_visible_page_ids(db, current_user)
 
-    scores: Dict[str, Dict[str, Any]] = {}
-
+    vec_scores: Dict[str, float] = {}
     vec_store = VectorStore(db)
     try:
         vec_results = await vec_store.search(query_embedding, settings.vector_recall_k)
@@ -72,15 +70,17 @@ async def search(request: SearchRequest, db: Session = Depends(get_db), reranker
             if page_id not in visible_ids:
                 continue
             sim = 1.0 - item["distance"]
-            if page_id not in scores:
-                scores[page_id] = {"score": 0.0, "sources": set(), "content_snippet": item["content"][:300]}
-            scores[page_id]["score"] += sim * 3.0
-            scores[page_id]["sources"].add("vector")
+            if sim < 0.35:
+                continue
+            if page_id not in vec_scores or sim > vec_scores[page_id]:
+                vec_scores[page_id] = sim
     except Exception as e:
         logger.warning(f"Vector search error: {e}")
 
+    kw_scores: Dict[str, float] = {}
+    content_snippets: Dict[str, str] = {}
     try:
-        query_kw = GraphBuilder.extract_keywords(request.query, 10)
+        query_kw = EmbeddingService.extract_keywords(request.query, 10, fine_grained=True)
         if query_kw:
             kw_like_conditions = []
             params = {}
@@ -105,26 +105,35 @@ async def search(request: SearchRequest, db: Session = Depends(get_db), reranker
                     pid = row[0]
                     if pid not in visible_ids:
                         continue
-                    page_kw = set(row[3].split(",")) if row[3] else set()
-                    overlap = query_kw & page_kw
+                    page_kw_str = row[3] or ""
+                    page_kw = set(page_kw_str.split(",")) if page_kw_str else set()
+                    overlap = set()
+                    for qkw in query_kw:
+                        for pkw in page_kw:
+                            if qkw in pkw or pkw in qkw:
+                                overlap.add(qkw)
+                                break
                     if overlap:
                         kw_score = len(overlap) / max(len(query_kw), 1)
-                        title_bonus = 0.5 if any(kw in (row[1] or "") for kw in overlap) else 0.0
-                        if pid not in scores:
-                            scores[pid] = {"score": 0.0, "sources": set(), "content_snippet": (row[2] or "")[:300]}
-                        scores[pid]["score"] += (kw_score + title_bonus) * 2.0
-                        scores[pid]["sources"].add("keyword")
+                        title_bonus = 0.3 if any(kw in (row[1] or "") for kw in overlap) else 0.0
+                        kw_scores[pid] = min(kw_score + title_bonus, 1.0)
+                        content_snippets[pid] = (row[2] or "")[:300]
     except Exception as e:
         logger.warning(f"Keyword search error: {e}")
 
-    if not scores:
+    candidate_ids = set(vec_scores.keys()) | set(kw_scores.keys())
+    if not candidate_ids:
         await embedding_service.close()
         return EnhancedSearchResponse(results=[], total=0, graph_expanded=0)
 
-    candidate_ids = list(scores.keys())
-    candidate_pages = db.query(Page).filter(Page.id.in_(candidate_ids)).all()
+    for pid in vec_scores:
+        if pid not in content_snippets:
+            content_snippets[pid] = ""
+
+    candidate_pages = db.query(Page).filter(Page.id.in_(list(candidate_ids))).all()
     page_map = {p.id: p for p in candidate_pages}
 
+    rr_scores: Dict[str, float] = {}
     rerank_candidates = []
     for pid in candidate_ids:
         p = page_map.get(pid)
@@ -138,20 +147,29 @@ async def search(request: SearchRequest, db: Session = Depends(get_db), reranker
         try:
             docs = [c["text"] for c in rerank_candidates]
             rerank_results = await reranker_svc.rerank(request.query, docs, top_k=request.top_k * 2)
-            rerank_scores = {}
             for r in rerank_results:
                 idx = r.get("index", 0)
                 if idx < len(rerank_candidates):
                     pid = rerank_candidates[idx]["id"]
-                    rerank_scores[pid] = r.get("relevance_score", 0.0)
-
-            for pid in candidate_ids:
-                rs = rerank_scores.get(pid, 0.0)
-                if pid in scores:
-                    scores[pid]["score"] += rs * 5.0
-                    scores[pid]["sources"].add("reranker")
+                    rr_scores[pid] = r.get("relevance_score", 0.0)
         except Exception as e:
             logger.warning(f"Reranker error: {e}")
+
+    scores: Dict[str, Dict[str, Any]] = {}
+    W_VEC, W_KW, W_RR = 1.0, 1.5, 5.0
+    for pid in candidate_ids:
+        v = vec_scores.get(pid, 0.0)
+        k = kw_scores.get(pid, 0.0)
+        r = rr_scores.get(pid, 0.0)
+        final = v * W_VEC + k * W_KW + r * W_RR
+        sources = set()
+        if v > 0:
+            sources.add("vector")
+        if k > 0:
+            sources.add("keyword")
+        if r > 0:
+            sources.add("reranker")
+        scores[pid] = {"score": final, "sources": sources, "content_snippet": content_snippets.get(pid, "")}
 
     graph_expanded = 0
     try:

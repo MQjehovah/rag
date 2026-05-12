@@ -4,6 +4,9 @@ from sqlalchemy import or_, text
 from typing import List, Optional
 import uuid
 from datetime import datetime
+import logging
+
+logger = logging.getLogger(__name__)
 
 from app.models.database import Page, Notebook, PageChunk, get_session, get_engine, init_db
 from app.models.schema import PageCreate, PageUpdate, PageResponse, PageListItem, PageListResponse
@@ -196,3 +199,40 @@ async def index_page(page_id: str, db: Session = Depends(get_db), current_user=D
             return {"message": "内容为空，未创建索引"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"索引失败: {str(e)}")
+
+
+@router.post("/reindex-all")
+async def reindex_all(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    if "__local_admin__" not in current_user["groups"]:
+        raise HTTPException(status_code=403, detail="仅管理员可执行")
+
+    pages = db.query(Page).filter(Page.content.isnot(None), Page.content != "").all()
+
+    if not pages:
+        return {"message": "没有需要索引的笔记", "indexed": 0, "total": 0}
+
+    emb_svc = EmbeddingService()
+    vec_store = VectorStore(db)
+    success = 0
+    errors = 0
+
+    for page in pages:
+        try:
+            vec_store.delete_page_chunks(page.id)
+            db.commit()
+            chunks = await emb_svc.encode_chunks(page.content, page.title)
+            if chunks:
+                await vec_store.add_page_chunks(page.id, chunks)
+            keywords = EmbeddingService.extract_keywords(
+                (page.title or "") + " " + (page.content or ""), 20
+            )
+            page.keywords = ",".join(keywords)
+            db.commit()
+            success += 1
+        except Exception as e:
+            logger.error(f"Reindex failed for {page.id}: {e}")
+            errors += 1
+            errors += 1
+
+    await emb_svc.close()
+    return {"message": f"索引完成: {success} 成功, {errors} 失败", "indexed": success, "errors": errors, "total": len(pages)}

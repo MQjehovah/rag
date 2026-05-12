@@ -11,7 +11,6 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.core.rag import EmbeddingService, VectorStore, RerankerService
-from app.core.graph import GraphBuilder
 from app.models.database import Page, Notebook, get_session, get_engine, init_db
 from app.core.jwt_utils import get_current_user
 
@@ -66,6 +65,7 @@ RAG_PROMPT_TEMPLATE = """参考资料：
 
 async def _search_notes(query: str, db: Session, current_user) -> List[Dict[str, Any]]:
     embedding_service = EmbeddingService()
+    reranker_svc = RerankerService()
     try:
         query_embedding = await embedding_service.encode(query)
     except Exception as e:
@@ -74,8 +74,8 @@ async def _search_notes(query: str, db: Session, current_user) -> List[Dict[str,
         return []
 
     visible_ids = _get_visible_page_ids(db, current_user)
-    scores: Dict[str, Dict[str, Any]] = {}
 
+    vec_scores: Dict[str, float] = {}
     vec_store = VectorStore(db)
     try:
         vec_results = await vec_store.search(query_embedding, settings.vector_recall_k)
@@ -84,14 +84,16 @@ async def _search_notes(query: str, db: Session, current_user) -> List[Dict[str,
             if page_id not in visible_ids:
                 continue
             sim = 1.0 - item["distance"]
-            if page_id not in scores:
-                scores[page_id] = {"score": 0.0, "content": item["content"][:500]}
-            scores[page_id]["score"] += sim * 3.0
+            if sim < 0.35:
+                continue
+            if page_id not in vec_scores or sim > vec_scores[page_id]:
+                vec_scores[page_id] = sim
     except Exception as e:
         logger.warning(f"Vector search error: {e}")
 
+    kw_scores: Dict[str, float] = {}
     try:
-        query_kw = GraphBuilder.extract_keywords(query, 10)
+        query_kw = EmbeddingService.extract_keywords(query, 10, fine_grained=True)
         if query_kw:
             from sqlalchemy import text as sql_text
             kw_like_conditions = []
@@ -112,34 +114,76 @@ async def _search_notes(query: str, db: Session, current_user) -> List[Dict[str,
                 )
                 for row in result.fetchall():
                     pid = row[0]
-                    page_kw = set(row[3].split(",")) if row[3] else set()
-                    overlap = query_kw & page_kw
+                    if pid not in visible_ids:
+                        continue
+                    page_kw_str = row[3] or ""
+                    page_kw = set(page_kw_str.split(",")) if page_kw_str else set()
+                    overlap = set()
+                    for qkw in query_kw:
+                        for pkw in page_kw:
+                            if qkw in pkw or pkw in qkw:
+                                overlap.add(qkw)
+                                break
                     if overlap:
-                        kw_score = len(overlap) / max(len(query_kw), 1)
-                        if pid not in scores:
-                            scores[pid] = {"score": 0.0, "content": (row[2] or "")[:500]}
-                        scores[pid]["score"] += kw_score * 2.0
+                        ks = len(overlap) / max(len(query_kw), 1)
+                        tb = 0.3 if any(kw in (row[1] or "") for kw in overlap) else 0.0
+                        kw_scores[pid] = min(ks + tb, 1.0)
     except Exception as e:
         logger.warning(f"Keyword search error: {e}")
 
     await embedding_service.close()
 
-    if not scores:
+    candidate_ids = set(vec_scores.keys()) | set(kw_scores.keys())
+    if not candidate_ids:
         return []
 
-    sorted_items = sorted(scores.items(), key=lambda x: x[1]["score"], reverse=True)[:8]
-    candidate_ids = [pid for pid, _ in sorted_items]
-    pages = db.query(Page).filter(Page.id.in_(candidate_ids)).all()
+    pages = db.query(Page).filter(Page.id.in_(list(candidate_ids))).all()
     page_map = {p.id: p for p in pages}
 
-    results = []
-    for pid, data in sorted_items:
+    rr_scores: Dict[str, float] = {}
+    rerank_candidates = []
+    for pid in candidate_ids:
         p = page_map.get(pid)
         if p:
+            rerank_candidates.append({
+                "id": pid,
+                "text": (p.title or "") + " " + (p.content or "")[:500],
+            })
+
+    if rerank_candidates and len(rerank_candidates) > 1:
+        try:
+            docs = [c["text"] for c in rerank_candidates]
+            rerank_results = await reranker_svc.rerank(query, docs, top_k=10)
+            for r in rerank_results:
+                idx = r.get("index", 0)
+                if idx < len(rerank_candidates):
+                    rr_scores[rerank_candidates[idx]["id"]] = r.get("relevance_score", 0.0)
+        except Exception as e:
+            logger.warning(f"Reranker error: {e}")
+
+    W_VEC, W_KW, W_RR = 1.0, 1.5, 5.0
+    scored = []
+    for pid in candidate_ids:
+        v = vec_scores.get(pid, 0.0)
+        k = kw_scores.get(pid, 0.0)
+        r = rr_scores.get(pid, 0.0)
+        final = v * W_VEC + k * W_KW + r * W_RR
+        scored.append((pid, final))
+
+    scored.sort(key=lambda x: -x[1])
+    top_ids = [pid for pid, _ in scored[:5]]
+
+    results = []
+    for pid in top_ids:
+        p = page_map.get(pid)
+        if p:
+            content = p.content or ""
+            if len(content) > 3000:
+                content = content[:3000] + "\n...(内容过长已截断)"
             results.append({
                 "id": pid,
                 "title": p.title or "",
-                "content": data["content"],
+                "content": content,
             })
     return results
 
@@ -214,7 +258,7 @@ class SaveNoteRequest(BaseModel):
     answer: str
 
 
-async def _call_llm_json(messages: list) -> dict:
+async def _call_llm_json(messages: list, context: str = "") -> dict:
     async with httpx.AsyncClient(timeout=120.0) as client:
         resp = await client.post(
             settings.llm_api_url,
@@ -231,7 +275,9 @@ async def _call_llm_json(messages: list) -> dict:
         resp.raise_for_status()
         data = resp.json()
         content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+        logger.info(f"LLM raw response ({len(content)} chars): {content[:2000]}")
         if not content or not content.strip():
+            logger.warning(f"LLM empty response [{context}]")
             return {}
 
         import re
@@ -256,10 +302,13 @@ async def _call_llm_json(messages: list) -> dict:
                 if brace_depth == 0 and start >= 0:
                     candidate = content[start:i + 1]
                     try:
-                        return json.loads(candidate)
+                        result = json.loads(candidate)
+                        logger.info(f"LLM parsed result [{context}]: {json.dumps(result, ensure_ascii=False)[:2000]}")
+                        return result
                     except json.JSONDecodeError:
                         continue
 
+        logger.warning(f"LLM response could not be parsed as JSON [{context}]: {content[:500]}")
         return {}
 
 
@@ -315,7 +364,7 @@ async def save_note(request: SaveNoteRequest, db: Session = Depends(get_db), cur
         raw_content=f"用户问题：{request.query}\n\nAI回答：{request.answer}",
     )
 
-    result = await _call_llm_json([{"role": "user", "content": prompt}])
+    result = await _call_llm_json([{"role": "user", "content": prompt}], context="save-note")
 
     return {
         "should_save": result.get("should_save", True),
@@ -444,7 +493,7 @@ async def import_file(
         raw_content=text[:6000],
     )
 
-    result = await _call_llm_json([{"role": "user", "content": prompt}])
+    result = await _call_llm_json([{"role": "user", "content": prompt}], context="import-file")
 
     return {
         "should_save": result.get("should_save", True),
@@ -490,7 +539,7 @@ async def import_url(request: ImportUrlRequest, db: Session = Depends(get_db), c
         raw_content=text[:6000],
     )
 
-    result = await _call_llm_json([{"role": "user", "content": prompt}])
+    result = await _call_llm_json([{"role": "user", "content": prompt}], context="import-url")
 
     return {
         "should_save": result.get("should_save", True),
@@ -526,7 +575,7 @@ async def import_text(request: ImportTextRequest, db: Session = Depends(get_db),
         raw_content=request.text[:6000],
     )
 
-    result = await _call_llm_json([{"role": "user", "content": prompt}])
+    result = await _call_llm_json([{"role": "user", "content": prompt}], context="import-text")
 
     return {
         "should_save": result.get("should_save", True),
