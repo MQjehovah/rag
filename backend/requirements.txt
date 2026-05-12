@@ -18,6 +18,7 @@ jieba>=0.42.1
 ldap3>=2.9.1
 python-jose[cryptography]>=3.3.0
 passlib[bcrypt]>=1.7.4
+bcrypt==4.0.1
 psycopg2-binary>=2.9.0
 asyncpg>=0.29.0
 alibabacloud-dingtalk>=2.2.0
