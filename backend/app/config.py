@@ -55,6 +55,9 @@ class Settings(BaseSettings):
     llm_api_key: str = ""
     llm_model: str = ""
 
+    auto_organize_enabled: bool = False
+    auto_organize_interval_hours: int = 24
+
     class Config:
         env_file = ".env"
 

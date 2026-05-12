@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
-from app.api import pages, search, upload, notebooks, graph, auth, dingtalk, chat
+from app.api import pages, search, upload, notebooks, graph, auth, dingtalk, chat, organize
 
 app = FastAPI(
     title="Notes RAG System",
@@ -26,6 +26,13 @@ app.include_router(graph.router)
 app.include_router(auth.router)
 app.include_router(dingtalk.router)
 app.include_router(chat.router)
+app.include_router(organize.router)
+
+
+@app.on_event("startup")
+def _start_scheduler():
+    from app.api.organize import start_scheduler
+    start_scheduler()
 
 @app.get("/")
 async def root():

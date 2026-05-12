@@ -1,16 +1,13 @@
+.claude/
+.vscode/
+
 docs/plans/
 
 __pycache__/
-
-node_modules/
+backend/data/
 
 dist/
-
-*.db
-
-chromadb/
-
-.claude/
+node_modules/
 
 .env
 .env.local

@@ -8,6 +8,7 @@
         <router-link to="/chat" class="nav-link" active-class="active">AI 问答</router-link>
       </div>
       <div class="nav-user" v-if="isLoggedIn">
+        <el-button size="small" :loading="organizing" @click="handleOrganize">{{ organizing ? '整理中...' : '自动整理' }}</el-button>
         <span class="nav-username">{{ authStore.user?.display_name || authStore.user?.username }}</span>
         <el-button size="small" @click="handleLogout">退出</el-button>
       </div>
@@ -19,15 +20,71 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from './stores/auth'
+import { ElMessage, ElNotification } from 'element-plus'
 
 const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
 const showNav = computed(() => route.path !== '/' && route.path !== '/login')
 const isLoggedIn = computed(() => authStore.isLoggedIn)
+const organizing = ref(false)
+
+const handleOrganize = async () => {
+  organizing.value = true
+  try {
+    const token = localStorage.getItem('token')
+    const resp = await fetch('/api/organize', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+      },
+    })
+    if (!resp.ok) {
+      const err = await resp.json()
+      ElMessage.error(err.detail || '整理失败')
+      return
+    }
+
+    const reader = resp.body!.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() || ''
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue
+        const dataStr = line.slice(6)
+        try {
+          const data = JSON.parse(dataStr)
+          if (data.type === 'progress') {
+            ElMessage.info(data.message)
+          } else if (data.type === 'done') {
+            const s = data.stats
+            ElNotification({
+              title: '整理完成',
+              message: `移动 ${s.moved} 篇 | 新建 ${s.created_notebooks} 个笔记本 | 更新 ${s.updated} 篇`,
+              type: 'success',
+            })
+          } else if (data.type === 'error') {
+            ElMessage.error(data.content)
+          }
+        } catch { /* skip */ }
+      }
+    }
+  } catch (e: any) {
+    ElMessage.error('整理失败: ' + e.message)
+  } finally {
+    organizing.value = false
+  }
+}
 
 const handleLogout = () => {
   authStore.logout()

@@ -24,6 +24,8 @@ DOWNLOADABLE_EXTENSIONS = {
     "pdf", "docx", "doc", "xlsx", "xls", "pptx", "ppt",
     "txt", "csv", "md", "html", "json",
 }
+
+WIKI_EXTENSIONS = {"", "wiki", "mindmap", "note"}
 SKIP_EXTENSIONS = {
     "mp4", "avi", "mov", "mkv", "mp3", "wav",
     "exe", "dll", "bin", "pak", "dat",
@@ -210,14 +212,7 @@ class DingTalkClient:
         ext = extension.lower()
         if ext == "docx":
             try:
-                buf = io.BytesIO(content)
-                with zipfile.ZipFile(buf) as z:
-                    with z.open("word/document.xml") as f:
-                        tree = ET.parse(f)
-                        root = tree.getroot()
-                        ns = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
-                        texts = [t.text for t in root.iter(f"{{{ns}}}t") if t.text]
-                        return "".join(texts)
+                return DingTalkClient._docx_to_markdown(content)
             except Exception:
                 pass
         if ext == "xlsx":
@@ -229,7 +224,7 @@ class DingTalkClient:
                     for row in ws.iter_rows(values_only=True):
                         cells = [str(c) for c in row if c is not None]
                         if cells:
-                            rows.append(" ".join(cells))
+                            rows.append("| " + " | ".join(cells) + " |")
                 wb.close()
                 return "\n".join(rows)
             except Exception:
@@ -238,22 +233,78 @@ class DingTalkClient:
             try:
                 buf = io.BytesIO(content)
                 with zipfile.ZipFile(buf) as z:
-                    texts = []
-                    for name in z.namelist():
-                        if name.startswith("ppt/slides/slide") and name.endswith(".xml"):
-                            with z.open(name) as f:
-                                tree = ET.parse(f)
-                                ns = "http://schemas.openxmlformats.org/drawingml/2006/main"
-                                for t in tree.getroot().iter(f"{{{ns}}}t"):
-                                    if t.text:
-                                        texts.append(t.text)
-                    return " ".join(texts)
+                    slides = []
+                    slide_files = sorted([n for n in z.namelist() if n.startswith("ppt/slides/slide") and n.endswith(".xml")])
+                    for name in slide_files:
+                        with z.open(name) as f:
+                            tree = ET.parse(f)
+                            ns = "http://schemas.openxmlformats.org/drawingml/2006/main"
+                            texts = [t.text for t in tree.getroot().iter(f"{{{ns}}}t") if t.text]
+                            if texts:
+                                slides.append(" ".join(texts))
+                    return "\n\n---\n\n".join(slides)
             except Exception:
                 pass
         try:
             return content.decode("utf-8", errors="ignore")
         except Exception:
             return ""
+
+    @staticmethod
+    def _docx_to_markdown(content: bytes) -> str:
+        buf = io.BytesIO(content)
+        lines = []
+        with zipfile.ZipFile(buf) as z:
+            with z.open("word/document.xml") as f:
+                tree = ET.parse(f)
+                root = tree.getroot()
+                ns = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+                ns_p = ns
+                ns_r = ns
+
+                for para in root.iter(f"{{{ns_p}}}p"):
+                    style_el = para.find(f".//{{{ns_p}}}pStyle")
+                    style = style_el.get(f"{{{ns_p}}}val") if style_el is not None else ""
+
+                    runs = []
+                    for run in para.iter(f"{{{ns_r}}}r"):
+                        rpr = run.find(f"{{{ns_r}}}rPr")
+                        bold = rpr is not None and rpr.find(f"{{{ns_r}}}b") is not None
+                        italic = rpr is not None and rpr.find(f"{{{ns_r}}}i") is not None
+                        text_els = run.findall(f"{{{ns_r}}}t")
+                        text = "".join(t.text or "" for t in text_els)
+                        if not text:
+                            continue
+                        if bold and italic:
+                            text = f"***{text}***"
+                        elif bold:
+                            text = f"**{text}**"
+                        elif italic:
+                            text = f"*{text}*"
+                        runs.append(text)
+
+                    line = "".join(runs)
+                    if not line.strip():
+                        lines.append("")
+                        continue
+
+                    num_el = para.find(f".//{{{ns_p}}}numPr")
+                    if num_el is not None:
+                        lines.append(f"- {line}")
+                    elif "Heading1" in style or style == "1":
+                        lines.append(f"# {line}")
+                    elif "Heading2" in style or style == "2":
+                        lines.append(f"## {line}")
+                    elif "Heading3" in style or style == "3":
+                        lines.append(f"### {line}")
+                    elif "Heading4" in style or style == "4":
+                        lines.append(f"#### {line}")
+                    elif "Title" in style:
+                        lines.append(f"# {line}")
+                    else:
+                        lines.append(line)
+
+        return "\n\n".join(lines)
 
     async def download_node_content(self, node_id: str, extension: str) -> Optional[str]:
         dentry = await self._query_dentry_id(node_id)
@@ -262,6 +313,8 @@ class DingTalkClient:
         data = await self._download_file(dentry["space_id"], dentry["dentry_id"])
         if not data:
             return None
+        if not extension:
+            return data.decode("utf-8", errors="ignore")
         return self._extract_text(data, extension)
 
     async def collect_all_docs(
@@ -328,8 +381,13 @@ class DingTalkClient:
                 logger.debug(f"  Skipped: {name} (ext={ext})")
                 continue
 
+            content = None
             if ext.lower() in DOWNLOADABLE_EXTENSIONS:
                 content = await self.download_node_content(node_id, ext)
+            elif ext.lower() in WIKI_EXTENSIONS or node_type == "DOC":
+                content = await self.download_node_content(node_id, "docx")
+                if not content:
+                    content = await self.download_node_content(node_id, "")
             else:
                 logger.debug(f"  Skipped: {name} (unsupported ext={ext})")
                 continue
