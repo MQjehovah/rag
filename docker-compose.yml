@@ -3,6 +3,8 @@ version: '2.2'
 services:
   db:
     image: pgvector/pgvector:pg16
+    profiles:
+      - pg
     environment:
       POSTGRES_DB: notesrag
       POSTGRES_USER: postgres
@@ -24,7 +26,7 @@ services:
     volumes:
       - ./data:/app/data
     environment:
-      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@db:5432/notesrag
+      - DATABASE_URL=${DATABASE_URL:-sqlite:///./data/notes.db}
       - OLLAMA_HOST=http://host.docker.internal:11434
       - LDAP_SERVER_URL=${LDAP_SERVER_URL:-}
       - LDAP_BIND_DN=${LDAP_BIND_DN:-}
@@ -36,6 +38,7 @@ services:
     depends_on:
       db:
         condition: service_healthy
+        required: false
 
   frontend:
     build: ./frontend

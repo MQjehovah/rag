@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8000
 
-    database_url: str = "postgresql+asyncpg://postgres:postgres@db:5432/notesrag"
+    database_url: str = "sqlite:///./data/notes.db"
 
     minio_endpoint: str = "192.168.31.8:9000"
     minio_access_key: str = "admin"
