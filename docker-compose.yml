@@ -24,7 +24,7 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - ./data:/app/data
+      - ./backend/data:/app/data
     environment:
       - DATABASE_URL=${DATABASE_URL:-sqlite:///./data/notes.db}
       - OLLAMA_HOST=http://host.docker.internal:11434
