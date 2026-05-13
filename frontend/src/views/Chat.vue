@@ -28,9 +28,10 @@
       <el-input
         v-model="input"
         type="textarea"
-        :rows="2"
+        :rows="1"
         placeholder="输入问题，按 Enter 发送..."
         resize="none"
+        autosize
         @keydown.enter.exact.prevent="sendMessage"
         :disabled="loading"
       />
@@ -437,18 +438,21 @@ const confirmSaveNote = async () => {
   max-width: 900px;
   width: 100%;
   margin: 0 auto;
-  padding: 16px 24px 20px;
+  padding: 12px 24px 16px;
   display: flex;
-  gap: 12px;
-  align-items: flex-end;
+  gap: 10px;
+  align-items: center;
   box-sizing: border-box;
+}
+.chat-input-area :deep(.el-textarea) {
+  flex: 1;
 }
 .chat-input-area :deep(.el-textarea__inner) {
   background: #1e293b;
   border: 1px solid #334155;
   color: #e2e8f0;
-  border-radius: 12px;
-  padding: 10px 14px;
+  border-radius: 10px;
+  padding: 8px 12px;
   font-size: 14px;
 }
 .chat-input-area :deep(.el-textarea__inner:focus) {
@@ -457,7 +461,9 @@ const confirmSaveNote = async () => {
 .chat-input-area :deep(.el-textarea__inner::placeholder) {
   color: #475569;
 }
-.chat-input-area .el-textarea {
-  flex: 1;
+.chat-input-area > .el-button {
+  border-radius: 10px;
+  height: 36px;
+  flex-shrink: 0;
 }
 </style>
