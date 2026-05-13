@@ -13,9 +13,9 @@ const router = createRouter({
   history: createWebHistory(),
   routes: [
     { path: '/login', component: Login, meta: { public: true } },
-    { path: '/', component: Editor },
+    { path: '/', component: Chat },
+    { path: '/notes', component: Editor },
     { path: '/graph', component: KnowledgeGraph },
-    { path: '/chat', component: Chat },
   ]
 })
 

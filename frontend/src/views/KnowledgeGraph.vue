@@ -133,7 +133,7 @@ const renderGraph = () => {
     .selectAll('line')
     .data(simLinks)
     .join('line')
-    .attr('stroke', '#e5e7eb')
+    .attr('stroke', '#334155')
     .attr('stroke-width', 1)
     .attr('stroke-opacity', 0.6)
 
@@ -143,7 +143,7 @@ const renderGraph = () => {
     .join('circle')
     .attr('r', (d) => Math.max(6, Math.sqrt(d.link_count + 1) * 5))
     .attr('fill', (d) => getColor(d))
-    .attr('stroke', '#fff')
+    .attr('stroke', '#1e293b')
     .attr('stroke-width', 2)
     .style('cursor', 'pointer')
     .on('mouseover', (event, d) => {
@@ -161,7 +161,7 @@ const renderGraph = () => {
       link.attr('stroke', l => {
         const s = (l.source as any).id
         const t = (l.target as any).id
-        return s === d.id || t === d.id ? '#3b82f6' : '#e5e7eb'
+        return s === d.id || t === d.id ? '#38bdf8' : '#334155'
       }).attr('stroke-width', l => {
         const s = (l.source as any).id
         const t = (l.target as any).id
@@ -171,10 +171,10 @@ const renderGraph = () => {
     .on('mouseout', () => {
       hoveredNode.value = null
       node.attr('opacity', 1)
-      link.attr('stroke', '#e5e7eb').attr('stroke-width', 1)
+      link.attr('stroke', '#334155').attr('stroke-width', 1)
     })
     .on('click', (_event, d) => {
-      router.push({ path: '/', query: { pageId: d.id } })
+      router.push({ path: '/notes', query: { pageId: d.id } })
     })
     .call(d3.drag<SVGCircleElement, typeof simNodes[0]>()
       .on('start', (event, d) => {
@@ -199,7 +199,7 @@ const renderGraph = () => {
     .join('text')
     .text(d => d.title.length > 8 ? d.title.slice(0, 8) + '...' : d.title)
     .attr('font-size', 11)
-    .attr('fill', '#374151')
+    .attr('fill', '#94a3b8')
     .attr('text-anchor', 'middle')
     .attr('dy', (d) => -(Math.max(6, Math.sqrt(d.link_count + 1) * 5) + 6))
 
@@ -280,21 +280,21 @@ onBeforeUnmount(() => {
   height: 100vh;
   display: flex;
   flex-direction: column;
-  background: #f5f7fa;
+  background: #0f172a;
 }
 .graph-header {
-  background: #fff;
-  border-bottom: 1px solid #e4e7ed;
-  padding: 12px 20px;
+  background: #1e293b;
+  border-bottom: 1px solid #334155;
+  padding: 12px 24px;
   display: flex;
   justify-content: space-between;
   align-items: center;
 }
 .graph-stats {
   display: flex;
-  gap: 20px;
-  font-size: 14px;
-  color: #606266;
+  gap: 24px;
+  font-size: 13px;
+  color: #94a3b8;
 }
 .graph-controls {
   display: flex;
@@ -308,13 +308,14 @@ onBeforeUnmount(() => {
 }
 .node-tooltip {
   position: fixed;
-  background: #fff;
-  border: 1px solid #e4e7ed;
-  border-radius: 6px;
-  padding: 8px 12px;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 10px;
+  padding: 10px 14px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.3);
   font-size: 13px;
   z-index: 100;
   pointer-events: none;
+  color: #e2e8f0;
 }
 </style>

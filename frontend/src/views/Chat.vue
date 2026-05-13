@@ -1,23 +1,20 @@
 <template>
   <div class="chat-page">
-    <div class="chat-toolbar">
-      <el-button size="small" @click="importDialogVisible = true">导入知识</el-button>
-    </div>
     <div class="chat-messages" ref="messagesRef">
       <div v-if="messages.length === 0" class="chat-empty">
         <div class="empty-icon">💬</div>
         <p>向 AI 助手提问，它将基于知识库内容回答</p>
       </div>
       <div v-for="(msg, idx) in messages" :key="idx" :class="['chat-message', msg.role]">
-        <div class="message-avatar">{{ msg.role === 'user' ? '👤' : '🤖' }}</div>
+        <div class="message-avatar">{{ msg.role === 'user' ? 'U' : 'AI' }}</div>
         <div class="message-body">
-          <div class="message-content" :class="{ typing: !msg.content && loading }" v-html="msg.content ? renderContent(msg.content) : '思考中...'"></div>
+          <div class="message-content markdown-body" :class="{ typing: !msg.content && loading }" v-html="msg.content ? renderContent(msg.content) : '思考中...'"></div>
           <div v-if="msg.sources && msg.sources.length" class="message-sources">
             <div class="sources-label">引用来源：</div>
             <router-link
               v-for="src in msg.sources"
               :key="src.id"
-              :to="{ path: '/', query: { page: src.id } }"
+              :to="{ path: '/notes', query: { page: src.id } }"
               class="source-link"
             >{{ src.title }}</router-link>
           </div>
@@ -75,76 +72,27 @@
         <el-button v-if="saveForm.should_save" type="primary" :loading="saveLoading" @click="confirmSaveNote">确认保存</el-button>
       </template>
     </el-dialog>
-
-    <el-dialog v-model="importDialogVisible" title="导入知识" width="600px">
-      <el-tabs v-model="importTab">
-        <el-tab-pane label="文件上传" name="file">
-          <el-upload
-            :auto-upload="false"
-            :limit="1"
-            :on-change="handleFileChange"
-            accept=".pdf,.txt,.md,.doc,.docx,.csv,.json"
-          >
-            <el-button>选择文件</el-button>
-            <template #tip><div class="upload-tip">支持 PDF、Word、TXT、Markdown 等格式</div></template>
-          </el-upload>
-        </el-tab-pane>
-        <el-tab-pane label="URL" name="url">
-          <el-input v-model="importUrl" placeholder="输入网页 URL" />
-        </el-tab-pane>
-        <el-tab-pane label="文本" name="text">
-          <el-input v-model="importText" type="textarea" :rows="6" placeholder="粘贴文本内容" />
-        </el-tab-pane>
-      </el-tabs>
-      <template #footer>
-        <el-button @click="importDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="importLoading" @click="handleImport">分析并导入</el-button>
-      </template>
-    </el-dialog>
-
-    <el-dialog v-model="confirmDialogVisible" title="确认导入" width="600px">
-      <div v-if="!confirmForm.should_save" class="save-summary">LLM 判断该内容不值得保存（广告/无效内容等）</div>
-      <template v-else>
-        <el-form label-width="100px">
-          <el-form-item label="操作">
-            <el-tag v-if="confirmForm.action === 'create_notebook'" type="success">新建笔记本 + 笔记</el-tag>
-            <el-tag v-else-if="confirmForm.action === 'update_note'" type="warning">更新已有笔记</el-tag>
-            <el-tag v-else>新建笔记</el-tag>
-          </el-form-item>
-          <el-form-item label="标题">
-            <el-input v-model="confirmForm.title" />
-          </el-form-item>
-          <el-form-item v-if="confirmForm.action === 'create_notebook'" label="新建笔记本">
-            <el-input v-model="confirmForm.new_notebook_name" placeholder="新笔记本名称" />
-          </el-form-item>
-          <el-form-item v-else-if="confirmForm.action === 'update_note'" label="更新笔记">
-            <el-select v-model="confirmForm.update_page_id" placeholder="选择要更新的笔记" style="width: 100%">
-              <el-option v-for="p in confirmForm.pages" :key="p.id" :label="p.title" :value="p.id" />
-            </el-select>
-          </el-form-item>
-          <el-form-item v-else label="笔记本">
-            <el-select v-model="confirmForm.notebook_id" clearable placeholder="选择笔记本" style="width: 100%">
-              <el-option v-for="nb in confirmForm.notebooks" :key="nb.id" :label="nb.name" :value="nb.id" />
-            </el-select>
-          </el-form-item>
-          <el-form-item v-if="confirmForm.summary" label="摘要">
-            <div class="save-summary">{{ confirmForm.summary }}</div>
-          </el-form-item>
-        </el-form>
-      </template>
-      <template #footer>
-        <el-button @click="confirmDialogVisible = false">取消</el-button>
-        <el-button v-if="confirmForm.should_save" type="primary" :loading="confirmLoading" @click="confirmImport">确认保存</el-button>
-      </template>
-    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, nextTick } from 'vue'
 import { ElMessage } from 'element-plus'
-import type { UploadFile as ElUploadFile } from 'element-plus'
 import http from '../api/http'
+import MarkdownIt from 'markdown-it'
+import hljs from 'highlight.js'
+
+const md = new MarkdownIt({
+  html: false,
+  linkify: true,
+  typographer: true,
+  highlight(str: string, lang: string) {
+    if (lang && hljs.getLanguage(lang)) {
+      try { return (hljs.highlight(str, { language: lang }) as any).value } catch {}
+    }
+    return (hljs.highlightAuto(str) as any).value
+  },
+})
 
 interface Source {
   id: string
@@ -162,23 +110,10 @@ const input = ref('')
 const loading = ref(false)
 const messagesRef = ref<HTMLElement>()
 const saveLoading = ref(false)
-const importLoading = ref(false)
-const confirmLoading = ref(false)
 
 const saveDialogVisible = ref(false)
 const saveForm = ref<{ should_save: boolean; action: string; title: string; notebook_id: string | null; new_notebook_name: string; update_page_id: string | null; summary: string; content: string; notebooks: { id: string; name: string }[]; pages: { id: string; title: string }[]; msgIdx: number }>({
   should_save: true, action: 'create_note', title: '', notebook_id: null, new_notebook_name: '', update_page_id: null, summary: '', content: '', notebooks: [], pages: [], msgIdx: -1,
-})
-
-const importDialogVisible = ref(false)
-const importTab = ref('file')
-const importUrl = ref('')
-const importText = ref('')
-const selectedFile = ref<File | null>(null)
-
-const confirmDialogVisible = ref(false)
-const confirmForm = ref<{ should_save: boolean; action: string; title: string; notebook_id: string | null; new_notebook_name: string; update_page_id: string | null; summary: string; content: string; notebooks: { id: string; name: string }[]; pages: { id: string; title: string }[] }>({
-  should_save: true, action: 'create_note', title: '', notebook_id: null, new_notebook_name: '', update_page_id: null, summary: '', content: '', notebooks: [], pages: [],
 })
 
 const scrollToBottom = () => {
@@ -190,11 +125,7 @@ const scrollToBottom = () => {
 }
 
 const renderContent = (text: string) => {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/\n/g, '<br>')
+  return md.render(text)
 }
 
 const sendMessage = async () => {
@@ -293,33 +224,19 @@ const handleSaveNote = async (idx: number) => {
   }
 }
 
-const _executeSave = async (form: { action: string; title: string; notebook_id: string | null; new_notebook_name: string; update_page_id: string | null; content: string }) => {
-  const action = form.action || 'create_note'
-
-  if (action === 'create_notebook' && form.new_notebook_name) {
-    const nbRes = await http.post('/api/notebooks', { name: form.new_notebook_name })
-    await http.post('/api/pages', {
-      title: form.title,
-      content: form.content,
-      notebook_id: nbRes.data.id,
-    })
-  } else if (action === 'update_note' && form.update_page_id) {
-    await http.put(`/api/pages/${form.update_page_id}`, {
-      content: form.content,
-    })
-  } else {
-    await http.post('/api/pages', {
-      title: form.title,
-      content: form.content,
-      notebook_id: form.notebook_id || undefined,
-    })
-  }
-}
-
 const confirmSaveNote = async () => {
   saveLoading.value = true
   try {
-    await _executeSave(saveForm.value)
+    const form = saveForm.value
+    const action = form.action || 'create_note'
+    if (action === 'create_notebook' && form.new_notebook_name) {
+      const nbRes = await http.post('/api/notebooks', { name: form.new_notebook_name })
+      await http.post('/api/pages', { title: form.title, content: form.content, notebook_id: nbRes.data.id })
+    } else if (action === 'update_note' && form.update_page_id) {
+      await http.put(`/api/pages/${form.update_page_id}`, { content: form.content })
+    } else {
+      await http.post('/api/pages', { title: form.title, content: form.content, notebook_id: form.notebook_id || undefined })
+    }
     ElMessage.success('笔记已保存')
     saveDialogVisible.value = false
   } catch (e: any) {
@@ -328,101 +245,56 @@ const confirmSaveNote = async () => {
     saveLoading.value = false
   }
 }
-
-const handleFileChange = (file: ElUploadFile) => {
-  selectedFile.value = file.raw || null
-}
-
-const handleImport = async () => {
-  if (importTab.value === 'file' && !selectedFile.value) {
-    ElMessage.warning('请选择文件')
-    return
-  }
-  if (importTab.value === 'url' && !importUrl.value.trim()) {
-    ElMessage.warning('请输入URL')
-    return
-  }
-  if (importTab.value === 'text' && !importText.value.trim()) {
-    ElMessage.warning('请输入文本')
-    return
-  }
-
-  importLoading.value = true
-  try {
-    let res
-    if (importTab.value === 'file') {
-      const formData = new FormData()
-      formData.append('file', selectedFile.value!)
-      res = await http.post('/api/chat/import/file', formData)
-    } else if (importTab.value === 'url') {
-      res = await http.post('/api/chat/import/url', { url: importUrl.value })
-    } else {
-      res = await http.post('/api/chat/import/text', { text: importText.value })
-    }
-    confirmForm.value = res.data
-    confirmDialogVisible.value = true
-  } catch (e: any) {
-    ElMessage.error('导入失败: ' + (e.response?.data?.detail || e.message))
-  } finally {
-    importLoading.value = false
-  }
-}
-
-const confirmImport = async () => {
-  confirmLoading.value = true
-  try {
-    await _executeSave(confirmForm.value)
-    ElMessage.success('知识已导入')
-    confirmDialogVisible.value = false
-    importDialogVisible.value = false
-    selectedFile.value = null
-    importUrl.value = ''
-    importText.value = ''
-  } catch (e: any) {
-    ElMessage.error('保存失败: ' + (e.response?.data?.detail || e.message))
-  } finally {
-    confirmLoading.value = false
-  }
-}
 </script>
 
 <style scoped>
+@import 'highlight.js/styles/github-dark.css';
+
 .chat-page {
   display: flex;
   flex-direction: column;
   height: 100%;
-  background: #f5f7fa;
+  background: #0f172a;
 }
 .chat-toolbar {
   max-width: 900px;
   width: 100%;
   margin: 0 auto;
-  padding: 8px 20px 0;
+  padding: 12px 24px 0;
   display: flex;
   justify-content: flex-end;
 }
 .chat-messages {
   flex: 1;
   overflow-y: auto;
-  padding: 12px 20px;
+  padding: 20px 24px;
   max-width: 900px;
   width: 100%;
   margin: 0 auto;
   box-sizing: border-box;
 }
+.chat-messages::-webkit-scrollbar { width: 6px; }
+.chat-messages::-webkit-scrollbar-track { background: transparent; }
+.chat-messages::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
 .chat-empty {
   text-align: center;
-  padding: 80px 20px;
-  color: #909399;
+  padding: 120px 20px;
+  color: #475569;
 }
 .empty-icon {
-  font-size: 48px;
+  font-size: 56px;
   margin-bottom: 16px;
+  opacity: 0.6;
 }
 .chat-message {
   display: flex;
   gap: 12px;
-  margin-bottom: 20px;
+  margin-bottom: 24px;
+  animation: fadeIn 0.3s ease;
+}
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 .chat-message.user {
   flex-direction: row-reverse;
@@ -430,46 +302,112 @@ const confirmImport = async () => {
 .message-avatar {
   width: 36px;
   height: 36px;
-  border-radius: 50%;
+  border-radius: 10px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 18px;
+  font-size: 16px;
   flex-shrink: 0;
-  background: #fff;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+.chat-message.user .message-avatar {
+  background: linear-gradient(135deg, #38bdf8, #6366f1);
+}
+.chat-message.assistant .message-avatar {
+  background: #1e293b;
+  border: 1px solid #334155;
 }
 .message-body {
-  max-width: 70%;
+  max-width: 75%;
   min-width: 0;
 }
-.chat-message.user .message-body {
-  align-items: flex-end;
-}
 .message-content {
-  background: #fff;
-  padding: 12px 16px;
-  border-radius: 12px;
-  line-height: 1.6;
+  padding: 14px 18px;
+  border-radius: 14px;
+  line-height: 1.7;
   font-size: 14px;
-  color: #303133;
   word-break: break-word;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.06);
 }
 .chat-message.user .message-content {
-  background: #409eff;
+  background: linear-gradient(135deg, #38bdf8, #6366f1);
   color: #fff;
+  border-bottom-right-radius: 4px;
+}
+.chat-message.assistant .message-content {
+  background: #1e293b;
+  color: #e2e8f0;
+  border: 1px solid #334155;
+  border-bottom-left-radius: 4px;
 }
 .message-content.typing {
-  color: #909399;
+  color: #64748b;
   animation: pulse 1.5s infinite;
 }
 @keyframes pulse {
   0%, 100% { opacity: 1; }
-  50% { opacity: 0.5; }
+  50% { opacity: 0.4; }
 }
+.markdown-body :deep(h1), .markdown-body :deep(h2), .markdown-body :deep(h3) {
+  color: #f1f5f9;
+  margin: 16px 0 8px;
+  font-weight: 600;
+}
+.markdown-body :deep(h1) { font-size: 20px; }
+.markdown-body :deep(h2) { font-size: 17px; }
+.markdown-body :deep(h3) { font-size: 15px; }
+.markdown-body :deep(p) { margin: 6px 0; }
+.markdown-body :deep(ul), .markdown-body :deep(ol) { padding-left: 20px; margin: 6px 0; }
+.markdown-body :deep(li) { margin: 3px 0; }
+.markdown-body :deep(code) {
+  background: rgba(0,0,0,0.3);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 13px;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+}
+.markdown-body :deep(pre) {
+  background: #0c1222;
+  border-radius: 8px;
+  padding: 14px;
+  overflow-x: auto;
+  margin: 10px 0;
+  border: 1px solid #1e293b;
+}
+.markdown-body :deep(pre code) {
+  background: none;
+  padding: 0;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.markdown-body :deep(blockquote) {
+  border-left: 3px solid #38bdf8;
+  padding-left: 12px;
+  margin: 8px 0;
+  color: #94a3b8;
+}
+.markdown-body :deep(table) {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 10px 0;
+}
+.markdown-body :deep(th), .markdown-body :deep(td) {
+  border: 1px solid #334155;
+  padding: 6px 12px;
+  text-align: left;
+}
+.markdown-body :deep(th) {
+  background: #1e293b;
+  font-weight: 600;
+}
+.markdown-body :deep(a) {
+  color: #38bdf8;
+  text-decoration: none;
+}
+.markdown-body :deep(a:hover) {
+  text-decoration: underline;
+}
+.markdown-body :deep(strong) { color: #f1f5f9; }
 .message-sources {
-  margin-top: 8px;
+  margin-top: 10px;
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
@@ -477,46 +415,49 @@ const confirmImport = async () => {
 }
 .sources-label {
   font-size: 12px;
-  color: #909399;
+  color: #64748b;
 }
 .source-link {
   font-size: 12px;
-  color: #409eff;
+  color: #38bdf8;
   text-decoration: none;
-  background: #ecf5ff;
-  padding: 2px 8px;
-  border-radius: 4px;
+  background: rgba(56,189,248,0.1);
+  padding: 3px 10px;
+  border-radius: 6px;
+  border: 1px solid rgba(56,189,248,0.15);
+  transition: all 0.2s;
 }
 .source-link:hover {
-  background: #d9ecff;
+  background: rgba(56,189,248,0.2);
 }
 .message-actions {
-  margin-top: 6px;
+  margin-top: 8px;
 }
 .chat-input-area {
   max-width: 900px;
   width: 100%;
   margin: 0 auto;
-  padding: 16px 20px;
+  padding: 16px 24px 20px;
   display: flex;
   gap: 12px;
   align-items: flex-end;
   box-sizing: border-box;
 }
+.chat-input-area :deep(.el-textarea__inner) {
+  background: #1e293b;
+  border: 1px solid #334155;
+  color: #e2e8f0;
+  border-radius: 12px;
+  padding: 10px 14px;
+  font-size: 14px;
+}
+.chat-input-area :deep(.el-textarea__inner:focus) {
+  border-color: #38bdf8;
+}
+.chat-input-area :deep(.el-textarea__inner::placeholder) {
+  color: #475569;
+}
 .chat-input-area .el-textarea {
   flex: 1;
-}
-.save-summary {
-  font-size: 13px;
-  color: #606266;
-  background: #f5f7fa;
-  padding: 8px 12px;
-  border-radius: 6px;
-  line-height: 1.5;
-}
-.upload-tip {
-  font-size: 12px;
-  color: #909399;
-  margin-top: 4px;
 }
 </style>

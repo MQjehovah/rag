@@ -12,8 +12,9 @@
       <div class="header-actions">
         <el-tag type="success" v-if="saveStatus === 'saved'">已保存</el-tag>
         <el-tag type="warning" v-else-if="saveStatus === 'saving'">保存中...</el-tag>
-        <el-button @click="$router.push('/graph')">知识图谱</el-button>
         <el-button @click="showDingTalk = true">钉钉同步</el-button>
+        <el-button @click="importDialogVisible = true">导入知识</el-button>
+        <el-button :loading="organizing" @click="handleOrganize">{{ organizing ? '整理中...' : '自动整理' }}</el-button>
         <el-button type="primary" @click="showNewNotebook = true">新建笔记本</el-button>
       </div>
     </header>
@@ -33,7 +34,7 @@
             :class="{ active: currentNotebook?.id === nb.id }"
           >
             <div class="notebook-info" @click="selectNotebook(nb)">
-              <span class="notebook-icon">📁</span>
+               <span class="notebook-icon">📂</span>
               <span class="notebook-name">{{ nb.name }}</span>
               <el-dropdown trigger="click" @command="(cmd: string) => handleNotebookCmd(cmd, nb)">
                 <el-button size="small" text>⋮</el-button>
@@ -53,7 +54,7 @@
                 :class="{ active: currentPage?.id === page.id }"
               >
                 <div class="page-info" @click="selectPage(page)">
-                  <span class="page-icon">📄</span>
+                   <span class="page-icon">📝</span>
                   <span class="page-title">{{ page.title || '无标题' }}</span>
                 </div>
                 <el-dropdown trigger="click" @command="(cmd: string) => handlePageCmd(cmd, page)">
@@ -77,7 +78,7 @@
 
           <div class="notebook-item" :class="{ active: currentNotebook?.id === '__unassigned__' }">
             <div class="notebook-info" @click="selectUnassigned">
-              <span class="notebook-icon">📥</span>
+               <span class="notebook-icon">📋</span>
               <span class="notebook-name">未分类</span>
               <el-tag size="small" type="info" v-if="unassignedPages.length">{{ unassignedPages.length }}</el-tag>
             </div>
@@ -89,7 +90,7 @@
                 :class="{ active: currentPage?.id === page.id }"
               >
                 <div class="page-info" @click="selectPage(page)">
-                  <span class="page-icon">📄</span>
+                   <span class="page-icon">📝</span>
                   <span class="page-title">{{ page.title || '无标题' }}</span>
                 </div>
                 <el-dropdown trigger="click" @command="(cmd: string) => handlePageCmd(cmd, page)">
@@ -194,12 +195,76 @@
         </el-button>
       </template>
     </el-dialog>
+
+    <!-- 导入知识对话框 -->
+    <el-dialog v-model="importDialogVisible" title="导入知识" width="600px">
+      <el-tabs v-model="importTab">
+        <el-tab-pane label="文件上传" name="file">
+          <el-upload
+            :auto-upload="false"
+            :limit="1"
+            :on-change="handleFileChange"
+            accept=".pdf,.txt,.md,.doc,.docx,.csv,.json"
+          >
+            <el-button>选择文件</el-button>
+            <template #tip><div class="upload-tip">支持 PDF、Word、TXT、Markdown 等格式</div></template>
+          </el-upload>
+        </el-tab-pane>
+        <el-tab-pane label="URL" name="url">
+          <el-input v-model="importUrl" placeholder="输入网页 URL" />
+        </el-tab-pane>
+        <el-tab-pane label="文本" name="text">
+          <el-input v-model="importText" type="textarea" :rows="6" placeholder="粘贴文本内容" />
+        </el-tab-pane>
+      </el-tabs>
+      <template #footer>
+        <el-button @click="importDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="importLoading" @click="handleImport">分析并导入</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="confirmDialogVisible" title="确认导入" width="600px">
+      <div v-if="!confirmForm.should_save" class="save-summary">LLM 判断该内容不值得保存（广告/无效内容等）</div>
+      <template v-else>
+        <el-form label-width="100px">
+          <el-form-item label="操作">
+            <el-tag v-if="confirmForm.action === 'create_notebook'" type="success">新建笔记本 + 笔记</el-tag>
+            <el-tag v-else-if="confirmForm.action === 'update_note'" type="warning">更新已有笔记</el-tag>
+            <el-tag v-else>新建笔记</el-tag>
+          </el-form-item>
+          <el-form-item label="标题">
+            <el-input v-model="confirmForm.title" />
+          </el-form-item>
+          <el-form-item v-if="confirmForm.action === 'create_notebook'" label="新建笔记本">
+            <el-input v-model="confirmForm.new_notebook_name" placeholder="新笔记本名称" />
+          </el-form-item>
+          <el-form-item v-else-if="confirmForm.action === 'update_note'" label="更新笔记">
+            <el-select v-model="confirmForm.update_page_id" placeholder="选择要更新的笔记" style="width: 100%">
+              <el-option v-for="p in confirmForm.pages" :key="p.id" :label="p.title" :value="p.id" />
+            </el-select>
+          </el-form-item>
+          <el-form-item v-else label="笔记本">
+            <el-select v-model="confirmForm.notebook_id" clearable placeholder="选择笔记本" style="width: 100%">
+              <el-option v-for="nb in confirmForm.notebooks" :key="nb.id" :label="nb.name" :value="nb.id" />
+            </el-select>
+          </el-form-item>
+          <el-form-item v-if="confirmForm.summary" label="摘要">
+            <div class="save-summary">{{ confirmForm.summary }}</div>
+          </el-form-item>
+        </el-form>
+      </template>
+      <template #footer>
+        <el-button @click="confirmDialogVisible = false">取消</el-button>
+        <el-button v-if="confirmForm.should_save" type="primary" :loading="confirmLoading" @click="confirmImport">确认保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElNotification } from 'element-plus'
+import type { UploadFile as ElUploadFile } from 'element-plus'
 import http from '../api/http'
 import TipTapEditor from '../components/TipTapEditor.vue'
 
@@ -239,6 +304,19 @@ const dtNotebookName = ref('钉钉知识库')
 const dtSpaceId = ref('')
 const syncStatus = ref<any>({ running: false, progress: '', total: 0, imported: 0, errors: 0, last_sync: '' })
 let syncPollTimer: number | null = null
+
+const importDialogVisible = ref(false)
+const importTab = ref('file')
+const importUrl = ref('')
+const importText = ref('')
+const selectedFile = ref<File | null>(null)
+const importLoading = ref(false)
+const confirmDialogVisible = ref(false)
+const confirmLoading = ref(false)
+const confirmForm = ref<{ should_save: boolean; action: string; title: string; notebook_id: string | null; new_notebook_name: string; update_page_id: string | null; summary: string; content: string; notebooks: { id: string; name: string }[]; pages: { id: string; title: string }[] }>({
+  should_save: true, action: 'create_note', title: '', notebook_id: null, new_notebook_name: '', update_page_id: null, summary: '', content: '', notebooks: [], pages: [],
+})
+const organizing = ref(false)
 
 let saveTimeout: number | null = null
 const indexing = ref(false)
@@ -507,6 +585,107 @@ const openFromSearch = async (result: any) => {
   }
 }
 
+const handleFileChange = (file: ElUploadFile) => {
+  selectedFile.value = file.raw || null
+}
+
+const _executeSave = async (form: { action: string; title: string; notebook_id: string | null; new_notebook_name: string; update_page_id: string | null; content: string }) => {
+  const action = form.action || 'create_note'
+  if (action === 'create_notebook' && form.new_notebook_name) {
+    const nbRes = await http.post('/api/notebooks', { name: form.new_notebook_name })
+    await http.post('/api/pages', { title: form.title, content: form.content, notebook_id: nbRes.data.id })
+  } else if (action === 'update_note' && form.update_page_id) {
+    await http.put(`/api/pages/${form.update_page_id}`, { content: form.content })
+  } else {
+    await http.post('/api/pages', { title: form.title, content: form.content, notebook_id: form.notebook_id || undefined })
+  }
+}
+
+const handleImport = async () => {
+  if (importTab.value === 'file' && !selectedFile.value) { ElMessage.warning('请选择文件'); return }
+  if (importTab.value === 'url' && !importUrl.value.trim()) { ElMessage.warning('请输入URL'); return }
+  if (importTab.value === 'text' && !importText.value.trim()) { ElMessage.warning('请输入文本'); return }
+  importLoading.value = true
+  try {
+    let res
+    if (importTab.value === 'file') {
+      const formData = new FormData()
+      formData.append('file', selectedFile.value!)
+      res = await http.post('/api/chat/import/file', formData)
+    } else if (importTab.value === 'url') {
+      res = await http.post('/api/chat/import/url', { url: importUrl.value })
+    } else {
+      res = await http.post('/api/chat/import/text', { text: importText.value })
+    }
+    confirmForm.value = res.data
+    confirmDialogVisible.value = true
+  } catch (e: any) {
+    ElMessage.error('导入失败: ' + (e.response?.data?.detail || e.message))
+  } finally {
+    importLoading.value = false
+  }
+}
+
+const confirmImport = async () => {
+  confirmLoading.value = true
+  try {
+    await _executeSave(confirmForm.value)
+    ElMessage.success('知识已导入')
+    confirmDialogVisible.value = false
+    importDialogVisible.value = false
+    selectedFile.value = null
+    importUrl.value = ''
+    importText.value = ''
+    loadNotebooks()
+  } catch (e: any) {
+    ElMessage.error('保存失败: ' + (e.response?.data?.detail || e.message))
+  } finally {
+    confirmLoading.value = false
+  }
+}
+
+const handleOrganize = async () => {
+  organizing.value = true
+  try {
+    const token = localStorage.getItem('token')
+    const resp = await fetch('/api/organize', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+    })
+    if (!resp.ok) {
+      const err = await resp.json()
+      ElMessage.error(err.detail || '整理失败')
+      return
+    }
+    const reader = resp.body!.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() || ''
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue
+        try {
+          const data = JSON.parse(line.slice(6))
+          if (data.type === 'progress') ElMessage.info(data.message)
+          else if (data.type === 'done') {
+            const s = data.stats
+            ElNotification({ title: '整理完成', message: `移动 ${s.moved} 篇 | 新建 ${s.created_notebooks} 个笔记本 | 更新 ${s.updated} 篇`, type: 'success' })
+            loadNotebooks()
+          } else if (data.type === 'error') ElMessage.error(data.content)
+        } catch { /* skip */ }
+      }
+    }
+  } catch (e: any) {
+    ElMessage.error('整理失败: ' + e.message)
+  } finally {
+    organizing.value = false
+  }
+}
+
 const handleKeydown = (e: KeyboardEvent) => {
   if ((e.ctrlKey || e.metaKey) && e.key === 's') {
     e.preventDefault()
@@ -529,51 +708,143 @@ onBeforeUnmount(() => {
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html, body, #app { height: 100%; }
-.app-container { height: 100vh; display: flex; flex-direction: column; background: #f5f7fa; }
-.app-header { height: 60px; background: #fff; border-bottom: 1px solid #e4e7ed; display: flex; align-items: center; justify-content: space-between; padding: 0 20px; }
+.app-container { height: 100vh; display: flex; flex-direction: column; background: #f0f2f5; }
+.app-header {
+  height: 56px;
+  background: #fff;
+  border-bottom: 1px solid #e2e8f0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 24px;
+}
 .search-box { width: 400px; }
-.header-actions { display: flex; align-items: center; gap: 15px; }
+.search-box :deep(.el-input__wrapper) {
+  border-radius: 10px;
+  background: #f8fafc;
+  box-shadow: none;
+  border: 1px solid #e2e8f0;
+}
+.header-actions { display: flex; align-items: center; gap: 10px; }
 .app-body { flex: 1; display: flex; overflow: hidden; }
-.sidebar { width: 280px; background: #fff; border-right: 1px solid #e4e7ed; display: flex; flex-direction: column; }
-.sidebar-header { padding: 15px; font-weight: bold; border-bottom: 1px solid #e4e7ed; }
-.notebook-list { flex: 1; overflow-y: auto; padding: 10px; }
-.notebook-item { margin-bottom: 8px; }
-.notebook-info { display: flex; align-items: center; padding: 10px 12px; border-radius: 6px; cursor: pointer; }
-.notebook-info:hover { background: #f5f7fa; }
-.notebook-item.active > .notebook-info { background: #ecf5ff; }
-.notebook-icon { margin-right: 8px; }
-.notebook-name { flex: 1; font-weight: 500; }
+.sidebar {
+  width: 280px;
+  background: #fff;
+  border-right: 1px solid #e2e8f0;
+  display: flex;
+  flex-direction: column;
+}
+.sidebar-header {
+  padding: 16px 20px;
+  font-weight: 600;
+  font-size: 14px;
+  color: #1e293b;
+  border-bottom: 1px solid #e2e8f0;
+  letter-spacing: -0.2px;
+}
+.notebook-list { flex: 1; overflow-y: auto; padding: 8px; }
+.notebook-list::-webkit-scrollbar { width: 4px; }
+.notebook-list::-webkit-scrollbar-thumb { background: #e2e8f0; border-radius: 2px; }
+.notebook-item { margin-bottom: 2px; }
+.notebook-info {
+  display: flex;
+  align-items: center;
+  padding: 9px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.notebook-info:hover { background: #f1f5f9; }
+.notebook-item.active > .notebook-info { background: #eff6ff; color: #2563eb; }
+.notebook-icon { margin-right: 8px; font-size: 15px; }
+.notebook-name { flex: 1; font-weight: 500; font-size: 14px; }
 .notebook-info .el-button { margin-left: auto; }
-.page-list { padding-left: 20px; }
-.page-item { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; border-radius: 6px; cursor: pointer; }
-.page-item:hover { background: #f5f7fa; }
-.page-item.active { background: #e6f7ff; }
+.page-list { padding-left: 16px; }
+.page-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 7px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.page-item:hover { background: #f1f5f9; }
+.page-item.active { background: #eff6ff; }
 .page-info { display: flex; align-items: center; flex: 1; min-width: 0; }
-.page-icon { margin-right: 8px; font-size: 12px; }
-.page-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
+.page-icon { margin-right: 6px; font-size: 13px; }
+.page-title {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  color: #475569;
+}
+.page-item.active .page-title { color: #1e40af; font-weight: 500; }
 .page-menu-btn { opacity: 0; padding: 0 4px; }
 .page-item:hover .page-menu-btn { opacity: 1; }
-.add-page { padding: 8px 12px; color: #409eff; cursor: pointer; font-size: 14px; }
-.add-page:hover { background: #f5f7fa; }
-.empty-tip { text-align: center; color: #999; padding: 20px; }
-.main-content { flex: 1; padding: 20px 40px; overflow-y: auto; }
-.editor-wrapper { max-width: 900px; margin: 0 auto; background: #fff; border-radius: 8px; box-shadow: 0 2px 12px rgba(0,0,0,0.1); min-height: calc(100vh - 100px); padding: 30px 40px; }
-.title-input { width: 100%; font-size: 28px; font-weight: 600; border: none; outline: none; padding: 10px 0; margin-bottom: 20px; color: #1f2937; }
-.title-input::placeholder { color: #9ca3af; }
-.editor-footer { margin-top: 30px; padding-top: 20px; border-top: 1px solid #e5e7eb; display: flex; justify-content: space-between; align-items: center; }
-.editor-hint { color: #9ca3af; font-size: 14px; }
-.empty-state { text-align: center; color: #999; margin-top: 100px; }
-.search-result { padding: 15px; border-bottom: 1px solid #e4e7ed; cursor: pointer; }
-.search-result:hover { background: #f5f7fa; }
-.result-title { font-weight: bold; margin-bottom: 5px; }
-.result-content { color: #666; font-size: 14px; margin-bottom: 8px; }
+.add-page {
+  padding: 7px 12px;
+  color: #3b82f6;
+  cursor: pointer;
+  font-size: 13px;
+  border-radius: 6px;
+  transition: background 0.15s;
+}
+.add-page:hover { background: #eff6ff; }
+.empty-tip { text-align: center; color: #94a3b8; padding: 30px 20px; font-size: 13px; }
+.main-content { flex: 1; padding: 24px 40px; overflow-y: auto; }
+.editor-wrapper {
+  max-width: 900px;
+  margin: 0 auto;
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
+  border: 1px solid #e2e8f0;
+  min-height: calc(100vh - 104px);
+  padding: 32px 44px;
+}
+.title-input {
+  width: 100%;
+  font-size: 26px;
+  font-weight: 700;
+  border: none;
+  outline: none;
+  padding: 8px 0;
+  margin-bottom: 20px;
+  color: #0f172a;
+  letter-spacing: -0.3px;
+}
+.title-input::placeholder { color: #cbd5e1; }
+.editor-footer {
+  margin-top: 28px;
+  padding-top: 16px;
+  border-top: 1px solid #f1f5f9;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.editor-hint { color: #94a3b8; font-size: 13px; }
+.empty-state { text-align: center; color: #94a3b8; margin-top: 120px; }
+.empty-state h2 { font-size: 20px; color: #475569; margin-bottom: 8px; }
+.search-result {
+  padding: 16px;
+  border-bottom: 1px solid #f1f5f9;
+  cursor: pointer;
+  border-radius: 8px;
+  transition: background 0.15s;
+}
+.search-result:hover { background: #f8fafc; }
+.result-title { font-weight: 600; margin-bottom: 6px; color: #1e293b; }
+.result-content { color: #64748b; font-size: 13px; margin-bottom: 8px; line-height: 1.5; }
 .result-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 5px;
+  margin-bottom: 6px;
 }
-.result-footer {
-  margin-top: 5px;
-}
+.result-footer { margin-top: 6px; }
+.save-summary { font-size: 13px; color: #475569; background: #f8fafc; padding: 10px 14px; border-radius: 8px; line-height: 1.5; }
+.upload-tip { font-size: 12px; color: #94a3b8; margin-top: 4px; }
 </style>
