@@ -44,6 +44,95 @@ class SyncRequest(BaseModel):
     space_id: Optional[str] = None
 
 
+class SyncSelectedRequest(BaseModel):
+    notebook_id: Optional[str] = None
+    notebook_name: str = "钉钉知识库"
+    docs: List[dict]
+
+
+async def _do_sync_selected(notebook_id: str, selected_docs: List[dict]):
+    global SYNC_STATUS
+    SYNC_STATUS["running"] = True
+    SYNC_STATUS["progress"] = "正在下载文档内容..."
+    SYNC_STATUS["imported"] = 0
+    SYNC_STATUS["errors"] = 0
+    SYNC_STATUS["total"] = len(selected_docs)
+
+    try:
+        client = DingTalkClient()
+        emb_svc = EmbeddingService()
+
+        engine = get_engine(settings.database_url)
+        db = get_session(engine)
+        vec_store = VectorStore(db)
+
+        SYNC_STATUS["progress"] = f"正在下载 0/{SYNC_STATUS['total']}..."
+
+        docs = await client.collect_selected_docs(selected_docs)
+
+        SYNC_STATUS["total"] = len(docs)
+        SYNC_STATUS["progress"] = f"下载完成，开始导入 0/{SYNC_STATUS['total']}..."
+
+        for i, doc in enumerate(docs):
+            try:
+                title = doc.get("title", f"文档_{i}")
+                content = doc.get("content", "")
+
+                existing = db.query(Page).filter(
+                    Page.title == title,
+                    Page.notebook_id == notebook_id,
+                ).first()
+
+                if existing:
+                    existing.content = content
+                    existing.keywords = ",".join(
+                        EmbeddingService.extract_keywords(title + " " + content, 20)
+                    )
+                    page_id = existing.id
+                    db.commit()
+                else:
+                    page = Page(
+                        id=str(uuid.uuid4()),
+                        title=title,
+                        content=content,
+                        notebook_id=notebook_id,
+                        keywords=",".join(
+                            EmbeddingService.extract_keywords(title + " " + content, 20)
+                        ),
+                    )
+                    db.add(page)
+                    db.commit()
+                    db.refresh(page)
+                    page_id = page.id
+
+                if content and content.strip():
+                    try:
+                        chunks = await emb_svc.encode_chunks(content, title)
+                        if chunks:
+                            await vec_store.add_page_chunks(page_id, chunks)
+                    except Exception as e:
+                        logger.warning(f"Index failed for {title}: {e}")
+
+                SYNC_STATUS["imported"] += 1
+                SYNC_STATUS["progress"] = f"已导入 {SYNC_STATUS['imported']}/{SYNC_STATUS['total']}"
+            except Exception as e:
+                SYNC_STATUS["errors"] += 1
+                logger.error(f"Import failed for doc {i}: {e}")
+
+        db.close()
+        await client.close()
+        await emb_svc.close()
+
+        from datetime import datetime
+        SYNC_STATUS["last_sync"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        SYNC_STATUS["progress"] = f"完成: {SYNC_STATUS['imported']} 成功, {SYNC_STATUS['errors']} 失败"
+    except Exception as e:
+        SYNC_STATUS["progress"] = f"同步失败: {e}"
+        logger.error(f"DingTalk sync failed: {e}")
+    finally:
+        SYNC_STATUS["running"] = False
+
+
 async def _do_sync(notebook_id: str, space_id: str = None):
     global SYNC_STATUS
     SYNC_STATUS["running"] = True
@@ -131,6 +220,52 @@ async def _do_sync(notebook_id: str, space_id: str = None):
         logger.error(f"DingTalk sync failed: {e}")
     finally:
         SYNC_STATUS["running"] = False
+
+
+@router.get("/docs")
+async def list_docs(
+    space_id: Optional[str] = None,
+    current_user=Depends(get_current_user),
+):
+    if not settings.dingtalk_app_key or not settings.dingtalk_app_secret:
+        raise HTTPException(status_code=400, detail="请先配置钉钉参数")
+
+    client = DingTalkClient()
+    try:
+        docs = await client.list_all_docs(space_id)
+        return {"total": len(docs), "docs": docs}
+    finally:
+        await client.close()
+
+
+@router.post("/sync-selected")
+async def start_sync_selected(
+    req: SyncSelectedRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    if SYNC_STATUS["running"]:
+        raise HTTPException(status_code=409, detail="同步正在进行中")
+
+    if not req.docs:
+        raise HTTPException(status_code=400, detail="请选择要同步的文档")
+
+    if not settings.dingtalk_app_key or not settings.dingtalk_app_secret:
+        raise HTTPException(status_code=400, detail="请先配置 DINGTALK_APP_KEY 和 DINGTALK_APP_SECRET")
+
+    notebook_id = req.notebook_id
+    if not notebook_id:
+        nb = db.query(Notebook).filter(Notebook.name == req.notebook_name).first()
+        if not nb:
+            nb = Notebook(id=str(uuid.uuid4()), name=req.notebook_name)
+            db.add(nb)
+            db.commit()
+            db.refresh(nb)
+        notebook_id = nb.id
+
+    background_tasks.add_task(_do_sync_selected, notebook_id, req.docs)
+    return {"message": "同步已启动", "notebook_id": notebook_id}
 
 
 @router.post("/sync")

@@ -208,9 +208,42 @@ class DingTalkClient:
                 return None
 
     @staticmethod
+    def _extract_pdf_text(content: bytes) -> Optional[str]:
+        try:
+            import pdfplumber
+            pages = []
+            with pdfplumber.open(io.BytesIO(content)) as pdf:
+                for page in pdf.pages:
+                    text = page.extract_text()
+                    if text:
+                        pages.append(text)
+            if pages:
+                return "\n\n".join(pages)
+        except Exception:
+            pass
+        try:
+            import fitz
+            doc = fitz.open(stream=content, filetype="pdf")
+            pages = []
+            for page in doc:
+                text = page.get_text()
+                if text:
+                    pages.append(text)
+            doc.close()
+            if pages:
+                return "\n\n".join(pages)
+        except Exception:
+            pass
+        return None
+
+    @staticmethod
     def _extract_text(content: bytes, extension: str) -> str:
         ext = extension.lower()
-        if ext == "docx":
+        if content[:4] == b"%PDF" or ext == "pdf":
+            text = DingTalkClient._extract_pdf_text(content)
+            if text:
+                return text
+        if ext == "docx" and content[:4] == b"PK":
             try:
                 return DingTalkClient._docx_to_markdown(content)
             except Exception:
@@ -246,9 +279,12 @@ class DingTalkClient:
             except Exception:
                 pass
         try:
-            return content.decode("utf-8", errors="ignore")
+            decoded = content.decode("utf-8", errors="ignore")
+            if any("\u4e00" <= c <= "\u9fff" for c in decoded[:2000]):
+                return decoded
         except Exception:
-            return ""
+            pass
+        return ""
 
     @staticmethod
     def _docx_to_markdown(content: bytes) -> str:
@@ -306,6 +342,44 @@ class DingTalkClient:
 
         return "\n\n".join(lines)
 
+    async def _get_wiki_content(self, node_id: str) -> Optional[str]:
+        token = await self._get_token()
+        try:
+            r = await self._http.post(
+                "https://api.dingtalk.com/v1.0/doc/wikiContent",
+                headers={
+                    "x-acs-dingtalk-access-token": token,
+                    "Content-Type": "application/json",
+                },
+                json={"wikiContentReq": {"nodeId": node_id}},
+            )
+            r.raise_for_status()
+            data = r.json()
+            md = data.get("content", "")
+            if md and md.strip():
+                return md
+        except Exception as e:
+            logger.debug(f"wikiContent API failed for {node_id}: {e}")
+
+        try:
+            r = await self._http.post(
+                f"https://api.dingtalk.com/v1.0/doc/{node_id}/content",
+                headers={
+                    "x-acs-dingtalk-access-token": token,
+                    "Content-Type": "application/json",
+                },
+                json={},
+            )
+            r.raise_for_status()
+            data = r.json()
+            md = data.get("content", "")
+            if md and md.strip():
+                return md
+        except Exception as e:
+            logger.debug(f"doc content API failed for {node_id}: {e}")
+
+        return None
+
     async def download_node_content(self, node_id: str, extension: str) -> Optional[str]:
         dentry = await self._query_dentry_id(node_id)
         if not dentry:
@@ -316,6 +390,122 @@ class DingTalkClient:
         if not extension:
             return data.decode("utf-8", errors="ignore")
         return self._extract_text(data, extension)
+
+    async def list_all_docs(
+        self, workspace_id: str = None,
+        on_progress: Optional[Callable[[Dict[str, Any], int], Awaitable[None]]] = None,
+    ) -> List[Dict[str, Any]]:
+        target_id = workspace_id or settings.dingtalk_knowledge_base_id
+        logger.info(f"Listing DingTalk docs, workspace_id={target_id or 'all'}")
+
+        self._on_progress = on_progress
+        self._collected_count = 0
+
+        spaces = await self.list_workspaces()
+
+        if target_id:
+            spaces = [s for s in spaces if s["id"] == target_id]
+            if not spaces:
+                return []
+
+        all_docs = []
+        for sp in spaces:
+            root_id = sp.get("root_node_id") or sp["id"]
+            try:
+                docs = await self._list_recursive(sp["name"], root_id)
+                all_docs.extend(docs)
+            except Exception as e:
+                logger.error(f"Failed to list workspace {sp['name']}: {e}")
+
+        return all_docs
+
+    async def _list_recursive(
+        self, workspace_name: str, parent_id: str, path: str = ""
+    ) -> List[Dict[str, Any]]:
+        docs = []
+        try:
+            nodes = await self.list_nodes(parent_id)
+        except Exception as e:
+            logger.error(f"Failed to list nodes: {e}")
+            return docs
+
+        for node in nodes:
+            node_id = node["node_id"]
+            node_type = node["type"]
+            name = node["name"] or "无标题"
+            ext = node.get("extension", "")
+            has_children = node.get("has_children", False)
+            current_path = f"{path}/{name}" if path else name
+
+            if node_type == "FOLDER" or has_children:
+                child_docs = await self._list_recursive(
+                    workspace_name, node_id, current_path
+                )
+                docs.extend(child_docs)
+                continue
+
+            if ext.lower() in SKIP_EXTENSIONS:
+                continue
+
+            supported = (
+                ext.lower() in DOWNLOADABLE_EXTENSIONS
+                or ext.lower() in WIKI_EXTENSIONS
+                or node_type == "DOC"
+            )
+            if not supported:
+                continue
+
+            doc = {
+                "id": node_id,
+                "title": name,
+                "extension": ext,
+                "node_type": node_type,
+                "space_name": workspace_name,
+                "path": current_path,
+            }
+            docs.append(doc)
+            self._collected_count += 1
+            if self._on_progress:
+                try:
+                    await self._on_progress(doc, self._collected_count)
+                except Exception:
+                    pass
+
+        return docs
+
+    async def collect_selected_docs(self, selected: List[Dict[str, str]]) -> List[Dict[str, Any]]:
+        results = []
+        for item in selected:
+            node_id = item["id"]
+            name = item.get("title", "")
+            ext = item.get("extension", "")
+            node_type = item.get("node_type", "")
+            workspace_name = item.get("space_name", "")
+            path = item.get("path", "")
+
+            content = None
+            if ext.lower() in WIKI_EXTENSIONS or node_type == "DOC":
+                content = await self._get_wiki_content(node_id)
+                if not content:
+                    content = await self.download_node_content(node_id, "docx")
+                    if not content:
+                        content = await self.download_node_content(node_id, "")
+            elif ext.lower() in DOWNLOADABLE_EXTENSIONS:
+                content = await self.download_node_content(node_id, ext)
+
+            if content and content.strip():
+                results.append({
+                    "id": node_id,
+                    "title": name,
+                    "content": content,
+                    "space_name": workspace_name,
+                    "path": path,
+                })
+                logger.info(f"  Collected: {name} ({len(content)} chars)")
+            else:
+                logger.warning(f"  Empty content: {name}")
+
+        return results
 
     async def collect_all_docs(
         self, workspace_id: str = None,
@@ -382,12 +572,14 @@ class DingTalkClient:
                 continue
 
             content = None
-            if ext.lower() in DOWNLOADABLE_EXTENSIONS:
-                content = await self.download_node_content(node_id, ext)
-            elif ext.lower() in WIKI_EXTENSIONS or node_type == "DOC":
-                content = await self.download_node_content(node_id, "docx")
+            if ext.lower() in WIKI_EXTENSIONS or node_type == "DOC":
+                content = await self._get_wiki_content(node_id)
                 if not content:
-                    content = await self.download_node_content(node_id, "")
+                    content = await self.download_node_content(node_id, "docx")
+                    if not content:
+                        content = await self.download_node_content(node_id, "")
+            elif ext.lower() in DOWNLOADABLE_EXTENSIONS:
+                content = await self.download_node_content(node_id, ext)
             else:
                 logger.debug(f"  Skipped: {name} (unsupported ext={ext})")
                 continue
