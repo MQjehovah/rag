@@ -1,0 +1,51 @@
+version: '2.2'
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    profiles:
+      - pg
+    environment:
+      POSTGRES_DB: notesrag
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend/data:/app/data
+    environment:
+      - DATABASE_URL=${DATABASE_URL:-sqlite:///./data/notes.db}
+      - OLLAMA_HOST=http://host.docker.internal:11434
+      - LDAP_SERVER_URL=${LDAP_SERVER_URL:-}
+      - LDAP_BIND_DN=${LDAP_BIND_DN:-}
+      - LDAP_BIND_PASSWORD=${LDAP_BIND_PASSWORD:-}
+      - LDAP_USER_BASE_DN=${LDAP_USER_BASE_DN:-}
+      - LDAP_GROUP_BASE_DN=${LDAP_GROUP_BASE_DN:-}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-change-me-in-production}
+      - LOCAL_ADMIN_PASSWORD=${LOCAL_ADMIN_PASSWORD:-}
+    depends_on:
+      db:
+        condition: service_healthy
+        required: false
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "8092:80"
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:
