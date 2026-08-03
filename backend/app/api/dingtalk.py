@@ -2,6 +2,8 @@ from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from typing import Optional, List
+from datetime import datetime
+import hashlib
 import uuid
 import logging
 
@@ -23,6 +25,7 @@ SYNC_STATUS = {
     "progress": "",
     "total": 0,
     "imported": 0,
+    "skipped": 0,
     "errors": 0,
     "last_sync": "",
 }
@@ -50,11 +53,95 @@ class SyncSelectedRequest(BaseModel):
     docs: List[dict]
 
 
+def _markdown_document(doc: dict) -> str:
+    """将钉钉文档正文和来源信息统一整理为 Markdown。"""
+    title = str(doc.get("title") or "无标题").replace("\r", " ").replace("\n", " ").strip()
+    workspace = str(doc.get("space_name") or "").strip()
+    path = str(doc.get("path") or "").strip()
+    body = str(doc.get("content") or "").strip()
+
+    metadata = []
+    if workspace:
+        metadata.append(f"> 来源：钉钉知识库 / {workspace}")
+    if path:
+        metadata.append(f"> 路径：{path}")
+
+    parts = [f"# {title}"]
+    if metadata:
+        parts.append("\n".join(metadata))
+    if body:
+        parts.append(body)
+    return "\n\n".join(parts).strip() + "\n"
+
+
+async def _import_document(
+    db: Session,
+    vec_store: VectorStore,
+    emb_svc: EmbeddingService,
+    notebook_id: str,
+    doc: dict,
+) -> str:
+    """按钉钉节点 ID 增量写入一篇文档，并保证页面与向量同事务提交。"""
+    source_id = str(doc.get("id") or "").strip()
+    if not source_id:
+        raise ValueError("钉钉文档缺少节点 ID")
+
+    title = str(doc.get("title") or "无标题").strip()
+    markdown = _markdown_document(doc)
+    content_hash = hashlib.sha256(markdown.encode("utf-8")).hexdigest()
+
+    page = db.query(Page).filter(
+        Page.source_type == "dingtalk",
+        Page.source_id == source_id,
+    ).first()
+
+    if page is not None and page.content_hash == content_hash:
+        page.source_path = doc.get("path") or ""
+        page.source_space_id = (
+            doc.get("space_id") or settings.dingtalk_knowledge_base_id or ""
+        )
+        page.last_synced_at = datetime.now()
+        db.commit()
+        return "skipped"
+
+    chunks = await emb_svc.encode_chunks(markdown)
+    if not chunks:
+        raise RuntimeError("Embedding 服务未返回有效分块")
+
+    try:
+        if page is None:
+            page = Page(id=str(uuid.uuid4()), notebook_id=notebook_id)
+            db.add(page)
+
+        page.title = title
+        page.content = markdown
+        page.keywords = ",".join(
+            EmbeddingService.extract_keywords(title + " " + markdown, 20)
+        )
+        page.source_type = "dingtalk"
+        page.source_id = source_id
+        page.source_path = doc.get("path") or ""
+        page.source_space_id = (
+            doc.get("space_id") or settings.dingtalk_knowledge_base_id or ""
+        )
+        page.content_hash = content_hash
+        page.last_synced_at = datetime.now()
+        db.flush()
+
+        await vec_store.add_page_chunks(page.id, chunks)
+        db.commit()
+        return "imported"
+    except Exception:
+        db.rollback()
+        raise
+
+
 async def _do_sync_selected(notebook_id: str, selected_docs: List[dict]):
     global SYNC_STATUS
     SYNC_STATUS["running"] = True
     SYNC_STATUS["progress"] = "正在下载文档内容..."
     SYNC_STATUS["imported"] = 0
+    SYNC_STATUS["skipped"] = 0
     SYNC_STATUS["errors"] = 0
     SYNC_STATUS["total"] = len(selected_docs)
 
@@ -75,47 +162,17 @@ async def _do_sync_selected(notebook_id: str, selected_docs: List[dict]):
 
         for i, doc in enumerate(docs):
             try:
-                title = doc.get("title", f"文档_{i}")
-                content = doc.get("content", "")
-
-                existing = db.query(Page).filter(
-                    Page.title == title,
-                    Page.notebook_id == notebook_id,
-                ).first()
-
-                if existing:
-                    existing.content = content
-                    existing.keywords = ",".join(
-                        EmbeddingService.extract_keywords(title + " " + content, 20)
-                    )
-                    page_id = existing.id
-                    db.commit()
-                else:
-                    page = Page(
-                        id=str(uuid.uuid4()),
-                        title=title,
-                        content=content,
-                        notebook_id=notebook_id,
-                        keywords=",".join(
-                            EmbeddingService.extract_keywords(title + " " + content, 20)
-                        ),
-                    )
-                    db.add(page)
-                    db.commit()
-                    db.refresh(page)
-                    page_id = page.id
-
-                if content and content.strip():
-                    try:
-                        chunks = await emb_svc.encode_chunks(content, title)
-                        if chunks:
-                            await vec_store.add_page_chunks(page_id, chunks)
-                    except Exception as e:
-                        logger.warning(f"Index failed for {title}: {e}")
-
-                SYNC_STATUS["imported"] += 1
-                SYNC_STATUS["progress"] = f"已导入 {SYNC_STATUS['imported']}/{SYNC_STATUS['total']}"
+                result = await _import_document(
+                    db, vec_store, emb_svc, notebook_id, doc
+                )
+                SYNC_STATUS[result] += 1
+                handled = SYNC_STATUS["imported"] + SYNC_STATUS["skipped"]
+                SYNC_STATUS["progress"] = (
+                    f"已处理 {handled}/{SYNC_STATUS['total']} "
+                    f"(写入 {SYNC_STATUS['imported']}，跳过 {SYNC_STATUS['skipped']})"
+                )
             except Exception as e:
+                db.rollback()
                 SYNC_STATUS["errors"] += 1
                 logger.error(f"Import failed for doc {i}: {e}")
 
@@ -123,9 +180,11 @@ async def _do_sync_selected(notebook_id: str, selected_docs: List[dict]):
         await client.close()
         await emb_svc.close()
 
-        from datetime import datetime
         SYNC_STATUS["last_sync"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        SYNC_STATUS["progress"] = f"完成: {SYNC_STATUS['imported']} 成功, {SYNC_STATUS['errors']} 失败"
+        SYNC_STATUS["progress"] = (
+            f"完成: {SYNC_STATUS['imported']} 写入, "
+            f"{SYNC_STATUS['skipped']} 未变化, {SYNC_STATUS['errors']} 失败"
+        )
     except Exception as e:
         SYNC_STATUS["progress"] = f"同步失败: {e}"
         logger.error(f"DingTalk sync failed: {e}")
@@ -138,6 +197,7 @@ async def _do_sync(notebook_id: str, space_id: str = None):
     SYNC_STATUS["running"] = True
     SYNC_STATUS["progress"] = "连接钉钉..."
     SYNC_STATUS["imported"] = 0
+    SYNC_STATUS["skipped"] = 0
     SYNC_STATUS["errors"] = 0
     SYNC_STATUS["total"] = 0
 
@@ -164,47 +224,17 @@ async def _do_sync(notebook_id: str, space_id: str = None):
 
         for i, doc in enumerate(docs):
             try:
-                title = doc.get("title", f"文档_{i}")
-                content = doc.get("content", "")
-
-                existing = db.query(Page).filter(
-                    Page.title == title,
-                    Page.notebook_id == notebook_id,
-                ).first()
-
-                if existing:
-                    existing.content = content
-                    existing.keywords = ",".join(
-                        EmbeddingService.extract_keywords(title + " " + content, 20)
-                    )
-                    page_id = existing.id
-                    db.commit()
-                else:
-                    page = Page(
-                        id=str(uuid.uuid4()),
-                        title=title,
-                        content=content,
-                        notebook_id=notebook_id,
-                        keywords=",".join(
-                            EmbeddingService.extract_keywords(title + " " + content, 20)
-                        ),
-                    )
-                    db.add(page)
-                    db.commit()
-                    db.refresh(page)
-                    page_id = page.id
-
-                if content and content.strip():
-                    try:
-                        chunks = await emb_svc.encode_chunks(content, title)
-                        if chunks:
-                            await vec_store.add_page_chunks(page_id, chunks)
-                    except Exception as e:
-                        logger.warning(f"Index failed for {title}: {e}")
-
-                SYNC_STATUS["imported"] += 1
-                SYNC_STATUS["progress"] = f"已导入 {SYNC_STATUS['imported']}/{SYNC_STATUS['total']}"
+                result = await _import_document(
+                    db, vec_store, emb_svc, notebook_id, doc
+                )
+                SYNC_STATUS[result] += 1
+                handled = SYNC_STATUS["imported"] + SYNC_STATUS["skipped"]
+                SYNC_STATUS["progress"] = (
+                    f"已处理 {handled}/{SYNC_STATUS['total']} "
+                    f"(写入 {SYNC_STATUS['imported']}，跳过 {SYNC_STATUS['skipped']})"
+                )
             except Exception as e:
+                db.rollback()
                 SYNC_STATUS["errors"] += 1
                 logger.error(f"Import failed for doc {i}: {e}")
 
@@ -212,9 +242,11 @@ async def _do_sync(notebook_id: str, space_id: str = None):
         await client.close()
         await emb_svc.close()
 
-        from datetime import datetime
         SYNC_STATUS["last_sync"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        SYNC_STATUS["progress"] = f"完成: {SYNC_STATUS['imported']} 成功, {SYNC_STATUS['errors']} 失败"
+        SYNC_STATUS["progress"] = (
+            f"完成: {SYNC_STATUS['imported']} 写入, "
+            f"{SYNC_STATUS['skipped']} 未变化, {SYNC_STATUS['errors']} 失败"
+        )
     except Exception as e:
         SYNC_STATUS["progress"] = f"同步失败: {e}"
         logger.error(f"DingTalk sync failed: {e}")

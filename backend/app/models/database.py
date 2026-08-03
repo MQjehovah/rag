@@ -30,8 +30,18 @@ class Page(Base):
     title = Column(String(255), nullable=False, default='无标题')
     content = Column(Text, default='')
     keywords = Column(Text, default='')
+    source_type = Column(String(50), nullable=True)
+    source_id = Column(String(255), nullable=True)
+    source_path = Column(Text, nullable=True)
+    source_space_id = Column(String(255), nullable=True)
+    content_hash = Column(String(64), nullable=True)
+    last_synced_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now, index=True)
+
+    __table_args__ = (
+        Index('ux_pages_source_type_source_id', 'source_type', 'source_id', unique=True),
+    )
 
 
 class PageChunk(Base):
@@ -111,6 +121,16 @@ def _migrate_schema(engine):
                     with engine.begin() as conn:
                         conn.execute(sqlalchemy_text(alter_sql))
                     logger.info(f"Added column {col.name} to table {table.name}")
+
+    if inspector.has_table("pages"):
+        try:
+            with engine.begin() as conn:
+                conn.execute(sqlalchemy_text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS ux_pages_source_type_source_id "
+                    "ON pages (source_type, source_id)"
+                ))
+        except Exception as exc:
+            logger.warning(f"Could not create DingTalk source index: {exc}")
 
 
 def init_db(engine):

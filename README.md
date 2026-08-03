@@ -74,7 +74,8 @@ ollama pull modelscope.cn/Embedding-GGUF/bge-large-zh-v1.5:latest
 ```bash
 cd backend
 cp .env.example .env
-# 编辑 .env 文件，根据需要修改配置
+# Windows PowerShell: Copy-Item .env.example .env
+# 只在 .env 中填写真实密钥；.env.example 不保存敏感信息
 ```
 
 ### 3. 启动后端
@@ -83,14 +84,14 @@ cp .env.example .env
 cd backend
 
 # 创建虚拟环境
-python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
+python -m venv .venv
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
 
 # 安装依赖
 pip install -r requirements.txt
 
-# 启动服务
-docker-compose up -d build
+# 本地启动服务
+uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
 后端启动后访问 http://localhost:8000/docs 查看 API 文档。
@@ -110,7 +111,7 @@ npm run dev
 npm run build
 ```
 
-前端开发服务器：http://localhost:5173
+前端开发服务器：http://localhost:3000
 
 ## Docker 部署
 
@@ -134,21 +135,35 @@ docker-compose down
 
 ### 环境变量
 
-| 变量                 | 默认值                        | 说明                    |
-| -------------------- | ----------------------------- | ----------------------- |
-| `OLLAMA_HOST`      | `http://localhost:11434`    | Ollama 服务地址         |
-| `OLLAMA_MODEL`     | `qwen2.5:7b`                | Ollama 模型名称         |
-| `EMBEDDING_MODEL`  | `bge-large-zh-v1.5`         | 嵌入模型名称            |
-| `EMBEDDING_DEVICE` | `cpu`                       | 嵌入模型设备 (cpu/cuda) |
-| `CHROMADB_PATH`    | `./data/chromadb`           | ChromaDB 数据路径       |
-| `CHUNK_SIZE`       | `800`                       | 文档分块大小            |
-| `CHUNK_OVERLAP`    | `100`                       | 分块重叠字符数          |
-| `TOP_K`            | `5`                         | 检索返回数量            |
-| `DATABASE_URL`     | `sqlite:///./data/notes.db` | 数据库连接串            |
-| `MINIO_ENDPOINT`   | `localhost:9000`            | MinIO 服务地址          |
-| `MINIO_ACCESS_KEY` | `minioadmin`                | MinIO 访问密钥          |
-| `MINIO_SECRET_KEY` | `minioadmin`                | MinIO 密钥              |
-| `MINIO_BUCKET`     | `notes-images`              | 存储桶名称              |
+| 配置组 | 主要变量 | 说明 |
+| ------ | -------- | ---- |
+| LLM | `OLLAMA_HOST`、`OLLAMA_MODEL`、`LLM_API_URL`、`LLM_API_KEY`、`LLM_MODEL` | 本地 Ollama 或兼容 API |
+| Embedding | `EMBEDDING_API_URL`、`EMBEDDING_MODEL`、`EMBEDDING_DIMENSIONS` | 默认使用本地 Ollama `bge-m3` |
+| 检索 | `CHUNK_SIZE`、`CHUNK_OVERLAP`、`TOP_K`、`VECTOR_RECALL_K` | 分块和召回参数 |
+| 数据库 | `DATABASE_URL` | 本地默认 SQLite，生产建议 PostgreSQL + pgvector |
+| 钉钉 | `DINGTALK_APP_KEY`、`DINGTALK_APP_SECRET`、`DINGTALK_KNOWLEDGE_BASE_ID`、`DINGTALK_OPERATOR_ID` | 钉钉知识库同步 |
+| 鉴权 | `JWT_SECRET_KEY`、`LOCAL_ADMIN_PASSWORD`、`LDAP_*` | 本地或 LDAP 登录 |
+| 对象存储 | `MINIO_*` | 可选的 MinIO 文件存储 |
+| 自动整理 | `AUTO_ORGANIZE_ENABLED`、`AUTO_ORGANIZE_INTERVAL_HOURS` | 可选的后台图谱整理 |
+
+完整变量以 `backend/.env.example` 为准。真实值只写入 `backend/.env`，该文件已被 Git 忽略。
+
+### 钉钉知识库同步
+
+1. 在 `backend/.env` 中配置钉钉应用、操作人和知识库 ID。
+2. 启动后端和前端，在编辑器中打开“钉钉同步”。
+3. 获取文档列表并选择需要同步的文件。
+4. 系统会将内容统一整理为 Markdown，并按钉钉节点 ID 增量写入 RAG。
+
+相关接口：
+
+| 方法 | 路径 | 说明 |
+| ---- | ---- | ---- |
+| GET | `/api/dingtalk/spaces` | 获取知识库空间 |
+| GET | `/api/dingtalk/docs` | 获取文档列表 |
+| POST | `/api/dingtalk/sync-selected` | 同步选中文档 |
+| POST | `/api/dingtalk/sync` | 同步整个知识库 |
+| GET | `/api/dingtalk/status` | 查询同步状态 |
 
 ## API 接口
 

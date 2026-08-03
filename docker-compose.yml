@@ -21,6 +21,8 @@ services:
 
   backend:
     build: ./backend
+    env_file:
+      - ./backend/.env
     ports:
       - "8000:8000"
     volumes:
@@ -28,6 +30,7 @@ services:
     environment:
       - DATABASE_URL=${DATABASE_URL:-sqlite:///./data/notes.db}
       - OLLAMA_HOST=http://host.docker.internal:11434
+      - EMBEDDING_API_URL=${EMBEDDING_API_URL:-http://host.docker.internal:11434/api/embed}
       - LDAP_SERVER_URL=${LDAP_SERVER_URL:-}
       - LDAP_BIND_DN=${LDAP_BIND_DN:-}
       - LDAP_BIND_PASSWORD=${LDAP_BIND_PASSWORD:-}

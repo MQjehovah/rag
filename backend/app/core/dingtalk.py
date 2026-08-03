@@ -210,6 +210,18 @@ class DingTalkClient:
     @staticmethod
     def _extract_pdf_text(content: bytes) -> Optional[str]:
         try:
+            from pypdf import PdfReader
+            reader = PdfReader(io.BytesIO(content))
+            pages = []
+            for page in reader.pages:
+                text = page.extract_text()
+                if text:
+                    pages.append(text)
+            if pages:
+                return "\n\n".join(pages)
+        except Exception:
+            pass
+        try:
             import pdfplumber
             pages = []
             with pdfplumber.open(io.BytesIO(content)) as pdf:
@@ -237,6 +249,13 @@ class DingTalkClient:
         return None
 
     @staticmethod
+    def _markdown_cell(value: Any) -> str:
+        """转义 Excel 单元格中会破坏 Markdown 表格的字符。"""
+        if value is None:
+            return ""
+        return str(value).replace("\\", "\\\\").replace("|", "\\|").replace("\n", "<br>")
+
+    @staticmethod
     def _extract_text(content: bytes, extension: str) -> str:
         ext = extension.lower()
         if content[:4] == b"%PDF" or ext == "pdf":
@@ -251,15 +270,37 @@ class DingTalkClient:
         if ext == "xlsx":
             try:
                 from openpyxl import load_workbook
-                wb = load_workbook(io.BytesIO(content), read_only=True)
-                rows = []
+                wb = load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+                sections = []
                 for ws in wb.worksheets:
-                    for row in ws.iter_rows(values_only=True):
-                        cells = [str(c) for c in row if c is not None]
-                        if cells:
-                            rows.append("| " + " | ".join(cells) + " |")
+                    rows = [
+                        list(row)
+                        for row in ws.iter_rows(values_only=True)
+                        if any(cell is not None for cell in row)
+                    ]
+                    if not rows:
+                        continue
+
+                    width = max(len(row) for row in rows)
+                    normalized = [
+                        row + [None] * (width - len(row))
+                        for row in rows
+                    ]
+                    table = [
+                        "| " + " | ".join(
+                            DingTalkClient._markdown_cell(cell) for cell in normalized[0]
+                        ) + " |",
+                        "| " + " | ".join("---" for _ in range(width)) + " |",
+                    ]
+                    table.extend(
+                        "| " + " | ".join(
+                            DingTalkClient._markdown_cell(cell) for cell in row
+                        ) + " |"
+                        for row in normalized[1:]
+                    )
+                    sections.append(f"## {ws.title}\n\n" + "\n".join(table))
                 wb.close()
-                return "\n".join(rows)
+                return "\n\n".join(sections)
             except Exception:
                 pass
         if ext == "pptx":
@@ -412,7 +453,7 @@ class DingTalkClient:
         for sp in spaces:
             root_id = sp.get("root_node_id") or sp["id"]
             try:
-                docs = await self._list_recursive(sp["name"], root_id)
+                docs = await self._list_recursive(sp["id"], sp["name"], root_id)
                 all_docs.extend(docs)
             except Exception as e:
                 logger.error(f"Failed to list workspace {sp['name']}: {e}")
@@ -420,7 +461,7 @@ class DingTalkClient:
         return all_docs
 
     async def _list_recursive(
-        self, workspace_name: str, parent_id: str, path: str = ""
+        self, workspace_id: str, workspace_name: str, parent_id: str, path: str = ""
     ) -> List[Dict[str, Any]]:
         docs = []
         try:
@@ -439,7 +480,7 @@ class DingTalkClient:
 
             if node_type == "FOLDER" or has_children:
                 child_docs = await self._list_recursive(
-                    workspace_name, node_id, current_path
+                    workspace_id, workspace_name, node_id, current_path
                 )
                 docs.extend(child_docs)
                 continue
@@ -460,6 +501,7 @@ class DingTalkClient:
                 "title": name,
                 "extension": ext,
                 "node_type": node_type,
+                "space_id": workspace_id,
                 "space_name": workspace_name,
                 "path": current_path,
             }
@@ -481,6 +523,7 @@ class DingTalkClient:
             ext = item.get("extension", "")
             node_type = item.get("node_type", "")
             workspace_name = item.get("space_name", "")
+            workspace_id = item.get("space_id", "")
             path = item.get("path", "")
 
             content = None
@@ -498,6 +541,7 @@ class DingTalkClient:
                     "id": node_id,
                     "title": name,
                     "content": content,
+                    "space_id": workspace_id,
                     "space_name": workspace_name,
                     "path": path,
                 })
@@ -535,7 +579,7 @@ class DingTalkClient:
             logger.info(f"Crawling workspace: {sp_name} ({sp_id}) root={root_id}")
 
             try:
-                docs = await self._crawl_recursive(sp_name, root_id)
+                docs = await self._crawl_recursive(sp_id, sp_name, root_id)
                 all_docs.extend(docs)
             except Exception as e:
                 logger.error(f"Failed to crawl workspace {sp_name}: {e}")
@@ -543,7 +587,7 @@ class DingTalkClient:
         return all_docs
 
     async def _crawl_recursive(
-        self, workspace_name: str, parent_id: str, path: str = ""
+        self, workspace_id: str, workspace_name: str, parent_id: str, path: str = ""
     ) -> List[Dict[str, Any]]:
         docs = []
         try:
@@ -562,7 +606,7 @@ class DingTalkClient:
 
             if node_type == "FOLDER" or has_children:
                 child_docs = await self._crawl_recursive(
-                    workspace_name, node_id, current_path
+                    workspace_id, workspace_name, node_id, current_path
                 )
                 docs.extend(child_docs)
                 continue
@@ -589,6 +633,7 @@ class DingTalkClient:
                     "id": node_id,
                     "title": name,
                     "content": content,
+                    "space_id": workspace_id,
                     "space_name": workspace_name,
                     "path": current_path,
                 }

@@ -168,8 +168,8 @@
           <template #title>{{ syncStatus.progress }}</template>
         </el-alert>
         <el-progress
-          :percentage="syncStatus.total > 0 ? Math.round(syncStatus.imported / syncStatus.total * 100) : 0"
-          :format="() => `${syncStatus.imported}/${syncStatus.total}`"
+          :percentage="syncStatus.total > 0 ? Math.round((syncStatus.imported + syncStatus.skipped + syncStatus.errors) / syncStatus.total * 100) : 0"
+          :format="() => `${syncStatus.imported + syncStatus.skipped + syncStatus.errors}/${syncStatus.total}`"
           style="margin-top: 15px"
         />
       </div>
@@ -214,7 +214,7 @@
           <el-result
             :icon="syncStatus.errors > 0 ? 'warning' : 'success'"
             :title="syncStatus.errors > 0 ? '同步完成（部分失败）' : '同步完成'"
-            :sub-title="`成功导入 ${syncStatus.imported} 篇，失败 ${syncStatus.errors} 篇`"
+            :sub-title="`写入 ${syncStatus.imported} 篇，未变化 ${syncStatus.skipped} 篇，失败 ${syncStatus.errors} 篇`"
           />
         </div>
       </div>
@@ -342,7 +342,7 @@ const searchResults = ref<any[]>([])
 const showDingTalk = ref(false)
 const dtNotebookName = ref('钉钉知识库')
 const dtSpaceId = ref('')
-const syncStatus = ref<any>({ running: false, progress: '', total: 0, imported: 0, errors: 0, last_sync: '' })
+const syncStatus = ref<any>({ running: false, progress: '', total: 0, imported: 0, skipped: 0, errors: 0, last_sync: '' })
 let syncPollTimer: number | null = null
 const dtStep = ref(0)
 const dtLoading = ref(false)
