@@ -1,7 +1,7 @@
 <template>
   <div class="tiptap-editor">
     <!-- 工具栏 -->
-    <div class="editor-toolbar" v-if="editor">
+    <div class="editor-toolbar" v-if="editor && editable">
       <button @click="editor.chain().focus().toggleBold().run()" :class="{ 'is-active': editor.isActive('bold') }">B</button>
       <button @click="editor.chain().focus().toggleItalic().run()" :class="{ 'is-active': editor.isActive('italic') }">I</button>
       <button @click="editor.chain().focus().toggleStrike().run()" :class="{ 'is-active': editor.isActive('strike') }">S</button>
@@ -29,7 +29,7 @@
 </template>
 
 <script setup lang="ts">
-import { watch, onBeforeUnmount, nextTick } from 'vue'
+import { watch, onBeforeUnmount, nextTick, ref } from 'vue'
 import { useEditor, EditorContent, VueNodeViewRenderer } from '@tiptap/vue-3'
 import StarterKit from '@tiptap/starter-kit'
 import Placeholder from '@tiptap/extension-placeholder'
@@ -63,11 +63,15 @@ const lowlight = createLowlight(all)
 
 const props = defineProps<{
   modelValue: string
+  editable?: boolean
 }>()
 
 const emit = defineEmits<{
   (e: 'update:modelValue', value: string): void
 }>()
+
+const applyingExternalContent = ref(false)
+const editable = ref(props.editable !== false)
 
 mermaid.initialize({
   startOnLoad: false,
@@ -144,7 +148,9 @@ const editor = useEditor({
     }),
   ],
   content: props.modelValue,
+  editable: editable.value,
   onUpdate: ({ editor }) => {
+    if (applyingExternalContent.value || !editable.value) return
     emit('update:modelValue', editor.storage.markdown.getMarkdown())
     nextTick(() => {
       renderMermaid()
@@ -161,12 +167,19 @@ const editor = useEditor({
 
 watch(() => props.modelValue, (newValue) => {
   if (editor.value && editor.value.storage.markdown.getMarkdown() !== newValue) {
-    editor.value.commands.setContent(newValue || '')
+    applyingExternalContent.value = true
+    editor.value.commands.setContent(newValue || '', false)
     nextTick(() => {
+      applyingExternalContent.value = false
       renderMermaid()
       disableSpellcheck()
     })
   }
+})
+
+watch(() => props.editable, (newValue) => {
+  editable.value = newValue !== false
+  editor.value?.setEditable(editable.value)
 })
 
 const renderMermaid = async () => {

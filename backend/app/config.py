@@ -19,6 +19,30 @@ class Settings(BaseSettings):
     chunk_size: int = 300
     chunk_overlap: int = 50
 
+    pdf_ocr_enabled: bool = False
+    pdf_ocr_dpi: int = 200
+    pdf_ocr_min_confidence: float = 0.86
+    pdf_ocr_duplicate_similarity: float = 0.86
+    pdf_ocr_min_novel_chars: int = 4
+    pdf_ocr_max_pages: int = 80
+
+    pdf_image_assets_enabled: bool = False
+    pdf_image_storage_dir: str = "./data/pdf-pages"
+    pdf_image_dpi: int = 144
+    pdf_image_max_width: int = 1800
+    pdf_image_max_pages: int = 60
+    pdf_image_importance_threshold: float = 4.0
+
+    pdf_vision_enabled: bool = False
+    pdf_vision_api_url: str = ""
+    pdf_vision_api_key: str = ""
+    pdf_vision_model: str = "glm-4v-flash"
+    pdf_vision_page_ratio: float = 1.0
+    pdf_vision_min_pages: int = 10
+    pdf_vision_hard_max_pages: int = 60
+    pdf_vision_concurrency: int = 2
+    pdf_vision_timeout_seconds: int = 120
+
     top_k: int = 5
     vector_recall_k: int = 50
 
@@ -56,6 +80,26 @@ class Settings(BaseSettings):
     dingtalk_agent_id: str = ""
     dingtalk_knowledge_base_id: str = ""
     dingtalk_operator_id: str = ""
+    dingtalk_sync_scope: str = "configured"
+    dingtalk_supported_extensions: str = "pdf,docx,pptx,xlsx,txt,csv,md"
+    dingtalk_include_wiki: bool = True
+    dingtalk_include_subfolders: bool = True
+    dingtalk_local_storage_dir: str = "./data/dingtalk"
+    dingtalk_download_concurrency: int = 3
+    dingtalk_markdown_pdf_enhanced: bool = True
+    pdf_hybrid_enabled: bool = True
+    markitdown_enabled: bool = True
+    markitdown_pdf_fallback_enabled: bool = True
+
+    remote_rag_base_url: str = ""
+    remote_rag_username: str = ""
+    remote_rag_password: str = ""
+    remote_rag_notebook_name: str = "钉钉知识库"
+    remote_rag_notebook_id: str = ""
+    remote_rag_timeout_seconds: int = 60
+    remote_rag_max_retries: int = 3
+    remote_rag_state_file: str = "./data/dingtalk/remote-sync-state.json"
+    remote_rag_backup_dir: str = "./data/dingtalk/remote-backups"
 
     llm_api_url: str = ""
     llm_api_key: str = ""

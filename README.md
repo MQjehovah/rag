@@ -116,19 +116,29 @@ npm run build
 ## Docker 部署
 
 ```bash
-# 构建并启动所有服务
-docker-compose up -d --build
+# 使用backend/.env中的现有数据库配置启动前后端
+docker compose up -d --build
+
+# 需要同时启动项目内置PostgreSQL + pgvector时
+docker compose --profile pg up -d --build
 
 # 查看日志
-docker-compose logs -f
+docker compose logs -f
 
 # 停止服务
-docker-compose down
+docker compose down
 ```
+
+Docker只从`backend/.env`读取运行配置，Compose不会再用默认值覆盖数据库、Embedding、LDAP、
+JWT或管理员配置。使用内置PostgreSQL前，必须在`backend/.env`填写`POSTGRES_DB`、
+`POSTGRES_USER`和强密码`POSTGRES_PASSWORD`，并保证`DATABASE_URL`与其一致。
+
+`backend/data`挂载到容器`/app/data`，数据库文件、钉钉原文件、Markdown、manifest和PDF图片
+会在容器重建后继续保留。`.env`和`backend/data`均被排除在Docker构建上下文及Git提交之外。
 
 服务地址：
 
-- 前端：http://localhost
+- 前端：http://localhost:8092
 - 后端 API：http://localhost:8000
 
 ## 配置说明
@@ -140,8 +150,10 @@ docker-compose down
 | LLM | `OLLAMA_HOST`、`OLLAMA_MODEL`、`LLM_API_URL`、`LLM_API_KEY`、`LLM_MODEL` | 本地 Ollama 或兼容 API |
 | Embedding | `EMBEDDING_API_URL`、`EMBEDDING_MODEL`、`EMBEDDING_DIMENSIONS` | 默认使用本地 Ollama `bge-m3` |
 | 检索 | `CHUNK_SIZE`、`CHUNK_OVERLAP`、`TOP_K`、`VECTOR_RECALL_K` | 分块和召回参数 |
+| PDF OCR | `PDF_OCR_ENABLED`、`PDF_OCR_DPI`、`PDF_OCR_MIN_CONFIDENCE`、`PDF_OCR_MAX_PAGES` | 补充截图和扫描页文字 |
 | 数据库 | `DATABASE_URL` | 本地默认 SQLite，生产建议 PostgreSQL + pgvector |
 | 钉钉 | `DINGTALK_APP_KEY`、`DINGTALK_APP_SECRET`、`DINGTALK_KNOWLEDGE_BASE_ID`、`DINGTALK_OPERATOR_ID` | 钉钉知识库同步 |
+| Markdown转换 | `MARKITDOWN_ENABLED`、`PDF_HYBRID_ENABLED`、`MARKITDOWN_PDF_FALLBACK_ENABLED` | Office优先使用MarkItDown，PDF融合MarkItDown与增强解析 |
 | 鉴权 | `JWT_SECRET_KEY`、`LOCAL_ADMIN_PASSWORD`、`LDAP_*` | 本地或 LDAP 登录 |
 | 对象存储 | `MINIO_*` | 可选的 MinIO 文件存储 |
 | 自动整理 | `AUTO_ORGANIZE_ENABLED`、`AUTO_ORGANIZE_INTERVAL_HOURS` | 可选的后台图谱整理 |
@@ -152,8 +164,68 @@ docker-compose down
 
 1. 在 `backend/.env` 中配置钉钉应用、操作人和知识库 ID。
 2. 启动后端和前端，在编辑器中打开“钉钉同步”。
-3. 获取文档列表并选择需要同步的文件。
-4. 系统会将内容统一整理为 Markdown，并按钉钉节点 ID 增量写入 RAG。
+3. 选择目标钉钉知识库，可以获取文档列表后同步选中文档，也可以直接执行整个知识库全量同步。
+4. 前端会依次显示清单扫描、原文件下载、Markdown转换和RAG入库进度，并在完成后列出写入、未变化、失败和分块数量。
+5. 系统会将内容统一整理为 Markdown，并按钉钉节点 ID 增量写入 RAG；重复点击或多人同时操作时，后端只允许一个同步任务运行。
+
+Word、Excel和PowerPoint默认优先通过MarkItDown转换，失败时自动回退到项目原有解析器；
+TXT、CSV和Markdown继续使用轻量内置转换。每份结果会在Markdown前置元数据和manifest中记录
+实际使用的转换器、是否发生回退以及回退原因，便于排查格式差异。
+
+PDF默认逐页使用MarkItDown提取正文，再按原页码融合现有表格、OCR、重要图片保存和视觉说明。
+单页MarkItDown失败时只回退该页，不影响其他页面；整体增强解析失败时才使用整份MarkItDown
+结果兜底。OCR结果会按置信度过滤，并与MarkItDown正文做相似度去重。系统还会记录PDF页数、
+图片数、MarkItDown成功页数、OCR页数、视觉分析页数、原始文件SHA-256、文件大小、MIME类型
+和钉钉原文链接。打开已同步页面后，可以使用“查看钉钉原文”按钮返回源文件。
+
+如果下载内容的文件头包含`E-SafeNet`和`LOCK`，系统会将其标记为“源文件已加密”，并保留
+原文件和明确错误原因。这类文件不是MarkItDown转换问题，必须先由有权限的企业安全终端
+导出解密后的PDF或Office原文件，再重新执行同步。
+
+生产环境采用服务器内部同步：将本分支部署到现有Notes RAG服务器后，由服务器完成钉钉下载、
+Markdown转换、Embedding和数据库写入，不需要在个人电脑和服务器之间增加远程上传客户端。
+
+本地全量流程会把下载、转换和RAG入库状态完整记录到
+`backend/data/dingtalk/manifest.json`。可以运行以下命令查看汇总或执行文件完整性审计：
+
+```powershell
+cd backend
+.\.venv\Scripts\python.exe scripts\report_dingtalk_manifest.py
+.\.venv\Scripts\python.exe scripts\report_dingtalk_manifest.py --audit
+
+# 核对manifest、本地文件、RAG页面、哈希、索引和分块是否一致
+.\.venv\Scripts\python.exe scripts\verify_dingtalk_acceptance.py
+
+# 选择一份体积较小的真实文档，验收下载、转换和RAG幂等链路
+.\.venv\Scripts\python.exe scripts\verify_dingtalk_live.py
+
+# 全量扫描并核对新增、移动、恢复和源端删除（不下载）
+.\.venv\Scripts\python.exe scripts\sync_dingtalk_raw.py --list-only
+
+# 先预览待清理数量；确认后显式清理已软删除文档的RAG页面
+.\.venv\Scripts\python.exe scripts\import_dingtalk_rag.py --dry-run --prune-deleted
+.\.venv\Scripts\python.exe scripts\import_dingtalk_rag.py --prune-deleted
+
+# 只读审计老师服务器中受跟踪页面的内容哈希、二进制污染和来源元数据
+.\.venv\Scripts\python.exe scripts\import_dingtalk_remote_rag.py --audit-integrity
+
+# 正式恢复：先审计并生成快照，只修复审计异常项，完成后再次回读校验
+# 必须先在老师服务器部署本分支的来源导入接口
+.\.venv\Scripts\python.exe scripts\import_dingtalk_remote_rag.py --repair-integrity
+```
+
+远程同步文档通过管理员专用的`POST /api/pages/source-import`写入。该接口会验证发布内容哈希，
+拒绝PDF、ZIP/Office等原始二进制文本，并保存钉钉文档ID、原文路径、原文链接、文件哈希、
+Markdown哈希和转换管线版本。远端服务器缺少该接口时，客户端不会降级使用普通笔记接口，
+避免页面失去来源标记和只读保护。
+
+增量同步以钉钉文档ID作为稳定身份：重命名或移动不会产生重复RAG页面，原文件内容哈希变化
+时才重新转换和入库。只有一次无递归错误且知识库范围明确的全量扫描，才能把缺失文档标为
+`source_status=deleted`；此时本地原文件仍保留，RAG页面也必须通过上述显式命令清理。
+
+同步任务会把检查点原子保存到`backend/data/dingtalk/sync-task.json`。如果后端在同步过程中
+退出，重启后任务会显示为“已中断”，前端可点击“重试失败/未完成项”。重试会按manifest阶段
+状态断点执行：下载失败重新访问钉钉，转换失败复用本地原文件，RAG失败复用本地Markdown。
 
 相关接口：
 
@@ -163,6 +235,7 @@ docker-compose down
 | GET | `/api/dingtalk/docs` | 获取文档列表 |
 | POST | `/api/dingtalk/sync-selected` | 同步选中文档 |
 | POST | `/api/dingtalk/sync` | 同步整个知识库 |
+| POST | `/api/dingtalk/retry` | 按最近任务检查点重试失败或未完成阶段 |
 | GET | `/api/dingtalk/status` | 查询同步状态 |
 
 ## API 接口
@@ -182,6 +255,7 @@ docker-compose down
 | ------ | ------------------------- | ------------------------------ |
 | GET    | `/api/pages`            | 获取笔记列表（可按笔记本筛选） |
 | POST   | `/api/pages`            | 创建笔记                       |
+| POST   | `/api/pages/source-import` | 管理员幂等导入钉钉来源文档   |
 | GET    | `/api/pages/{id}`       | 获取笔记详情                   |
 | PUT    | `/api/pages/{id}`       | 更新笔记                       |
 | DELETE | `/api/pages/{id}`       | 删除笔记                       |

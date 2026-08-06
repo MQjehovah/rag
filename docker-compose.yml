@@ -5,16 +5,14 @@ services:
     image: pgvector/pgvector:pg16
     profiles:
       - pg
-    environment:
-      POSTGRES_DB: notesrag
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+    env_file:
+      - ./backend/.env
     ports:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -27,17 +25,6 @@ services:
       - "8000:8000"
     volumes:
       - ./backend/data:/app/data
-    environment:
-      - DATABASE_URL=${DATABASE_URL:-sqlite:///./data/notes.db}
-      - OLLAMA_HOST=http://host.docker.internal:11434
-      - EMBEDDING_API_URL=${EMBEDDING_API_URL:-http://host.docker.internal:11434/api/embed}
-      - LDAP_SERVER_URL=${LDAP_SERVER_URL:-}
-      - LDAP_BIND_DN=${LDAP_BIND_DN:-}
-      - LDAP_BIND_PASSWORD=${LDAP_BIND_PASSWORD:-}
-      - LDAP_USER_BASE_DN=${LDAP_USER_BASE_DN:-}
-      - LDAP_GROUP_BASE_DN=${LDAP_GROUP_BASE_DN:-}
-      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-change-me-in-production}
-      - LOCAL_ADMIN_PASSWORD=${LOCAL_ADMIN_PASSWORD:-}
     depends_on:
       db:
         condition: service_healthy

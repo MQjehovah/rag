@@ -3,6 +3,7 @@ from fastapi.responses import FileResponse
 import uuid
 import io
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -89,3 +90,18 @@ async def get_image(date_dir: str, file_name: str):
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="图片不存在")
     return FileResponse(file_path)
+
+
+@router.get("/pdf-pages/{file_hash}/{asset_name}")
+async def get_pdf_page_image(file_hash: str, asset_name: str):
+    """读取同步 PDF 保存的重要页面图或业务图片裁剪图。"""
+    if (
+        not re.fullmatch(r"[0-9a-f]{64}", file_hash)
+        or not re.fullmatch(r"page-[1-9]\d*(?:-image-[1-9]\d*)?\.jpg", asset_name)
+    ):
+        raise HTTPException(status_code=400, detail="PDF 页面图片路径无效")
+    root = Path(settings.pdf_image_storage_dir).resolve()
+    file_path = (root / file_hash / asset_name).resolve()
+    if root not in file_path.parents or not file_path.is_file():
+        raise HTTPException(status_code=404, detail="PDF 页面图片不存在")
+    return FileResponse(file_path, media_type="image/jpeg")

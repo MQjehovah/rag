@@ -62,6 +62,8 @@ async def search(request: SearchRequest, db: Session = Depends(get_db), reranker
     visible_ids = _get_visible_page_ids(db, current_user)
 
     vec_scores: Dict[str, float] = {}
+    vec_metadata: Dict[str, Dict[str, Any]] = {}
+    visible_chunk_candidates: List[Dict[str, Any]] = []
     vec_store = VectorStore(db)
     try:
         vec_results = await vec_store.search(query_embedding, settings.vector_recall_k)
@@ -72,13 +74,52 @@ async def search(request: SearchRequest, db: Session = Depends(get_db), reranker
             sim = 1.0 - item["distance"]
             if sim < 0.35:
                 continue
+            visible_chunk_candidates.append({**item, "similarity": sim})
             if page_id not in vec_scores or sim > vec_scores[page_id]:
                 vec_scores[page_id] = sim
+                vec_metadata[page_id] = {
+                    "content": item.get("content") or "",
+                    "page_number": item.get("page_number"),
+                    "content_type": item.get("content_type") or "text",
+                }
     except Exception as e:
         logger.warning(f"Vector search error: {e}")
 
     kw_scores: Dict[str, float] = {}
     content_snippets: Dict[str, str] = {}
+
+    # 先在向量候选块内部重排，解决一篇大型 PDF 被聚合成单个页面后页码丢失的问题。
+    if visible_chunk_candidates:
+        try:
+            chunk_docs = [item.get("content") or "" for item in visible_chunk_candidates]
+            chunk_top_k = min(
+                len(chunk_docs),
+                max(request.top_k * 6, 12),
+            )
+            chunk_reranked = await reranker_svc.rerank(
+                request.query,
+                chunk_docs,
+                top_k=chunk_top_k,
+            )
+            best_chunk_score: Dict[str, float] = {}
+            for result in chunk_reranked:
+                index = int(result.get("index", -1))
+                if not 0 <= index < len(visible_chunk_candidates):
+                    continue
+                item = visible_chunk_candidates[index]
+                page_id = item["page_id"]
+                score = float(result.get("relevance_score", 0.0))
+                if score <= best_chunk_score.get(page_id, float("-inf")):
+                    continue
+                best_chunk_score[page_id] = score
+                content_snippets[page_id] = item.get("content") or ""
+                vec_metadata[page_id] = {
+                    "content": item.get("content") or "",
+                    "page_number": item.get("page_number"),
+                    "content_type": item.get("content_type") or "text",
+                }
+        except Exception as exc:
+            logger.warning(f"Chunk reranker error: {exc}")
     try:
         query_kw = EmbeddingService.extract_keywords(request.query, 10, fine_grained=True)
         if query_kw:
@@ -117,7 +158,7 @@ async def search(request: SearchRequest, db: Session = Depends(get_db), reranker
                         kw_score = len(overlap) / max(len(query_kw), 1)
                         title_bonus = 0.3 if any(kw in (row[1] or "") for kw in overlap) else 0.0
                         kw_scores[pid] = min(kw_score + title_bonus, 1.0)
-                        content_snippets[pid] = (row[2] or "")[:300]
+                        content_snippets.setdefault(pid, (row[2] or "")[:300])
     except Exception as e:
         logger.warning(f"Keyword search error: {e}")
 
@@ -128,7 +169,7 @@ async def search(request: SearchRequest, db: Session = Depends(get_db), reranker
 
     for pid in vec_scores:
         if pid not in content_snippets:
-            content_snippets[pid] = ""
+            content_snippets[pid] = vec_metadata.get(pid, {}).get("content", "")
 
     candidate_pages = db.query(Page).filter(Page.id.in_(list(candidate_ids))).all()
     page_map = {p.id: p for p in candidate_pages}
@@ -140,7 +181,7 @@ async def search(request: SearchRequest, db: Session = Depends(get_db), reranker
         if p:
             rerank_candidates.append({
                 "id": pid,
-                "text": (p.title or "") + " " + (p.content or "")[:500],
+                "text": (p.title or "") + " " + content_snippets.get(pid, "")[:700],
             })
 
     if rerank_candidates and len(rerank_candidates) > 1:
@@ -214,6 +255,9 @@ async def search(request: SearchRequest, db: Session = Depends(get_db), reranker
             content=content[:300],
             score=round(data["score"], 4),
             source="+".join(sorted(data["sources"])) if data["sources"] else "unknown",
+            page_number=vec_metadata.get(page_id, {}).get("page_number"),
+            content_type=vec_metadata.get(page_id, {}).get("content_type", "text"),
+            source_url=p.source_url if p else None,
         ))
 
     await embedding_service.close()

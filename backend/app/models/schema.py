@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Literal, Optional
 from datetime import datetime
 
 
@@ -30,9 +30,46 @@ class PageUpdate(BaseModel):
     title: Optional[str] = None
     content: Optional[str] = None
     notebook_id: Optional[str] = None
+    allow_source_edit: bool = False
+
+
+class SourcePageImport(BaseModel):
+    """受信任同步程序写入来源文档时使用的专用结构。"""
+
+    page_id: Optional[str] = None
+    title: str
+    content: str
+    notebook_id: str
+    source_type: Literal["dingtalk"] = "dingtalk"
+    source_id: str
+    source_path: Optional[str] = None
+    source_space_id: Optional[str] = None
+    source_url: Optional[str] = None
+    source_file_hash: Optional[str] = None
+    source_file_size: Optional[int] = None
+    source_mime_type: Optional[str] = None
+    source_markdown_hash: str
+    source_pipeline_version: str
+    published_content_hash: str
 
 class PageResponse(PageBase):
     id: str
+    source_type: Optional[str] = None
+    source_id: Optional[str] = None
+    source_path: Optional[str] = None
+    source_space_id: Optional[str] = None
+    source_url: Optional[str] = None
+    source_file_hash: Optional[str] = None
+    source_file_size: Optional[int] = None
+    source_mime_type: Optional[str] = None
+    source_content_hash: Optional[str] = None
+    source_markdown_hash: Optional[str] = None
+    source_pipeline_version: Optional[str] = None
+    content_hash: Optional[str] = None
+    current_content_hash: str = ""
+    indexed_content_hash: Optional[str] = None
+    index_status: str = "missing"
+    last_synced_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
 
@@ -84,6 +121,9 @@ class EnhancedSearchResult(BaseModel):
     content: str
     score: float
     source: str
+    page_number: Optional[int] = None
+    content_type: str = "text"
+    source_url: Optional[str] = None
 
 class EnhancedSearchResponse(BaseModel):
     results: List[EnhancedSearchResult]

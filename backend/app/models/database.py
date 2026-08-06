@@ -4,6 +4,7 @@ from sqlalchemy.orm import sessionmaker
 from datetime import datetime
 import uuid
 import os
+import hashlib
 
 import logging
 
@@ -34,7 +35,17 @@ class Page(Base):
     source_id = Column(String(255), nullable=True)
     source_path = Column(Text, nullable=True)
     source_space_id = Column(String(255), nullable=True)
+    source_url = Column(Text, nullable=True)
+    source_file_hash = Column(String(64), nullable=True)
+    source_file_size = Column(Integer, nullable=True)
+    source_mime_type = Column(String(127), nullable=True)
+    source_content = Column(Text, nullable=True)
+    source_content_hash = Column(String(64), nullable=True)
+    source_markdown_hash = Column(String(64), nullable=True)
+    source_pipeline_version = Column(String(127), nullable=True)
     content_hash = Column(String(64), nullable=True)
+    indexed_content_hash = Column(String(64), nullable=True)
+    index_dirty = Column(Boolean, nullable=True, default=True)
     last_synced_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now, index=True)
@@ -42,6 +53,22 @@ class Page(Base):
     __table_args__ = (
         Index('ux_pages_source_type_source_id', 'source_type', 'source_id', unique=True),
     )
+
+    @property
+    def current_content_hash(self) -> str:
+        """返回当前正文的真实哈希，不依赖历史字段是否及时更新。"""
+        return hashlib.sha256((self.content or "").encode("utf-8")).hexdigest()
+
+    @property
+    def index_status(self) -> str:
+        """返回页面正文与向量索引的一致性状态。"""
+        if not (self.content or "").strip():
+            return "empty"
+        if not self.indexed_content_hash:
+            return "missing"
+        if self.index_dirty or self.indexed_content_hash != self.current_content_hash:
+            return "stale"
+        return "current"
 
 
 class PageChunk(Base):
@@ -51,6 +78,9 @@ class PageChunk(Base):
     page_id = Column(String(36), ForeignKey('pages.id', ondelete='CASCADE'), nullable=False, index=True)
     chunk_index = Column(Integer, nullable=False, default=0)
     content = Column(Text, nullable=False)
+    content_type = Column(String(32), nullable=True, default="text")
+    page_number = Column(Integer, nullable=True)
+    image_id = Column(String(255), nullable=True)
     embedding = Column(Text, nullable=True)
 
     __table_args__ = (
@@ -131,6 +161,28 @@ def _migrate_schema(engine):
                 ))
         except Exception as exc:
             logger.warning(f"Could not create DingTalk source index: {exc}")
+
+        try:
+            with engine.begin() as conn:
+                conn.execute(sqlalchemy_text(
+                    "UPDATE pages SET indexed_content_hash = content_hash "
+                    "WHERE indexed_content_hash IS NULL AND content_hash IS NOT NULL "
+                    "AND EXISTS (SELECT 1 FROM page_chunks WHERE page_chunks.page_id = pages.id)"
+                ))
+                conn.execute(sqlalchemy_text(
+                    "UPDATE pages SET source_content_hash = content_hash "
+                    "WHERE source_type = 'dingtalk' AND source_content_hash IS NULL "
+                    "AND content_hash IS NOT NULL"
+                ))
+                conn.execute(sqlalchemy_text(
+                    "UPDATE pages SET index_dirty = 0 "
+                    "WHERE index_dirty IS NULL AND indexed_content_hash IS NOT NULL"
+                ))
+                conn.execute(sqlalchemy_text(
+                    "UPDATE pages SET index_dirty = 1 WHERE index_dirty IS NULL"
+                ))
+        except Exception as exc:
+            logger.warning(f"Could not backfill page hash fields: {exc}")
 
 
 def init_db(engine):

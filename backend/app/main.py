@@ -32,6 +32,9 @@ app.include_router(organize.router)
 @app.on_event("startup")
 def _start_scheduler():
     from app.api.organize import start_scheduler
+    from app.core.dingtalk_storage import DingTalkLocalStorage
+
+    DingTalkLocalStorage().ensure_directories()
     start_scheduler()
 
 @app.get("/")

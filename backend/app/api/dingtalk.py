@@ -1,44 +1,20 @@
 from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
 from pydantic import BaseModel
-from sqlalchemy.orm import Session
 from typing import Optional, List
-from datetime import datetime
-import hashlib
-import uuid
-import logging
 
-from app.models.database import Page, Notebook, PageChunk, get_session, get_engine, init_db
-from app.core.rag import EmbeddingService, VectorStore
+from app.models.database import Notebook, get_session, get_engine, init_db
 from app.core.dingtalk import DingTalkClient
+from app.core.dingtalk_storage import DingTalkLocalStorage
+from app.core.dingtalk_sync_service import DingTalkSyncService, DingTalkSyncState
 from app.core.jwt_utils import get_current_user
 from app.config import settings
 
 router = APIRouter(prefix="/api/dingtalk", tags=["钉钉同步"])
 
-logger = logging.getLogger(__name__)
-
-_engine = None
-_session = None
-
-SYNC_STATUS = {
-    "running": False,
-    "progress": "",
-    "total": 0,
-    "imported": 0,
-    "skipped": 0,
-    "errors": 0,
-    "last_sync": "",
-}
-
-
-def get_db():
-    global _engine, _session
-    if _engine is None:
-        _engine = get_engine(settings.database_url)
-        init_db(_engine)
-    if _session is None:
-        _session = get_session(_engine)
-    return _session
+_SYNC_STORAGE = DingTalkLocalStorage()
+_SYNC_STORAGE.ensure_directories()
+SYNC_STATE = DingTalkSyncState(_SYNC_STORAGE.root / "sync-task.json")
+SYNC_SERVICE = DingTalkSyncService(SYNC_STATE)
 
 
 class SyncRequest(BaseModel):
@@ -53,205 +29,44 @@ class SyncSelectedRequest(BaseModel):
     docs: List[dict]
 
 
-def _markdown_document(doc: dict) -> str:
-    """将钉钉文档正文和来源信息统一整理为 Markdown。"""
-    title = str(doc.get("title") or "无标题").replace("\r", " ").replace("\n", " ").strip()
-    workspace = str(doc.get("space_name") or "").strip()
-    path = str(doc.get("path") or "").strip()
-    body = str(doc.get("content") or "").strip()
-
-    metadata = []
-    if workspace:
-        metadata.append(f"> 来源：钉钉知识库 / {workspace}")
-    if path:
-        metadata.append(f"> 路径：{path}")
-
-    parts = [f"# {title}"]
-    if metadata:
-        parts.append("\n".join(metadata))
-    if body:
-        parts.append(body)
-    return "\n\n".join(parts).strip() + "\n"
+class RetrySyncRequest(BaseModel):
+    task_id: Optional[str] = None
 
 
-async def _import_document(
-    db: Session,
-    vec_store: VectorStore,
-    emb_svc: EmbeddingService,
-    notebook_id: str,
-    doc: dict,
+def _resolve_notebook_name(
+    notebook_id: Optional[str],
+    notebook_name: str,
 ) -> str:
-    """按钉钉节点 ID 增量写入一篇文档，并保证页面与向量同事务提交。"""
-    source_id = str(doc.get("id") or "").strip()
-    if not source_id:
-        raise ValueError("钉钉文档缺少节点 ID")
-
-    title = str(doc.get("title") or "无标题").strip()
-    markdown = _markdown_document(doc)
-    content_hash = hashlib.sha256(markdown.encode("utf-8")).hexdigest()
-
-    page = db.query(Page).filter(
-        Page.source_type == "dingtalk",
-        Page.source_id == source_id,
-    ).first()
-
-    if page is not None and page.content_hash == content_hash:
-        page.source_path = doc.get("path") or ""
-        page.source_space_id = (
-            doc.get("space_id") or settings.dingtalk_knowledge_base_id or ""
-        )
-        page.last_synced_at = datetime.now()
-        db.commit()
-        return "skipped"
-
-    chunks = await emb_svc.encode_chunks(markdown)
-    if not chunks:
-        raise RuntimeError("Embedding 服务未返回有效分块")
-
+    """兼容按ID选择笔记本，同时让后台任务只接收稳定的名称。"""
+    if not notebook_id:
+        return str(notebook_name or "钉钉知识库").strip() or "钉钉知识库"
+    engine = get_engine(settings.database_url)
+    init_db(engine)
+    db = get_session(engine)
     try:
-        if page is None:
-            page = Page(id=str(uuid.uuid4()), notebook_id=notebook_id)
-            db.add(page)
-
-        page.title = title
-        page.content = markdown
-        page.keywords = ",".join(
-            EmbeddingService.extract_keywords(title + " " + markdown, 20)
-        )
-        page.source_type = "dingtalk"
-        page.source_id = source_id
-        page.source_path = doc.get("path") or ""
-        page.source_space_id = (
-            doc.get("space_id") or settings.dingtalk_knowledge_base_id or ""
-        )
-        page.content_hash = content_hash
-        page.last_synced_at = datetime.now()
-        db.flush()
-
-        await vec_store.add_page_chunks(page.id, chunks)
-        db.commit()
-        return "imported"
-    except Exception:
-        db.rollback()
-        raise
-
-
-async def _do_sync_selected(notebook_id: str, selected_docs: List[dict]):
-    global SYNC_STATUS
-    SYNC_STATUS["running"] = True
-    SYNC_STATUS["progress"] = "正在下载文档内容..."
-    SYNC_STATUS["imported"] = 0
-    SYNC_STATUS["skipped"] = 0
-    SYNC_STATUS["errors"] = 0
-    SYNC_STATUS["total"] = len(selected_docs)
-
-    try:
-        client = DingTalkClient()
-        emb_svc = EmbeddingService()
-
-        engine = get_engine(settings.database_url)
-        db = get_session(engine)
-        vec_store = VectorStore(db)
-
-        SYNC_STATUS["progress"] = f"正在下载 0/{SYNC_STATUS['total']}..."
-
-        docs = await client.collect_selected_docs(selected_docs)
-
-        SYNC_STATUS["total"] = len(docs)
-        SYNC_STATUS["progress"] = f"下载完成，开始导入 0/{SYNC_STATUS['total']}..."
-
-        for i, doc in enumerate(docs):
-            try:
-                result = await _import_document(
-                    db, vec_store, emb_svc, notebook_id, doc
-                )
-                SYNC_STATUS[result] += 1
-                handled = SYNC_STATUS["imported"] + SYNC_STATUS["skipped"]
-                SYNC_STATUS["progress"] = (
-                    f"已处理 {handled}/{SYNC_STATUS['total']} "
-                    f"(写入 {SYNC_STATUS['imported']}，跳过 {SYNC_STATUS['skipped']})"
-                )
-            except Exception as e:
-                db.rollback()
-                SYNC_STATUS["errors"] += 1
-                logger.error(f"Import failed for doc {i}: {e}")
-
-        db.close()
-        await client.close()
-        await emb_svc.close()
-
-        SYNC_STATUS["last_sync"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        SYNC_STATUS["progress"] = (
-            f"完成: {SYNC_STATUS['imported']} 写入, "
-            f"{SYNC_STATUS['skipped']} 未变化, {SYNC_STATUS['errors']} 失败"
-        )
-    except Exception as e:
-        SYNC_STATUS["progress"] = f"同步失败: {e}"
-        logger.error(f"DingTalk sync failed: {e}")
+        notebook = db.get(Notebook, notebook_id)
+        if notebook is None:
+            raise HTTPException(status_code=404, detail="目标笔记本不存在")
+        return notebook.name
     finally:
-        SYNC_STATUS["running"] = False
-
-
-async def _do_sync(notebook_id: str, space_id: str = None):
-    global SYNC_STATUS
-    SYNC_STATUS["running"] = True
-    SYNC_STATUS["progress"] = "连接钉钉..."
-    SYNC_STATUS["imported"] = 0
-    SYNC_STATUS["skipped"] = 0
-    SYNC_STATUS["errors"] = 0
-    SYNC_STATUS["total"] = 0
-
-    try:
-        client = DingTalkClient()
-        emb_svc = EmbeddingService()
-
-        engine = get_engine(settings.database_url)
-        db = get_session(engine)
-
-        SYNC_STATUS["progress"] = "正在获取文档列表..."
-
-        collected_docs = []
-        async def on_doc_collected(doc, count):
-            collected_docs.append(doc)
-            SYNC_STATUS["total"] = count
-            SYNC_STATUS["progress"] = f"正在获取文档 ({count})..."
-
-        docs = await client.collect_all_docs(space_id, on_progress=on_doc_collected)
-        SYNC_STATUS["total"] = len(docs)
-        SYNC_STATUS["progress"] = f"发现 {len(docs)} 个文档，开始导入..."
-
-        vec_store = VectorStore(db)
-
-        for i, doc in enumerate(docs):
-            try:
-                result = await _import_document(
-                    db, vec_store, emb_svc, notebook_id, doc
-                )
-                SYNC_STATUS[result] += 1
-                handled = SYNC_STATUS["imported"] + SYNC_STATUS["skipped"]
-                SYNC_STATUS["progress"] = (
-                    f"已处理 {handled}/{SYNC_STATUS['total']} "
-                    f"(写入 {SYNC_STATUS['imported']}，跳过 {SYNC_STATUS['skipped']})"
-                )
-            except Exception as e:
-                db.rollback()
-                SYNC_STATUS["errors"] += 1
-                logger.error(f"Import failed for doc {i}: {e}")
-
         db.close()
-        await client.close()
-        await emb_svc.close()
+        engine.dispose()
 
-        SYNC_STATUS["last_sync"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        SYNC_STATUS["progress"] = (
-            f"完成: {SYNC_STATUS['imported']} 写入, "
-            f"{SYNC_STATUS['skipped']} 未变化, {SYNC_STATUS['errors']} 失败"
-        )
-    except Exception as e:
-        SYNC_STATUS["progress"] = f"同步失败: {e}"
-        logger.error(f"DingTalk sync failed: {e}")
-    finally:
-        SYNC_STATUS["running"] = False
+
+async def _run_sync_task(
+    mode: str,
+    notebook_name: str,
+    space_id: Optional[str] = None,
+    selected_docs: Optional[List[dict]] = None,
+    retry_spec: Optional[dict] = None,
+) -> None:
+    await SYNC_SERVICE.run(
+        mode=mode,
+        notebook_name=notebook_name,
+        space_id=space_id,
+        selected_docs=selected_docs,
+        retry_spec=retry_spec,
+    )
 
 
 @router.get("/docs")
@@ -265,7 +80,30 @@ async def list_docs(
     client = DingTalkClient()
     try:
         docs = await client.list_all_docs(space_id)
-        return {"total": len(docs), "docs": docs}
+        manifest = DingTalkLocalStorage().read_manifest()
+        local_entries = {
+            str(entry.get("document_id") or ""): entry
+            for entry in manifest["documents"]
+        }
+        for document in docs:
+            entry = local_entries.get(str(document.get("id") or ""), {})
+            document["sync"] = {
+                "source_status": entry.get("source_status") or "new",
+                "download_status": entry.get("download_status") or "pending",
+                "conversion_status": entry.get("conversion_status") or "pending",
+                "rag_status": entry.get("rag_status") or "not_ready",
+                "pipeline_status": entry.get("pipeline_status") or "new",
+                "last_seen_at": entry.get("last_seen_at"),
+                "source_encryption": entry.get("source_encryption") or "",
+                "conversion_error": entry.get("conversion_error") or "",
+                "conversion_warnings": entry.get("conversion_warnings") or [],
+            }
+        return {
+            "total": len(docs),
+            "docs": docs,
+            "inventory_complete": bool(client._last_inventory_complete),
+            "scope_space_ids": client._last_inventory_scope_ids,
+        }
     finally:
         await client.close()
 
@@ -274,62 +112,168 @@ async def list_docs(
 async def start_sync_selected(
     req: SyncSelectedRequest,
     background_tasks: BackgroundTasks,
-    db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    if SYNC_STATUS["running"]:
-        raise HTTPException(status_code=409, detail="同步正在进行中")
-
     if not req.docs:
         raise HTTPException(status_code=400, detail="请选择要同步的文档")
 
     if not settings.dingtalk_app_key or not settings.dingtalk_app_secret:
         raise HTTPException(status_code=400, detail="请先配置 DINGTALK_APP_KEY 和 DINGTALK_APP_SECRET")
 
-    notebook_id = req.notebook_id
-    if not notebook_id:
-        nb = db.query(Notebook).filter(Notebook.name == req.notebook_name).first()
-        if not nb:
-            nb = Notebook(id=str(uuid.uuid4()), name=req.notebook_name)
-            db.add(nb)
-            db.commit()
-            db.refresh(nb)
-        notebook_id = nb.id
+    document_ids = [str(doc.get("id") or "").strip() for doc in req.docs]
+    if any(not document_id for document_id in document_ids):
+        raise HTTPException(status_code=400, detail="选中文档包含缺少ID的项目")
+    if len(document_ids) != len(set(document_ids)):
+        raise HTTPException(status_code=400, detail="选中文档包含重复ID")
 
-    background_tasks.add_task(_do_sync_selected, notebook_id, req.docs)
-    return {"message": "同步已启动", "notebook_id": notebook_id}
+    notebook_name = _resolve_notebook_name(req.notebook_id, req.notebook_name)
+    try:
+        task = SYNC_STATE.begin(
+            mode="selected",
+            notebook_name=notebook_name,
+            space_id=None,
+            total=len(req.docs),
+            request={
+                "original_mode": "selected",
+                "notebook_name": notebook_name,
+                "space_id": None,
+                "selected_docs": req.docs,
+            },
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    background_tasks.add_task(
+        _run_sync_task,
+        "selected",
+        notebook_name,
+        None,
+        req.docs,
+    )
+    return {
+        "message": "同步已启动",
+        "task_id": task["task_id"],
+        "status": task,
+    }
 
 
 @router.post("/sync")
 async def start_sync(
     req: SyncRequest,
     background_tasks: BackgroundTasks,
-    db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    if SYNC_STATUS["running"]:
-        raise HTTPException(status_code=409, detail="同步正在进行中")
-
     if not settings.dingtalk_app_key or not settings.dingtalk_app_secret:
         raise HTTPException(status_code=400, detail="请先配置 DINGTALK_APP_KEY 和 DINGTALK_APP_SECRET")
 
-    notebook_id = req.notebook_id
-    if not notebook_id:
-        nb = db.query(Notebook).filter(Notebook.name == req.notebook_name).first()
-        if not nb:
-            nb = Notebook(id=str(uuid.uuid4()), name=req.notebook_name)
-            db.add(nb)
-            db.commit()
-            db.refresh(nb)
-        notebook_id = nb.id
+    notebook_name = _resolve_notebook_name(req.notebook_id, req.notebook_name)
+    try:
+        task = SYNC_STATE.begin(
+            mode="full",
+            notebook_name=notebook_name,
+            space_id=req.space_id,
+            request={
+                "original_mode": "full",
+                "notebook_name": notebook_name,
+                "space_id": req.space_id,
+                "selected_docs": [],
+            },
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    background_tasks.add_task(
+        _run_sync_task,
+        "full",
+        notebook_name,
+        req.space_id,
+        None,
+    )
+    return {
+        "message": "全量同步已启动",
+        "task_id": task["task_id"],
+        "status": task,
+    }
 
-    background_tasks.add_task(_do_sync, notebook_id, req.space_id)
-    return {"message": "同步已启动", "notebook_id": notebook_id}
+
+@router.post("/retry")
+async def retry_sync(
+    req: RetrySyncRequest,
+    background_tasks: BackgroundTasks,
+    current_user=Depends(get_current_user),
+):
+    previous = SYNC_STATE.snapshot()
+    if req.task_id and req.task_id != previous.get("task_id"):
+        raise HTTPException(status_code=404, detail="待重试任务不存在")
+    try:
+        retry_spec = SYNC_SERVICE.build_retry_spec()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    retry_counts = {
+        **dict(retry_spec.get("counts") or {}),
+        "restart": bool(retry_spec.get("restart")),
+    }
+    retry_total = len(retry_spec.get("all_document_ids") or [])
+    if retry_spec.get("restart"):
+        retry_total = int(previous.get("total") or 0)
+    request = {
+        "original_mode": retry_spec["original_mode"],
+        "notebook_name": retry_spec["notebook_name"],
+        "space_id": retry_spec.get("space_id"),
+        "selected_docs": retry_spec.get("selected_docs") or [],
+    }
+    try:
+        task = SYNC_STATE.begin(
+            mode="retry",
+            notebook_name=retry_spec["notebook_name"],
+            space_id=retry_spec.get("space_id"),
+            total=retry_total,
+            request=request,
+            retry_count=int(previous.get("retry_count") or 0) + 1,
+            parent_task_id=previous.get("task_id"),
+            retry_plan=retry_counts,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    background_tasks.add_task(
+        _run_sync_task,
+        "retry",
+        retry_spec["notebook_name"],
+        retry_spec.get("space_id"),
+        retry_spec.get("selected_docs") or [],
+        retry_spec,
+    )
+    return {
+        "message": "失败项重试已启动",
+        "task_id": task["task_id"],
+        "retry_plan": retry_counts,
+        "status": task,
+    }
 
 
 @router.get("/status")
-async def get_sync_status(current_user=Depends(get_current_user)):
-    return SYNC_STATUS
+async def get_sync_status(
+    task_id: Optional[str] = None,
+    current_user=Depends(get_current_user),
+):
+    status = SYNC_STATE.snapshot()
+    if task_id and task_id != status.get("task_id"):
+        raise HTTPException(status_code=404, detail="同步任务不存在或服务已重启")
+    if not status.get("last_sync"):
+        manifest = DingTalkLocalStorage().read_manifest()
+        status["last_sync"] = str(manifest.get("last_inventory_at") or "")
+    if status.get("recoverable"):
+        try:
+            retry_spec = SYNC_SERVICE.build_retry_spec()
+            status["retry_plan"] = {
+                **dict(retry_spec.get("counts") or {}),
+                "restart": bool(retry_spec.get("restart")),
+            }
+        except (RuntimeError, ValueError):
+            pass
+    return status
 
 
 @router.get("/spaces")

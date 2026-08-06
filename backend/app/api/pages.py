@@ -3,14 +3,23 @@ from sqlalchemy.orm import Session
 from sqlalchemy import or_, text
 from typing import List, Optional
 import uuid
+import hashlib
 from datetime import datetime
 import logging
 
 logger = logging.getLogger(__name__)
 
 from app.models.database import Page, Notebook, PageChunk, get_session, get_engine, init_db
-from app.models.schema import PageCreate, PageUpdate, PageResponse, PageListItem, PageListResponse
+from app.models.schema import (
+    PageCreate,
+    PageListItem,
+    PageListResponse,
+    PageResponse,
+    PageUpdate,
+    SourcePageImport,
+)
 from app.core.rag import EmbeddingService, VectorStore
+from app.core.content_quality import ensure_text_content
 from app.core.jwt_utils import get_current_user
 from app.config import settings
 
@@ -53,6 +62,9 @@ async def background_index_page(page_id: str, title: str, content: str):
             page = db.query(Page).filter(Page.id == page_id).first()
             if page:
                 page.keywords = ",".join(keywords)
+                page.content_hash = page.current_content_hash
+                page.indexed_content_hash = page.current_content_hash
+                page.index_dirty = False
                 db.commit()
 
         db.close()
@@ -82,12 +94,23 @@ def _check_page_access_by_nb(notebook_id, current_user, db):
 
 @router.post("", response_model=PageResponse)
 async def create_page(data: PageCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    try:
+        ensure_text_content(data.content)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if data.notebook_id:
         nb = db.query(Notebook).filter(Notebook.id == data.notebook_id).first()
         if nb and "__local_admin__" not in current_user["groups"]:
             if nb.group_id and nb.group_id not in current_user["groups"]:
                 raise HTTPException(status_code=403, detail="无权在该笔记本创建笔记")
-    page = Page(id=str(uuid.uuid4()), title=data.title, content=data.content, notebook_id=data.notebook_id)
+    page = Page(
+        id=str(uuid.uuid4()),
+        title=data.title,
+        content=data.content,
+        content_hash=hashlib.sha256((data.content or "").encode("utf-8")).hexdigest(),
+        index_dirty=True,
+        notebook_id=data.notebook_id,
+    )
     db.add(page)
     db.commit()
     db.refresh(page)
@@ -127,19 +150,81 @@ async def list_pages(
         page_size=page_size,
     )
 
+
+@router.post("/source-import", response_model=PageResponse)
+async def import_source_page(
+    data: SourcePageImport,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """管理员专用的来源文档幂等写入接口。"""
+    if "__local_admin__" not in current_user["groups"]:
+        raise HTTPException(status_code=403, detail="仅管理员可导入来源文档")
+
+    try:
+        ensure_text_content(data.content)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    actual_hash = hashlib.sha256(data.content.encode("utf-8")).hexdigest()
+    if data.published_content_hash != actual_hash:
+        raise HTTPException(status_code=400, detail="发布内容哈希与正文不一致")
+
+    notebook = db.query(Notebook).filter(Notebook.id == data.notebook_id).first()
+    if not notebook:
+        raise HTTPException(status_code=404, detail="目标知识库不存在")
+
+    identity_page = db.query(Page).filter(
+        Page.source_type == data.source_type,
+        Page.source_id == data.source_id,
+    ).first()
+    mapped_page = db.query(Page).filter(Page.id == data.page_id).first() if data.page_id else None
+    if mapped_page is not None:
+        _check_page_access(mapped_page, current_user, db)
+    if identity_page is not None and mapped_page is not None and identity_page.id != mapped_page.id:
+        raise HTTPException(status_code=409, detail="来源文档ID与指定远程页面冲突")
+
+    page = identity_page or mapped_page
+    if page is not None and page.source_type and (
+        page.source_type != data.source_type or page.source_id != data.source_id
+    ):
+        raise HTTPException(status_code=409, detail="指定页面已绑定其他来源文档")
+    if page is None:
+        page = Page(id=str(uuid.uuid4()))
+        db.add(page)
+
+    content_changed = page.content != data.content
+    page.notebook_id = data.notebook_id
+    page.title = data.title
+    page.content = data.content
+    page.source_type = data.source_type
+    page.source_id = data.source_id
+    page.source_path = data.source_path
+    page.source_space_id = data.source_space_id
+    page.source_url = data.source_url
+    page.source_file_hash = data.source_file_hash
+    page.source_file_size = data.source_file_size
+    page.source_mime_type = data.source_mime_type
+    page.source_content = data.content
+    page.source_content_hash = actual_hash
+    page.source_markdown_hash = data.source_markdown_hash
+    page.source_pipeline_version = data.source_pipeline_version
+    page.content_hash = actual_hash
+    page.last_synced_at = datetime.now()
+    if content_changed or not page.indexed_content_hash:
+        page.index_dirty = True
+
+    db.commit()
+    db.refresh(page)
+    return page
+
 @router.get("/{page_id}", response_model=PageResponse)
 async def get_page(page_id: str, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
-    row = db.execute(
-        text("SELECT id, title, content, notebook_id, created_at, updated_at FROM pages WHERE id = :pid"),
-        {"pid": page_id},
-    ).fetchone()
-    if not row:
+    page = db.query(Page).filter(Page.id == page_id).first()
+    if not page:
         raise HTTPException(status_code=404, detail="笔记不存在")
-    _check_page_access_by_nb(row[3], current_user, db)
-    return PageResponse(
-        id=row[0], title=row[1], content=row[2],
-        notebook_id=row[3], created_at=row[4], updated_at=row[5],
-    )
+    _check_page_access(page, current_user, db)
+    return page
 
 @router.put("/{page_id}", response_model=PageResponse)
 async def update_page(page_id: str, data: PageUpdate, background_tasks: BackgroundTasks, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
@@ -148,13 +233,40 @@ async def update_page(page_id: str, data: PageUpdate, background_tasks: Backgrou
         raise HTTPException(status_code=404, detail="笔记不存在")
     _check_page_access(page, current_user, db)
 
+    if data.content is not None:
+        try:
+            ensure_text_content(data.content)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    source_content_changed = (
+        page.source_type == "dingtalk"
+        and (
+            (data.content is not None and data.content != page.content)
+            or (data.title is not None and data.title != page.title)
+        )
+    )
+    if source_content_changed and not data.allow_source_edit:
+        raise HTTPException(
+            status_code=409,
+            detail="钉钉同步文档默认只读；如需修改，请先明确启用源码编辑",
+        )
+
+    changed = False
     if data.title is not None:
+        changed = changed or data.title != page.title
         page.title = data.title
     if data.content is not None:
+        changed = changed or data.content != page.content
         page.content = data.content
+        page.content_hash = hashlib.sha256(
+            (data.content or "").encode("utf-8")
+        ).hexdigest()
     if data.notebook_id is not None:
         page.notebook_id = data.notebook_id
-    page.updated_at = datetime.now()
+    if changed:
+        page.index_dirty = True
+        page.updated_at = datetime.now()
 
     db.commit()
     db.refresh(page)
@@ -191,6 +303,9 @@ async def index_page(page_id: str, db: Session = Depends(get_db), current_user=D
                 (page.title or "") + " " + (page.content or ""), 20
             )
             page.keywords = ",".join(keywords)
+            page.content_hash = page.current_content_hash
+            page.indexed_content_hash = page.current_content_hash
+            page.index_dirty = False
             db.commit()
             await emb_svc.close()
             return {"message": f"索引成功，共 {len(chunks)} 个分块"}
@@ -227,6 +342,9 @@ async def reindex_all(db: Session = Depends(get_db), current_user=Depends(get_cu
                 (page.title or "") + " " + (page.content or ""), 20
             )
             page.keywords = ",".join(keywords)
+            page.content_hash = page.current_content_hash
+            page.indexed_content_hash = page.current_content_hash
+            page.index_dirty = False
             db.commit()
             success += 1
         except Exception as e:

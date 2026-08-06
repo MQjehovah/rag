@@ -2,8 +2,13 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Install system dependencies for psycopg2
-RUN apt-get update && apt-get install -y libpq-dev gcc && rm -rf /var/lib/apt/lists/*
+# 安装PostgreSQL编译依赖以及OCR、PDF页面渲染所需的Linux运行库。
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    libglib2.0-0 \
+    libgl1 \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
 RUN pip install -r requirements.txt

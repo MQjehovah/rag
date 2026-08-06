@@ -12,7 +12,7 @@
       <div class="header-actions">
         <el-tag type="success" v-if="saveStatus === 'saved'">已保存</el-tag>
         <el-tag type="warning" v-else-if="saveStatus === 'saving'">保存中...</el-tag>
-        <el-button @click="showDingTalk = true">钉钉同步</el-button>
+        <el-button @click="openDingTalkDialog">钉钉同步</el-button>
         <el-button @click="importDialogVisible = true">导入知识</el-button>
         <el-button :loading="organizing" @click="handleOrganize">{{ organizing ? '整理中...' : '自动整理' }}</el-button>
         <el-button type="primary" @click="showNewNotebook = true">新建笔记本</el-button>
@@ -118,13 +118,67 @@
           <input
             v-model="currentPage.title"
             class="title-input"
+            :class="{ 'is-readonly': isReadOnlySource }"
+            :readonly="isReadOnlySource"
             placeholder="无标题"
             @input="scheduleSave"
           />
-          <TipTapEditor v-model="currentPage.content" @update:modelValue="scheduleSave" />
+          <div v-if="isSourceDocument" class="source-banner">
+            <div>
+              <el-tag type="info">钉钉同步文档</el-tag>
+              <el-tag :type="indexStatusType" class="index-status-tag">
+                {{ indexStatusText }}
+              </el-tag>
+              <span v-if="currentPage.source_path" class="source-path">{{ currentPage.source_path }}</span>
+            </div>
+            <span class="source-protection-tip">
+              {{ sourceEditEnabled ? '源码编辑已启用，修改后索引会变为过期' : '原文保护已开启，浏览不会改写 Markdown' }}
+            </span>
+          </div>
+          <el-input
+            v-if="isSourceDocument && sourceEditEnabled"
+            v-model="currentPage.content"
+            type="textarea"
+            :autosize="{ minRows: 20 }"
+            class="source-editor"
+            @input="scheduleSave"
+          />
+          <MarkdownPreview
+            v-else-if="isSourceDocument"
+            :content="currentPage.content"
+          />
+          <TipTapEditor
+            v-else
+            v-model="currentPage.content"
+            @update:modelValue="scheduleSave"
+          />
           <div class="editor-footer">
-            <span class="editor-hint">自动保存</span>
-            <el-button size="small" @click="reindexCurrentPage" :loading="indexing">重新索引</el-button>
+            <span class="editor-hint">
+              {{ isReadOnlySource ? '只读预览' : '自动保存' }}
+            </span>
+            <div class="editor-actions">
+              <el-button
+                v-if="isSourceDocument && !sourceEditEnabled"
+                size="small"
+                @click="enableSourceEdit"
+              >启用源码编辑</el-button>
+              <el-button
+                v-if="isSourceDocument && sourceEditEnabled"
+                size="small"
+                @click="cancelSourceEdit"
+              >取消编辑</el-button>
+              <el-button
+                v-if="currentPage.source_url"
+                size="small"
+                @click="openSourcePage"
+              >查看钉钉原文</el-button>
+              <el-button
+                size="small"
+                @click="reindexCurrentPage"
+                :loading="indexing"
+                :disabled="isSourceDocument && currentPage.index_status === 'stale' && !sourceEditEnabled"
+              >重新索引</el-button>
+            </div>
           </div>
         </div>
         <div v-else class="empty-state">
@@ -154,6 +208,9 @@
           <div class="result-content">{{ result.content }}</div>
           <div class="result-footer">
             <el-tag size="small" type="info">得分: {{ result.score?.toFixed(3) }}</el-tag>
+            <el-tag v-if="result.page_number" size="small" type="info">PDF 第 {{ result.page_number }} 页</el-tag>
+            <el-tag v-if="result.content_type === 'image_caption'" size="small" type="warning">图片说明</el-tag>
+            <el-tag v-else-if="result.content_type === 'table'" size="small" type="success">表格</el-tag>
           </div>
         </div>
       </div>
@@ -161,76 +218,125 @@
     </el-dialog>
 
     <!-- 钉钉同步对话框 -->
-    <el-dialog v-model="showDingTalk" title="钉钉知识库同步" width="700px" top="5vh">
-      <!-- 同步进行中 -->
+    <el-dialog v-model="showDingTalk" title="钉钉知识库同步" width="760px" top="5vh" :close-on-click-modal="!syncStatus.running">
       <div v-if="syncStatus.running">
         <el-alert type="info" :closable="false" show-icon>
           <template #title>{{ syncStatus.progress }}</template>
         </el-alert>
-        <el-progress
-          :percentage="syncStatus.total > 0 ? Math.round((syncStatus.imported + syncStatus.skipped + syncStatus.errors) / syncStatus.total * 100) : 0"
-          :format="() => `${syncStatus.imported + syncStatus.skipped + syncStatus.errors}/${syncStatus.total}`"
-          style="margin-top: 15px"
-        />
+        <el-progress :percentage="syncStatus.percent" :format="() => `${syncStatus.percent}%`" style="margin-top: 15px" />
+        <div class="dt-stage-line">
+          当前阶段：{{ syncStageText }}
+          <span v-if="syncStatus.stage_total > 0">（{{ syncStatus.stage_processed }}/{{ syncStatus.stage_total }}）</span>
+        </div>
+        <div class="dt-stat-grid">
+          <div><strong>{{ syncStatus.found }}</strong><span>发现</span></div>
+          <div><strong>{{ syncStatus.downloaded }}</strong><span>已下载</span></div>
+          <div><strong>{{ syncStatus.converted }}</strong><span>新转换</span></div>
+          <div><strong>{{ syncStatus.imported }}</strong><span>写入RAG</span></div>
+          <div><strong>{{ syncStatus.skipped }}</strong><span>未变化</span></div>
+          <div><strong>{{ syncStatus.errors }}</strong><span>失败</span></div>
+        </div>
       </div>
-      <!-- 步骤1: 配置 -->
+
       <div v-else-if="dtStep === 0">
         <el-form label-width="120px">
           <el-form-item label="导入到笔记本">
             <el-input v-model="dtNotebookName" placeholder="笔记本名称（不存在则自动创建）" />
           </el-form-item>
-          <el-form-item label="知识库ID">
-            <el-input v-model="dtSpaceId" placeholder="留空则列出所有知识库" />
+          <el-form-item label="钉钉知识库">
+            <el-select v-model="dtSpaceId" clearable filterable placeholder="使用.env中配置的知识库" style="width: 100%" :loading="dtSpacesLoading">
+              <el-option v-for="space in dtSpaces" :key="space.id" :label="space.name" :value="space.id" />
+            </el-select>
           </el-form-item>
         </el-form>
-        <div v-if="syncStatus.last_sync" style="color: #999; font-size: 12px; margin-top: 10px">
-          上次同步: {{ syncStatus.last_sync }}
-        </div>
+        <el-alert
+          title="全量同步会依次执行：扫描清单 → 下载原文件 → 转换Markdown → 写入RAG。源端缺失文档只会软删除，不会自动清理本地文件或RAG。"
+          type="info"
+          :closable="false"
+          show-icon
+        />
+        <div v-if="syncStatus.last_sync" class="dt-last-sync">上次同步：{{ formatSyncTime(syncStatus.last_sync) }}</div>
       </div>
-      <!-- 步骤2: 文档列表 -->
+
       <div v-else-if="dtStep === 1">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px">
-          <el-checkbox v-model="dtSelectAll" @change="toggleSelectAll">全选 ({{ dtSelectedDocs.length }}/{{ dtDocs.length }})</el-checkbox>
-          <el-input v-model="dtFilter" placeholder="搜索文档..." style="width: 200px" clearable size="small" />
+        <div class="dt-list-toolbar">
+          <el-checkbox v-model="dtSelectAll" @change="toggleSelectAll">全选当前结果 ({{ dtSelectedDocs.length }}/{{ dtDocs.length }})</el-checkbox>
+          <el-input v-model="dtFilter" placeholder="搜索文档..." style="width: 220px" clearable size="small" />
         </div>
         <div class="dt-doc-list">
           <el-checkbox-group v-model="dtSelectedIds">
-            <div v-for="doc in filteredDocs" :key="doc.id" class="dt-doc-item">
+            <div
+              v-for="doc in filteredDocs"
+              :key="doc.id"
+              class="dt-doc-item"
+              :title="doc.sync?.conversion_error || ''"
+            >
               <el-checkbox :value="doc.id">
                 <span class="dt-doc-title">{{ doc.title }}</span>
-                <el-tag size="small" type="info" style="margin-left: 6px">{{ doc.extension || 'wiki' }}</el-tag>
+                <el-tag size="small" type="info" class="dt-inline-tag">{{ doc.extension || 'wiki' }}</el-tag>
+                <el-tag size="small" :type="pipelineStatusType(documentPipelineStatus(doc))" class="dt-inline-tag">
+                  {{ pipelineStatusText(documentPipelineStatus(doc)) }}
+                </el-tag>
                 <span class="dt-doc-path">{{ doc.path }}</span>
               </el-checkbox>
             </div>
           </el-checkbox-group>
-          <div v-if="dtDocs.length === 0" style="text-align: center; color: #999; padding: 20px">
-            未找到文档
-          </div>
+          <div v-if="dtDocs.length === 0" class="dt-empty">未找到文档</div>
         </div>
       </div>
-      <!-- 步骤3: 同步完成 -->
+
       <div v-else-if="dtStep === 2">
-        <div v-if="syncStatus.progress && !syncStatus.running">
-          <el-result
-            :icon="syncStatus.errors > 0 ? 'warning' : 'success'"
-            :title="syncStatus.errors > 0 ? '同步完成（部分失败）' : '同步完成'"
-            :sub-title="`写入 ${syncStatus.imported} 篇，未变化 ${syncStatus.skipped} 篇，失败 ${syncStatus.errors} 篇`"
-          />
+        <el-result
+          :icon="syncStatus.stage === 'failed' ? 'error' : syncStatus.stage === 'interrupted' || syncStatus.errors > 0 ? 'warning' : 'success'"
+          :title="syncStatus.stage === 'failed' ? '同步任务失败' : syncStatus.stage === 'interrupted' ? '同步被中断，可断点重试' : syncStatus.errors > 0 ? '同步完成（部分失败）' : '同步完成'"
+          :sub-title="syncStatus.progress"
+        />
+        <div class="dt-stat-grid dt-result-stats">
+          <div><strong>{{ syncStatus.downloaded }}</strong><span>下载成功</span></div>
+          <div><strong>{{ syncStatus.converted }}</strong><span>新转换</span></div>
+          <div><strong>{{ syncStatus.imported }}</strong><span>写入RAG</span></div>
+          <div><strong>{{ syncStatus.skipped }}</strong><span>未变化</span></div>
+          <div><strong>{{ syncStatus.chunks }}</strong><span>RAG分块</span></div>
+          <div><strong>{{ syncStatus.errors }}</strong><span>失败</span></div>
         </div>
+        <el-collapse v-if="syncStatus.error_details.length" class="dt-errors">
+          <el-collapse-item :title="`查看失败明细（${syncStatus.error_details.length}）`">
+            <div v-for="(item, index) in syncStatus.error_details" :key="`${item.document_id}-${index}`" class="dt-error-item">
+              <strong>{{ item.name }}</strong>
+              <el-tag size="small" type="danger">{{ item.stage }}</el-tag>
+              <div>{{ item.error }}</div>
+            </div>
+          </el-collapse-item>
+        </el-collapse>
+        <div v-if="syncStatus.inventory.deleted > 0" class="dt-soft-delete-tip">
+          本次发现 {{ syncStatus.inventory.deleted }} 份源端缺失文档，已安全标记为软删除；未自动删除本地文件和RAG数据。
+        </div>
+        <el-alert
+          v-if="syncStatus.recoverable"
+          class="dt-retry-tip"
+          type="warning"
+          :closable="false"
+          show-icon
+          :title="syncStatus.retry_plan.restart ? '上次在生成文档阶段检查点前中断，将重新执行原同步范围' : `可断点重试：下载 ${syncStatus.retry_plan.download}，转换 ${syncStatus.retry_plan.conversion}，RAG ${syncStatus.retry_plan.rag}`"
+        />
       </div>
+
       <template #footer>
-        <template v-if="dtStep === 0">
+        <template v-if="syncStatus.running">
+          <el-button @click="showDingTalk = false">后台运行并关闭</el-button>
+        </template>
+        <template v-else-if="dtStep === 0">
           <el-button @click="showDingTalk = false">取消</el-button>
           <el-button type="primary" @click="fetchDingTalkDocs" :loading="dtLoading">获取文档列表</el-button>
+          <el-button type="warning" @click="startFullSync">同步整个知识库</el-button>
         </template>
         <template v-else-if="dtStep === 1">
           <el-button @click="dtStep = 0">返回</el-button>
-          <el-button type="primary" @click="startSelectedSync" :disabled="dtSelectedIds.length === 0">
-            同步选中 ({{ dtSelectedIds.length }})
-          </el-button>
+          <el-button type="primary" @click="startSelectedSync" :disabled="dtSelectedIds.length === 0">同步选中 ({{ dtSelectedIds.length }})</el-button>
         </template>
         <template v-else>
-          <el-button @click="dtStep = 1">继续选择</el-button>
+          <el-button @click="dtStep = 0">返回配置</el-button>
+          <el-button v-if="syncStatus.recoverable" type="warning" @click="retryFailedSync">重试失败/未完成项</el-button>
           <el-button type="primary" @click="showDingTalk = false">关闭</el-button>
         </template>
       </template>
@@ -302,11 +408,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
-import { ElMessage, ElNotification } from 'element-plus'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ElMessage, ElMessageBox, ElNotification } from 'element-plus'
 import type { UploadFile as ElUploadFile } from 'element-plus'
 import http from '../api/http'
 import TipTapEditor from '../components/TipTapEditor.vue'
+import MarkdownPreview from '../components/MarkdownPreview.vue'
 
 interface Notebook {
   id: string
@@ -325,14 +432,126 @@ interface Page {
   notebook_id: string | null
   title: string
   content: string
+  source_type?: string | null
+  source_id?: string | null
+  source_url?: string | null
+  source_path?: string | null
+  source_content_hash?: string | null
+  content_hash?: string | null
+  current_content_hash?: string
+  indexed_content_hash?: string | null
+  index_status?: 'current' | 'stale' | 'missing' | 'empty'
+  last_synced_at?: string | null
   updated_at: string
 }
+
+interface DingTalkSpace {
+  id: string
+  name: string
+}
+
+interface DingTalkDocument {
+  id: string
+  title: string
+  extension?: string
+  path?: string
+  sync?: {
+    pipeline_status?: string
+    source_encryption?: string
+    conversion_error?: string
+    conversion_warnings?: string[]
+  }
+  [key: string]: unknown
+}
+
+interface DingTalkSyncError {
+  stage: string
+  document_id: string
+  name: string
+  error: string
+}
+
+interface DingTalkSyncStatus {
+  task_id: string | null
+  running: boolean
+  mode: 'full' | 'selected' | null
+  stage: string
+  progress: string
+  percent: number
+  stage_processed: number
+  stage_total: number
+  total: number
+  found: number
+  downloaded: number
+  download_failed: number
+  converted: number
+  conversion_failed: number
+  imported: number
+  skipped: number
+  rag_failed: number
+  chunks: number
+  errors: number
+  error_details: DingTalkSyncError[]
+  inventory: { discovered: number; moved: number; restored: number; deleted: number }
+  recoverable: boolean
+  retry_count: number
+  parent_task_id: string | null
+  interrupted_at: string | null
+  retry_plan: { download: number; conversion: number; rag: number; restart: boolean }
+  last_sync: string
+}
+
+const emptySyncStatus = (): DingTalkSyncStatus => ({
+  task_id: null,
+  running: false,
+  mode: null,
+  stage: 'idle',
+  progress: '尚未执行同步',
+  percent: 0,
+  stage_processed: 0,
+  stage_total: 0,
+  total: 0,
+  found: 0,
+  downloaded: 0,
+  download_failed: 0,
+  converted: 0,
+  conversion_failed: 0,
+  imported: 0,
+  skipped: 0,
+  rag_failed: 0,
+  chunks: 0,
+  errors: 0,
+  error_details: [],
+  inventory: { discovered: 0, moved: 0, restored: 0, deleted: 0 },
+  recoverable: false,
+  retry_count: 0,
+  parent_task_id: null,
+  interrupted_at: null,
+  retry_plan: { download: 0, conversion: 0, rag: 0, restart: false },
+  last_sync: '',
+})
 
 const notebooks = ref<Notebook[]>([])
 const notebookPages = ref<PageListItem[]>([])
 const currentNotebook = ref<Notebook | null>(null)
 const currentPage = ref<Page | null>(null)
 const saveStatus = ref<'saved' | 'saving' | 'unsaved'>('saved')
+const sourceEditEnabled = ref(false)
+const loadedSourceSnapshot = ref<{ title: string; content: string } | null>(null)
+const isSourceDocument = computed(() => currentPage.value?.source_type === 'dingtalk')
+const isReadOnlySource = computed(() => isSourceDocument.value && !sourceEditEnabled.value)
+const indexStatusText = computed(() => ({
+  current: '索引已同步',
+  stale: '索引已过期',
+  missing: '尚未索引',
+  empty: '正文为空',
+}[currentPage.value?.index_status || 'missing']))
+const indexStatusType = computed(() => ({
+  current: 'success',
+  stale: 'warning',
+  missing: 'danger',
+  empty: 'info',
+}[currentPage.value?.index_status || 'missing'] as 'success' | 'warning' | 'danger' | 'info'))
 
 const searchQuery = ref('')
 const showNewNotebook = ref(false)
@@ -342,11 +561,13 @@ const searchResults = ref<any[]>([])
 const showDingTalk = ref(false)
 const dtNotebookName = ref('钉钉知识库')
 const dtSpaceId = ref('')
-const syncStatus = ref<any>({ running: false, progress: '', total: 0, imported: 0, skipped: 0, errors: 0, last_sync: '' })
+const syncStatus = ref<DingTalkSyncStatus>(emptySyncStatus())
 let syncPollTimer: number | null = null
 const dtStep = ref(0)
 const dtLoading = ref(false)
-const dtDocs = ref<any[]>([])
+const dtSpacesLoading = ref(false)
+const dtSpaces = ref<DingTalkSpace[]>([])
+const dtDocs = ref<DingTalkDocument[]>([])
 const dtSelectedIds = ref<string[]>([])
 const dtFilter = ref('')
 
@@ -445,6 +666,11 @@ const selectPage = async (page: PageListItem) => {
   try {
     const res = await http.get(`/api/pages/${page.id}`)
     currentPage.value = res.data
+    sourceEditEnabled.value = false
+    loadedSourceSnapshot.value = res.data.source_type === 'dingtalk'
+      ? { title: res.data.title, content: res.data.content }
+      : null
+    saveStatus.value = 'saved'
   } catch (e) {
     ElMessage.error('加载笔记内容失败')
   }
@@ -529,6 +755,7 @@ const createPage = async () => {
 }
 
 const scheduleSave = () => {
+  if (isReadOnlySource.value) return
   saveStatus.value = 'unsaved'
   if (saveTimeout) clearTimeout(saveTimeout)
   saveTimeout = window.setTimeout(() => savePage(), 1000)
@@ -538,14 +765,22 @@ const savePage = async () => {
   if (!currentPage.value) return
   saveStatus.value = 'saving'
   try {
-    await http.put(`/api/pages/${currentPage.value.id}`, {
+    const res = await http.put(`/api/pages/${currentPage.value.id}`, {
       title: currentPage.value.title,
-      content: currentPage.value.content
+      content: currentPage.value.content,
+      allow_source_edit: isSourceDocument.value && sourceEditEnabled.value,
     })
+    currentPage.value = res.data
+    if (isSourceDocument.value) {
+      loadedSourceSnapshot.value = {
+        title: res.data.title,
+        content: res.data.content,
+      }
+    }
     saveStatus.value = 'saved'
     const idx = notebookPages.value.findIndex(p => p.id === currentPage.value!.id)
     if (idx >= 0) {
-      notebookPages.value[idx] = { ...notebookPages.value[idx], title: currentPage.value.title }
+      notebookPages.value[idx] = { ...notebookPages.value[idx], title: res.data.title }
     }
   } catch (e) {
     ElMessage.error('保存失败')
@@ -555,6 +790,10 @@ const savePage = async () => {
 
 const reindexCurrentPage = async () => {
   if (!currentPage.value) return
+  if (isSourceDocument.value && currentPage.value.index_status === 'stale' && !sourceEditEnabled.value) {
+    ElMessage.warning('当前同步正文与索引不一致，请先从钉钉重新同步，避免把错误正文写入向量库')
+    return
+  }
   indexing.value = true
   try {
     await http.post(`/api/pages/${currentPage.value.id}/index`)
@@ -566,6 +805,38 @@ const reindexCurrentPage = async () => {
   }
 }
 
+const enableSourceEdit = async () => {
+  if (!currentPage.value || !isSourceDocument.value) return
+  try {
+    await ElMessageBox.confirm(
+      '启用后将直接编辑同步文档的 Markdown 源码，修改不会覆盖钉钉原文件，但会使当前向量索引过期。是否继续？',
+      '启用源码编辑',
+      { confirmButtonText: '继续编辑', cancelButtonText: '保持只读', type: 'warning' },
+    )
+    loadedSourceSnapshot.value = {
+      title: currentPage.value.title,
+      content: currentPage.value.content,
+    }
+    sourceEditEnabled.value = true
+  } catch {
+    // 用户取消时保持只读。
+  }
+}
+
+const cancelSourceEdit = () => {
+  if (!currentPage.value || !loadedSourceSnapshot.value) return
+  if (saveTimeout) clearTimeout(saveTimeout)
+  currentPage.value.title = loadedSourceSnapshot.value.title
+  currentPage.value.content = loadedSourceSnapshot.value.content
+  sourceEditEnabled.value = false
+  saveStatus.value = 'saved'
+}
+
+const openSourcePage = () => {
+  if (!currentPage.value?.source_url) return
+  window.open(currentPage.value.source_url, '_blank', 'noopener,noreferrer')
+}
+
 const getSourceTagType = (source: string) => {
   if (source.includes('reranker')) return 'danger'
   if (source.includes('graph')) return 'success'
@@ -574,32 +845,143 @@ const getSourceTagType = (source: string) => {
   return 'info'
 }
 
-const pollSyncStatus = async () => {
-  try {
-    const res = await http.get('/api/dingtalk/status')
-    syncStatus.value = res.data
-    if (!res.data.running && syncPollTimer) {
-      clearInterval(syncPollTimer)
-      syncPollTimer = null
-      if (res.data.imported > 0) {
-        dtStep.value = 2
-        loadNotebooks()
-      }
-    }
-  } catch { /* ignore */ }
+const applySyncStatus = (data: Partial<DingTalkSyncStatus>) => {
+  syncStatus.value = {
+    ...emptySyncStatus(),
+    ...data,
+    error_details: data.error_details || [],
+    inventory: {
+      ...emptySyncStatus().inventory,
+      ...(data.inventory || {}),
+    },
+    retry_plan: {
+      ...emptySyncStatus().retry_plan,
+      ...(data.retry_plan || {}),
+    },
+  }
 }
 
-const dtSelectedDocs = computed(() => dtDocs.value.filter((d: any) => dtSelectedIds.value.includes(d.id)))
+const stopSyncPolling = () => {
+  if (syncPollTimer) {
+    clearInterval(syncPollTimer)
+    syncPollTimer = null
+  }
+}
+
+const pollSyncStatus = async () => {
+  try {
+    const params = syncStatus.value.task_id ? { task_id: syncStatus.value.task_id } : {}
+    const res = await http.get('/api/dingtalk/status', { params })
+    applySyncStatus(res.data)
+    if (!res.data.running && res.data.task_id) {
+      stopSyncPolling()
+      dtStep.value = 2
+      await loadNotebooks()
+      if (!showDingTalk.value) {
+        ElNotification({
+          title: res.data.stage === 'failed' ? '钉钉同步失败' : '钉钉同步完成',
+          message: res.data.progress,
+          type: res.data.stage === 'failed' ? 'error' : res.data.errors > 0 ? 'warning' : 'success',
+        })
+      }
+    }
+  } catch (e: any) {
+    stopSyncPolling()
+    ElMessage.error(e?.response?.data?.detail || '获取同步进度失败')
+  }
+}
+
+const startSyncPolling = () => {
+  stopSyncPolling()
+  void pollSyncStatus()
+  syncPollTimer = window.setInterval(pollSyncStatus, 1500)
+}
+
+const loadDingTalkSpaces = async () => {
+  dtSpacesLoading.value = true
+  try {
+    const res = await http.get('/api/dingtalk/spaces')
+    dtSpaces.value = Array.isArray(res.data) ? res.data : []
+  } catch (e: any) {
+    ElMessage.warning(e?.response?.data?.detail || '知识库列表加载失败，可继续使用.env中的默认知识库')
+  } finally {
+    dtSpacesLoading.value = false
+  }
+}
+
+const openDingTalkDialog = async () => {
+  showDingTalk.value = true
+  dtStep.value = 0
+  try {
+    const res = await http.get('/api/dingtalk/status')
+    applySyncStatus(res.data)
+    if (res.data.running) startSyncPolling()
+    else if (res.data.recoverable && res.data.task_id) dtStep.value = 2
+  } catch { /* 由后续具体操作展示错误 */ }
+  if (dtSpaces.value.length === 0) void loadDingTalkSpaces()
+}
+
+const syncStageText = computed(() => ({
+  queued: '等待执行',
+  inventory: '扫描文档清单',
+  download: '下载原文件',
+  conversion: '转换Markdown',
+  rag: '写入RAG知识库',
+  completed: '已完成',
+  failed: '失败',
+  interrupted: '进程中断',
+  idle: '未开始',
+}[syncStatus.value.stage] || syncStatus.value.stage))
+
+const pipelineStatusText = (status?: string) => ({
+  imported: '已入库',
+  source_changed: '内容已更新',
+  converted: '待入库',
+  conversion_failed: '转换失败',
+  encrypted_source: '源文件已加密',
+  downloaded: '待转换',
+  download_failed: '下载失败',
+  source_deleted: '源端已删除',
+  discovered: '待下载',
+  new: '新文档',
+}[status || 'new'] || status || '新文档')
+
+const pipelineStatusType = (status?: string) => ({
+  imported: 'success',
+  source_changed: 'warning',
+  converted: 'warning',
+  conversion_failed: 'danger',
+  encrypted_source: 'warning',
+  download_failed: 'danger',
+  source_deleted: 'info',
+}[status || 'new'] || 'info') as 'success' | 'warning' | 'danger' | 'info'
+
+const documentPipelineStatus = (document: DingTalkDocument) => (
+  document.sync?.source_encryption
+    ? 'encrypted_source'
+    : document.sync?.pipeline_status
+)
+
+const formatSyncTime = (value: string) => {
+  if (!value) return ''
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString()
+}
+
+const dtSelectedDocs = computed(() => dtDocs.value.filter((d) => dtSelectedIds.value.includes(d.id)))
 
 const dtSelectAll = computed({
-  get: () => dtDocs.value.length > 0 && dtSelectedIds.value.length === filteredDocs.value.length,
+  get: () => filteredDocs.value.length > 0 && filteredDocs.value.every((doc) => dtSelectedIds.value.includes(doc.id)),
   set: () => {},
 })
 
 const filteredDocs = computed(() => {
   if (!dtFilter.value) return dtDocs.value
   const q = dtFilter.value.toLowerCase()
-  return dtDocs.value.filter((d: any) => d.title.toLowerCase().includes(q) || d.path.toLowerCase().includes(q))
+  return dtDocs.value.filter((d) =>
+    (d.title || '').toLowerCase().includes(q)
+    || (d.path || '').toLowerCase().includes(q)
+  )
 })
 
 const toggleSelectAll = (val: any) => {
@@ -635,14 +1017,58 @@ const startSelectedSync = async () => {
     return
   }
   try {
-    await http.post('/api/dingtalk/sync-selected', {
+    const res = await http.post('/api/dingtalk/sync-selected', {
       notebook_name: dtNotebookName.value,
       docs: dtSelectedDocs.value,
     })
-    syncPollTimer = window.setInterval(pollSyncStatus, 2000)
+    applySyncStatus(res.data.status)
+    startSyncPolling()
     ElMessage.success(`开始同步 ${dtSelectedIds.value.length} 篇文档`)
   } catch (e: any) {
     ElMessage.error(e?.response?.data?.detail || '启动同步失败')
+  }
+}
+
+const startFullSync = async () => {
+  try {
+    await ElMessageBox.confirm(
+      '将扫描整个目标知识库，并依次下载原文件、转换Markdown、写入RAG。完整扫描中缺失的文档会被软删除，是否继续？',
+      '确认全量同步',
+      { confirmButtonText: '开始同步', cancelButtonText: '取消', type: 'warning' },
+    )
+    const res = await http.post('/api/dingtalk/sync', {
+      notebook_name: dtNotebookName.value,
+      space_id: dtSpaceId.value || undefined,
+    })
+    applySyncStatus(res.data.status)
+    startSyncPolling()
+    ElMessage.success('全量同步已启动')
+  } catch (e: any) {
+    if (e === 'cancel' || e === 'close') return
+    ElMessage.error(e?.response?.data?.detail || '启动全量同步失败')
+  }
+}
+
+const retryFailedSync = async () => {
+  try {
+    const plan = syncStatus.value.retry_plan
+    const description = plan.restart
+      ? '上次任务在生成文档阶段检查点前中断，需要重新执行原同步范围。是否继续？'
+      : `系统将按检查点重试：下载 ${plan.download}，转换 ${plan.conversion}，RAG ${plan.rag}。已成功的阶段不会重复执行，是否继续？`
+    await ElMessageBox.confirm(
+      description,
+      '确认断点重试',
+      { confirmButtonText: '开始重试', cancelButtonText: '取消', type: 'warning' },
+    )
+    const res = await http.post('/api/dingtalk/retry', {
+      task_id: syncStatus.value.task_id,
+    })
+    applySyncStatus(res.data.status)
+    startSyncPolling()
+    ElMessage.success('断点重试已启动')
+  } catch (e: any) {
+    if (e === 'cancel' || e === 'close') return
+    ElMessage.error(e?.response?.data?.detail || '启动重试失败')
   }
 }
 
@@ -784,16 +1210,17 @@ const handleKeydown = (e: KeyboardEvent) => {
   }
 }
 
-watch(showDingTalk, (val) => {
-  if (val) dtStep.value = 0
-})
-
 onMounted(() => {
   loadNotebooks()
+  void http.get('/api/dingtalk/status').then((res) => {
+    applySyncStatus(res.data)
+    if (res.data.running) startSyncPolling()
+  }).catch(() => {})
   window.addEventListener('keydown', handleKeydown)
 })
 
 onBeforeUnmount(() => {
+  stopSyncPolling()
   window.removeEventListener('keydown', handleKeydown)
 })
 </script>
@@ -918,6 +1345,24 @@ html, body, #app { height: 100%; }
   justify-content: space-between;
   align-items: center;
 }
+.editor-actions { display: flex; align-items: center; gap: 8px; }
+.title-input.is-readonly { color: #334155; cursor: default; }
+.source-banner {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 14px;
+  margin-bottom: 18px;
+  border: 1px solid #dbeafe;
+  border-radius: 8px;
+  background: #f8fbff;
+  color: #64748b;
+  font-size: 13px;
+}
+.index-status-tag { margin-left: 8px; }
+.source-path { margin-left: 10px; }
+.source-protection-tip { text-align: right; }
+.source-editor { margin-bottom: 16px; font-family: Consolas, 'Courier New', monospace; }
 .editor-hint { color: #94a3b8; font-size: 13px; }
 .empty-state { text-align: center; color: #94a3b8; margin-top: 120px; }
 .empty-state h2 { font-size: 20px; color: #475569; margin-bottom: 8px; }
@@ -945,4 +1390,33 @@ html, body, #app { height: 100%; }
 .dt-doc-item:hover { background: #f8fafc; }
 .dt-doc-title { font-size: 13px; font-weight: 500; color: #1e293b; }
 .dt-doc-path { font-size: 12px; color: #94a3b8; margin-left: 8px; }
+.dt-inline-tag { margin-left: 6px; }
+.dt-list-toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+.dt-empty { text-align: center; color: #94a3b8; padding: 24px; }
+.dt-last-sync { color: #64748b; font-size: 12px; margin-top: 12px; }
+.dt-stage-line { margin-top: 10px; color: #64748b; font-size: 13px; }
+.dt-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 8px;
+  margin-top: 18px;
+}
+.dt-stat-grid > div {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 12px 6px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+.dt-stat-grid strong { color: #1e293b; font-size: 20px; }
+.dt-stat-grid span { margin-top: 4px; color: #64748b; font-size: 12px; }
+.dt-result-stats { margin-top: 0; }
+.dt-errors { margin-top: 18px; }
+.dt-error-item { padding: 10px 0; border-bottom: 1px solid #f1f5f9; color: #64748b; font-size: 13px; }
+.dt-error-item strong { margin-right: 8px; color: #334155; }
+.dt-error-item div { margin-top: 5px; word-break: break-word; }
+.dt-soft-delete-tip { margin-top: 16px; padding: 10px 12px; border-radius: 8px; background: #fff7ed; color: #9a3412; font-size: 13px; }
+.dt-retry-tip { margin-top: 14px; }
 </style>

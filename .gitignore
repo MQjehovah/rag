@@ -4,10 +4,20 @@
 docs/plans/
 
 __pycache__/
+.pytest_cache/
 backend/data/
+backend/.venv/
 
 dist/
 node_modules/
+backend/server.*.log
+frontend/server.*.log
+runtime-logs/
+tmp/
 
 .env
 .env.local
+
+# 仅供本地查看的开发文档
+TITAN810_RAG_优化清单.md
+钉钉文档同步开发记录.md

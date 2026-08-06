@@ -21,6 +21,8 @@ except ImportError:
 
 
 class EmbeddingService:
+    PDF_PAGE_HEADING = re.compile(r"(?m)^## 第 \d+ 页(?: - [^\n]+)?$")
+
     def __init__(self):
         self.client = httpx.AsyncClient(timeout=60.0)
         self.model = settings.embedding_model
@@ -28,7 +30,7 @@ class EmbeddingService:
         self.splitter = RecursiveCharacterTextSplitter(
             chunk_size=settings.chunk_size,
             chunk_overlap=settings.chunk_overlap,
-            separators=["##", "#", "\n\n", "\n", " ", ""]
+            separators=["\n## ", "\n# ", "\n\n", "\n", " ", ""]
         )
 
     @property
@@ -82,25 +84,108 @@ class EmbeddingService:
                         results.append([])
             return results
 
+    @staticmethod
+    def _merge_short_chunks(chunks: List[str]) -> List[str]:
+        """合并上下文不足的短分块，避免产生无意义向量。"""
+        cleaned = [chunk.strip() for chunk in chunks if chunk.strip()]
+        if not cleaned:
+            return []
+
+        min_size = min(160, max(120, settings.chunk_size // 4))
+        max_size = settings.chunk_size + settings.chunk_overlap
+        merged: List[str] = []
+        pending = ""
+
+        for chunk in cleaned:
+            if pending:
+                combined = f"{pending}\n\n{chunk}"
+                if len(combined) <= max_size:
+                    chunk = combined
+                    pending = ""
+                elif merged and len(merged[-1]) + len(pending) + 2 <= max_size:
+                    merged[-1] = f"{merged[-1]}\n\n{pending}"
+                    pending = ""
+                else:
+                    merged.append(pending)
+                    pending = ""
+
+            if len(chunk) < min_size:
+                if merged and len(merged[-1]) + len(chunk) + 2 <= max_size:
+                    merged[-1] = f"{merged[-1]}\n\n{chunk}"
+                else:
+                    pending = chunk
+            else:
+                merged.append(chunk)
+
+        if pending:
+            if merged and len(merged[-1]) + len(pending) + 2 <= max_size:
+                merged[-1] = f"{merged[-1]}\n\n{pending}"
+            else:
+                merged.append(pending)
+        return merged
+
+    @classmethod
+    def _is_low_value_pdf_chunk(cls, chunk: str) -> bool:
+        """过滤只有分页标题、空页提示或结束语的 PDF 分块。"""
+        body = cls.PDF_PAGE_HEADING.sub("", chunk)
+        body = body.replace("_本页未提取到除标题外的文字。_", "")
+        normalized = re.sub(r"[^\w\u4e00-\u9fff]+", "", body).lower()
+        return len(normalized) < 12 or normalized in {
+            "thankyou",
+            "robotdeployment",
+        }
+
     def split_text(self, content: str, title: str = "") -> List[str]:
+        # 合并单元格元数据仅供前端还原表格外观，不参与向量化。
+        content = re.sub(
+            r"(?m)^<!-- rag-table-merges: \{.*\} -->\s*$",
+            "",
+            content,
+        )
         full_text = f"# {title}\n\n{content}" if title else content
-        chunks = self.splitter.split_text(full_text)
-        return [chunk for chunk in chunks if chunk.strip()]
+        page_matches = list(self.PDF_PAGE_HEADING.finditer(full_text))
+        if not page_matches:
+            return self._merge_short_chunks(self.splitter.split_text(full_text))
+
+        result: List[str] = []
+        preamble = full_text[:page_matches[0].start()].strip()
+        for index, match in enumerate(page_matches):
+            section_end = (
+                page_matches[index + 1].start()
+                if index + 1 < len(page_matches)
+                else len(full_text)
+            )
+            heading = match.group(0).strip()
+            section = full_text[match.start():section_end].strip()
+            if index == 0 and preamble:
+                section = f"{preamble}\n\n{section}"
+
+            page_chunks = self.splitter.split_text(section)
+            contextual_chunks = [
+                chunk.strip()
+                if heading in chunk
+                else f"{heading}\n\n{chunk.strip()}"
+                for chunk in page_chunks
+                if chunk.strip()
+            ]
+            result.extend(
+                chunk
+                for chunk in self._merge_short_chunks(contextual_chunks)
+                if not self._is_low_value_pdf_chunk(chunk)
+            )
+        return result
 
     async def encode_chunks(self, content: str, title: str = "") -> List[Tuple[str, List[float]]]:
         chunks = self.split_text(content, title)
         if not chunks:
             return []
 
-        results = []
-        for chunk_text in chunks:
-            try:
-                emb = await self.encode(chunk_text)
-                if emb:
-                    results.append((chunk_text, emb))
-            except Exception as e:
-                logger.error(f"Encode chunk error: {e}")
-        return results
+        embeddings = await self.encode_batch(chunks)
+        return [
+            (chunk_text, embedding)
+            for chunk_text, embedding in zip(chunks, embeddings)
+            if embedding
+        ]
 
     STOP_WORDS = {
         "the", "and", "for", "are", "but", "not", "you", "all", "can", "had",
@@ -181,6 +266,37 @@ class VectorStore:
     def __init__(self, db: Session):
         self.db = db
 
+    @staticmethod
+    def _chunk_metadata(chunk_text: str) -> Dict[str, Any]:
+        page_match = re.search(r"(?m)^## 第 (\d+) 页", chunk_text)
+        page_number = int(page_match.group(1)) if page_match else None
+        image_markers = (
+            "### 本页重要图片",
+            "### 本页重要业务图片",
+            "**图片功能：**",
+            "**图片操作顺序：**",
+            "**标号与箭头对应关系：**",
+            "**区域与位置关系：**",
+            "**图片核对提示：**",
+        )
+        if any(marker in chunk_text for marker in image_markers):
+            content_type = "image_caption"
+        elif "### 本页识别表格" in chunk_text or re.search(
+            r"(?m)^\|.+\|\s*$", chunk_text
+        ):
+            content_type = "table"
+        else:
+            content_type = "text"
+        image_match = re.search(
+            r"/api/upload/pdf-pages/[0-9a-f]{64}/(page-\d+(?:-image-\d+)?\.jpg)",
+            chunk_text,
+        )
+        return {
+            "content_type": content_type,
+            "page_number": page_number,
+            "image_id": image_match.group(1) if image_match else None,
+        }
+
     async def add_page_chunks(self, page_id: str, chunks: List[Tuple[str, List[float]]]):
         self.delete_page_chunks(page_id)
 
@@ -192,18 +308,21 @@ class VectorStore:
             chunk_id = str(uuid.uuid4())
             emb_json = json.dumps(embedding)
             emb_str = "[" + ",".join(str(v) for v in embedding) + "]"
+            metadata = self._chunk_metadata(chunk_text)
 
             if has_vector_col:
                 self.db.execute(
                     text(
-                        "INSERT INTO page_chunks (id, page_id, chunk_index, content, embedding, embedding_vec) "
-                        "VALUES (:id, :page_id, :chunk_index, :content, :embedding, :embedding_vec::vector)"
+                        "INSERT INTO page_chunks "
+                        "(id, page_id, chunk_index, content, content_type, page_number, image_id, embedding, embedding_vec) "
+                        "VALUES (:id, :page_id, :chunk_index, :content, :content_type, :page_number, :image_id, :embedding, :embedding_vec::vector)"
                     ),
                     {
                         "id": chunk_id,
                         "page_id": page_id,
                         "chunk_index": i,
                         "content": chunk_text,
+                        **metadata,
                         "embedding": emb_json,
                         "embedding_vec": emb_str,
                     }
@@ -211,14 +330,16 @@ class VectorStore:
             else:
                 self.db.execute(
                     text(
-                        "INSERT INTO page_chunks (id, page_id, chunk_index, content, embedding) "
-                        "VALUES (:id, :page_id, :chunk_index, :content, :embedding)"
+                        "INSERT INTO page_chunks "
+                        "(id, page_id, chunk_index, content, content_type, page_number, image_id, embedding) "
+                        "VALUES (:id, :page_id, :chunk_index, :content, :content_type, :page_number, :image_id, :embedding)"
                     ),
                     {
                         "id": chunk_id,
                         "page_id": page_id,
                         "chunk_index": i,
                         "content": chunk_text,
+                        **metadata,
                         "embedding": emb_json,
                     }
                 )
@@ -239,7 +360,7 @@ class VectorStore:
         if dialect == "postgresql":
             try:
                 result = self.db.execute(text(
-                    "SELECT pc.page_id, pc.content, pc.chunk_index, "
+                    "SELECT pc.page_id, pc.content, pc.chunk_index, pc.content_type, pc.page_number, pc.image_id, "
                     "pc.embedding_vec <=> :query_emb::vector AS distance "
                     "FROM page_chunks pc "
                     "ORDER BY pc.embedding_vec <=> :query_emb::vector "
@@ -253,14 +374,20 @@ class VectorStore:
                         "page_id": row[0],
                         "content": row[1],
                         "chunk_index": row[2],
-                        "distance": float(row[3]),
+                        "content_type": row[3] or "text",
+                        "page_number": row[4],
+                        "image_id": row[5],
+                        "distance": float(row[6]),
                     })
                 return results
             except Exception as e:
                 logger.warning(f"pgvector search failed, falling back: {e}")
 
         result = self.db.execute(
-            text("SELECT id, page_id, content, chunk_index, embedding FROM page_chunks")
+            text(
+                "SELECT id, page_id, content, chunk_index, embedding, "
+                "content_type, page_number, image_id FROM page_chunks"
+            )
         )
         rows = result.fetchall()
 
@@ -283,6 +410,9 @@ class VectorStore:
                             "page_id": row[1],
                             "content": row[2],
                             "chunk_index": row[3],
+                            "content_type": row[5] or "text",
+                            "page_number": row[6],
+                            "image_id": row[7],
                             "distance": dist,
                         })
             except Exception:
