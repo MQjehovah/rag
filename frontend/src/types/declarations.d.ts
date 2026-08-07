@@ -1,7 +1,10 @@
 declare module 'lowlight' {
-  export function createLowlight(options: any): any
-  export const all: any
-  export const common: any
+  export function createLowlight(grammars?: any): any
+}
+
+declare module 'highlight.js/lib/languages/*' {
+  const language: any
+  export default language
 }
 
 declare module '@tiptap/extension-code-block-lowlight' {

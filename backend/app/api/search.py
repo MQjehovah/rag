@@ -2,32 +2,24 @@ from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 from collections import defaultdict
-from sqlalchemy import or_
 from sqlalchemy.orm import Session
+import asyncio
 import logging
 
 from app.core.rag import EmbeddingService, VectorStore, RerankerService
-from app.models.database import Page, GraphEdge, Notebook, get_session, get_engine, init_db
+from app.models.database import Page, GraphEdge
 from app.models.schema import EnhancedSearchResult, EnhancedSearchResponse
+from app.api.deps import get_db
+from app.api.search_common import get_visible_page_ids, keyword_search
 from app.core.jwt_utils import get_current_user
 from app.config import settings
 
 router = APIRouter(prefix="/api/search", tags=["搜索"])
 
-_engine = None
-_session = None
 _reranker = None
+_embedding_service = None
 
 logger = logging.getLogger(__name__)
-
-def get_db():
-    global _engine, _session
-    if _engine is None:
-        _engine = get_engine(settings.database_url)
-        init_db(_engine)
-    if _session is None:
-        _session = get_session(_engine)
-    return _session
 
 def get_reranker():
     global _reranker
@@ -35,14 +27,12 @@ def get_reranker():
         _reranker = RerankerService()
     return _reranker
 
-def _get_visible_page_ids(db, current_user) -> set:
-    if "__local_admin__" in current_user["groups"]:
-        return set(p[0] for p in db.query(Page.id).all())
-    visible_nb_ids = db.query(Notebook.id).filter(
-        or_(Notebook.group_id.in_(current_user["groups"]), Notebook.group_id.is_(None))
-    ).subquery()
-    return set(p[0] for p in db.query(Page.id).filter(Page.notebook_id.in_(visible_nb_ids)).all())
 
+def get_embedding_service():
+    global _embedding_service
+    if _embedding_service is None:
+        _embedding_service = EmbeddingService()
+    return _embedding_service
 
 class SearchRequest(BaseModel):
     query: str
@@ -51,15 +41,14 @@ class SearchRequest(BaseModel):
 
 @router.post("")
 async def search(request: SearchRequest, db: Session = Depends(get_db), reranker_svc=Depends(get_reranker), current_user=Depends(get_current_user)):
-    embedding_service = EmbeddingService()
+    embedding_service = get_embedding_service()
 
     try:
         query_embedding = await embedding_service.encode(request.query)
     except Exception as e:
-        await embedding_service.close()
         raise HTTPException(status_code=500, detail=f"Embedding失败: {str(e)}")
 
-    visible_ids = _get_visible_page_ids(db, current_user)
+    visible_ids = await asyncio.to_thread(get_visible_page_ids, db, current_user)
 
     vec_scores: Dict[str, float] = {}
     vec_store = VectorStore(db)
@@ -80,50 +69,14 @@ async def search(request: SearchRequest, db: Session = Depends(get_db), reranker
     kw_scores: Dict[str, float] = {}
     content_snippets: Dict[str, str] = {}
     try:
-        query_kw = EmbeddingService.extract_keywords(request.query, 10, fine_grained=True)
+        query_kw = await asyncio.to_thread(EmbeddingService.extract_keywords, request.query, 10, True)
         if query_kw:
-            kw_like_conditions = []
-            params = {}
-            for i, kw in enumerate(query_kw):
-                kw_like_conditions.append(f"keywords LIKE :kw{i}")
-                params[f"kw{i}"] = f"%{kw}%"
-
-            if kw_like_conditions:
-                from sqlalchemy import text as sql_text
-                where_clause = " OR ".join(kw_like_conditions)
-                if visible_ids:
-                    placeholders = ",".join([f":vid{i}" for i in range(len(visible_ids))])
-                    for i, vid in enumerate(visible_ids):
-                        params[f"vid{i}"] = vid
-                    where_clause = f"({where_clause}) AND id IN ({placeholders})"
-
-                result = db.execute(
-                    sql_text(f"SELECT id, title, content, keywords FROM pages WHERE {where_clause}"),
-                    params
-                )
-                for row in result.fetchall():
-                    pid = row[0]
-                    if pid not in visible_ids:
-                        continue
-                    page_kw_str = row[3] or ""
-                    page_kw = set(page_kw_str.split(",")) if page_kw_str else set()
-                    overlap = set()
-                    for qkw in query_kw:
-                        for pkw in page_kw:
-                            if qkw in pkw or pkw in qkw:
-                                overlap.add(qkw)
-                                break
-                    if overlap:
-                        kw_score = len(overlap) / max(len(query_kw), 1)
-                        title_bonus = 0.3 if any(kw in (row[1] or "") for kw in overlap) else 0.0
-                        kw_scores[pid] = min(kw_score + title_bonus, 1.0)
-                        content_snippets[pid] = (row[2] or "")[:300]
+            kw_scores, content_snippets = await asyncio.to_thread(keyword_search, db, query_kw, visible_ids)
     except Exception as e:
         logger.warning(f"Keyword search error: {e}")
 
     candidate_ids = set(vec_scores.keys()) | set(kw_scores.keys())
     if not candidate_ids:
-        await embedding_service.close()
         return EnhancedSearchResponse(results=[], total=0, graph_expanded=0)
 
     for pid in vec_scores:
@@ -216,7 +169,6 @@ async def search(request: SearchRequest, db: Session = Depends(get_db), reranker
             source="+".join(sorted(data["sources"])) if data["sources"] else "unknown",
         ))
 
-    await embedding_service.close()
     return EnhancedSearchResponse(
         results=results,
         total=len(results),

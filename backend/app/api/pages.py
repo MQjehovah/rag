@@ -8,26 +8,16 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-from app.models.database import Page, Notebook, PageChunk, get_session, get_engine, init_db
+from app.models.database import Page, Notebook, PageChunk, get_engine
 from app.models.schema import PageCreate, PageUpdate, PageResponse, PageListItem, PageListResponse
 from app.core.rag import EmbeddingService, VectorStore
+from app.api.deps import get_db
 from app.core.jwt_utils import get_current_user
 from app.config import settings
 
 router = APIRouter(prefix="/api/pages", tags=["笔记"])
 
-_engine = None
-_session = None
 _embedding_service = None
-
-def get_db():
-    global _engine, _session
-    if _engine is None:
-        _engine = get_engine(settings.database_url)
-        init_db(_engine)
-    if _session is None:
-        _session = get_session(_engine)
-    return _session
 
 def get_embedding_service():
     global _embedding_service
@@ -81,7 +71,7 @@ def _check_page_access_by_nb(notebook_id, current_user, db):
             raise HTTPException(status_code=403, detail="无权访问该笔记")
 
 @router.post("", response_model=PageResponse)
-async def create_page(data: PageCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+def create_page(data: PageCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     if data.notebook_id:
         nb = db.query(Notebook).filter(Notebook.id == data.notebook_id).first()
         if nb and "__local_admin__" not in current_user["groups"]:
@@ -94,8 +84,9 @@ async def create_page(data: PageCreate, background_tasks: BackgroundTasks, db: S
     return page
 
 @router.get("", response_model=PageListResponse)
-async def list_pages(
+def list_pages(
     notebook_id: Optional[str] = None,
+    unassigned: bool = False,
     page: int = 1,
     page_size: int = 50,
     db: Session = Depends(get_db),
@@ -103,13 +94,17 @@ async def list_pages(
 ):
     cols = (Page.id, Page.title, Page.notebook_id, Page.created_at, Page.updated_at)
     query = db.query(*cols)
-    if notebook_id:
+    if unassigned:
+        query = query.filter(Page.notebook_id.is_(None))
+    elif notebook_id:
         query = query.filter(Page.notebook_id == notebook_id)
     if "__local_admin__" not in current_user["groups"]:
         visible_nb_ids = db.query(Notebook.id).filter(
             or_(Notebook.group_id.in_(current_user["groups"]), Notebook.group_id.is_(None))
         ).subquery()
-        query = query.filter(Page.notebook_id.in_(visible_nb_ids))
+        query = query.filter(
+            or_(Page.notebook_id.is_(None), Page.notebook_id.in_(visible_nb_ids))
+        )
 
     total = query.count()
     rows = query.order_by(Page.updated_at.desc()).offset((page - 1) * page_size).limit(page_size).all()
@@ -128,7 +123,7 @@ async def list_pages(
     )
 
 @router.get("/{page_id}", response_model=PageResponse)
-async def get_page(page_id: str, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+def get_page(page_id: str, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     row = db.execute(
         text("SELECT id, title, content, notebook_id, created_at, updated_at FROM pages WHERE id = :pid"),
         {"pid": page_id},
@@ -142,7 +137,7 @@ async def get_page(page_id: str, db: Session = Depends(get_db), current_user=Dep
     )
 
 @router.put("/{page_id}", response_model=PageResponse)
-async def update_page(page_id: str, data: PageUpdate, background_tasks: BackgroundTasks, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+def update_page(page_id: str, data: PageUpdate, background_tasks: BackgroundTasks, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     page = db.query(Page).filter(Page.id == page_id).first()
     if not page:
         raise HTTPException(status_code=404, detail="笔记不存在")
@@ -161,7 +156,7 @@ async def update_page(page_id: str, data: PageUpdate, background_tasks: Backgrou
     return page
 
 @router.delete("/{page_id}")
-async def delete_page(page_id: str, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+def delete_page(page_id: str, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     page = db.query(Page).filter(Page.id == page_id).first()
     if not page:
         raise HTTPException(status_code=404, detail="笔记不存在")

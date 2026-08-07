@@ -231,7 +231,7 @@ class VectorStore:
         )
         self.db.flush()
 
-    async def search(self, query_embedding: List[float], top_k: int = 50) -> List[Dict[str, Any]]:
+    def _search_sync(self, query_embedding: List[float], top_k: int = 50) -> List[Dict[str, Any]]:
         emb_str = "[" + ",".join(str(v) for v in query_embedding) + "]"
 
         dialect = self.db.bind.dialect.name
@@ -290,6 +290,13 @@ class VectorStore:
 
         candidates.sort(key=lambda x: x["distance"])
         return candidates[:top_k]
+
+    async def search(self, query_embedding: List[float], top_k: int = 50) -> List[Dict[str, Any]]:
+        # The SQLite fallback scans every chunk and runs numpy similarity,
+        # which can take seconds on a large corpus.  Run it in a thread so the
+        # event loop is not blocked while note pages are being loaded.
+        import asyncio
+        return await asyncio.to_thread(self._search_sync, query_embedding, top_k)
 
     async def get_chunk_count(self, page_id: str = None) -> int:
         if page_id:

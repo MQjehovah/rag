@@ -80,7 +80,7 @@
             <div class="notebook-info" @click="selectUnassigned">
                <span class="notebook-icon">📋</span>
               <span class="notebook-name">未分类</span>
-              <el-tag size="small" type="info" v-if="unassignedPages.length">{{ unassignedPages.length }}</el-tag>
+              <el-tag size="small" type="info" v-if="unassignedCount > 0">{{ unassignedCount }}</el-tag>
             </div>
             <div v-if="currentNotebook?.id === '__unassigned__'" class="page-list">
               <div
@@ -106,7 +106,7 @@
             </div>
           </div>
 
-          <div v-if="notebooks.length === 0 && unassignedPages.length === 0" class="empty-tip">
+          <div v-if="notebooks.length === 0 && unassignedCount === 0" class="empty-tip">
             暂无笔记本
           </div>
         </div>
@@ -371,11 +371,13 @@ const pageSize = 50
 
 const hasMorePages = ref(false)
 const unassignedPages = ref<PageListItem[]>([])
+const unassignedCount = ref(0)
 
 const loadUnassignedPages = async () => {
   try {
-    const res = await http.get('/api/pages', { params: { page: 1, page_size: 50 } })
-    unassignedPages.value = res.data.items.filter((p: PageListItem) => !p.notebook_id)
+    const res = await http.get('/api/pages', { params: { unassigned: true, page: 1, page_size: 50 } })
+    unassignedPages.value = res.data.items
+    unassignedCount.value = res.data.total
   } catch { /* ignore */ }
 }
 
@@ -391,8 +393,8 @@ const selectUnassigned = async () => {
 const loadNotebooks = async () => {
   try {
     const res = await http.get('/api/notebooks')
-    notebooks.value = res.data
-    loadUnassignedPages()
+    notebooks.value = res.data.notebooks
+    unassignedCount.value = res.data.unassigned_count
   } catch (e) {
     ElMessage.error('加载笔记本失败')
   }
@@ -439,6 +441,10 @@ const selectNotebook = async (nb: Notebook) => {
 }
 
 const selectPage = async (page: PageListItem) => {
+  if (saveTimeout) {
+    clearTimeout(saveTimeout)
+    saveTimeout = null
+  }
   if (saveStatus.value === 'unsaved' && currentPage.value) {
     await savePage()
   }
@@ -536,6 +542,10 @@ const scheduleSave = () => {
 
 const savePage = async () => {
   if (!currentPage.value) return
+  if (saveTimeout) {
+    clearTimeout(saveTimeout)
+    saveTimeout = null
+  }
   saveStatus.value = 'saving'
   try {
     await http.put(`/api/pages/${currentPage.value.id}`, {
@@ -794,6 +804,10 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  if (saveTimeout) {
+    clearTimeout(saveTimeout)
+    saveTimeout = null
+  }
   window.removeEventListener('keydown', handleKeydown)
 })
 </script>

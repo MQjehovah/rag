@@ -7,23 +7,10 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.models.database import User, UserGroup, get_session, get_engine, init_db
+from app.api.deps import get_db
+from app.models.database import User, UserGroup
 
 ALGORITHM = "HS256"
-
-_engine = None
-_session = None
-
-
-def get_db():
-    global _engine, _session
-    if _engine is None:
-        _engine = get_engine(settings.database_url)
-        init_db(_engine)
-    if _session is None:
-        _session = get_session(_engine)
-    return _session
-
 
 security = HTTPBearer()
 

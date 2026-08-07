@@ -1,30 +1,18 @@
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.orm import Session
-from typing import List
 import uuid
 
-from app.models.database import Page, PageChunk, Notebook, get_session, get_engine, init_db
-from app.models.schema import NotebookCreate, NotebookResponse
+from app.models.database import Page, PageChunk, Notebook
+from app.models.schema import NotebookCreate, NotebookResponse, NotebookListResponse
 from app.core.rag import VectorStore
+from app.api.deps import get_db
 from app.core.jwt_utils import get_current_user
 from app.config import settings
 
 router = APIRouter(prefix="/api/notebooks", tags=["笔记本"])
 
-_engine = None
-_session = None
-
-def get_db():
-    global _engine, _session
-    if _engine is None:
-        _engine = get_engine(settings.database_url)
-        init_db(_engine)
-    if _session is None:
-        _session = get_session(_engine)
-    return _session
-
 @router.post("", response_model=NotebookResponse)
-async def create_notebook(data: NotebookCreate, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+def create_notebook(data: NotebookCreate, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     group_id = data.group_id
     if group_id and group_id not in current_user["groups"]:
         group_id = current_user["groups"][0] if current_user["groups"] else None
@@ -36,16 +24,22 @@ async def create_notebook(data: NotebookCreate, db: Session = Depends(get_db), c
     db.refresh(notebook)
     return notebook
 
-@router.get("", response_model=List[NotebookResponse])
-async def list_notebooks(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+@router.get("", response_model=NotebookListResponse)
+def list_notebooks(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     query = db.query(Notebook)
     if "__local_admin__" not in current_user["groups"]:
         query = query.filter((Notebook.group_id.in_(current_user["groups"])) | (Notebook.group_id.is_(None)))
     notebooks = query.order_by(Notebook.updated_at.desc()).all()
-    return notebooks
+
+    unassigned_count = db.query(Page.id).filter(Page.notebook_id.is_(None)).count()
+
+    return NotebookListResponse(
+        notebooks=notebooks,
+        unassigned_count=unassigned_count,
+    )
 
 @router.get("/{notebook_id}", response_model=NotebookResponse)
-async def get_notebook(notebook_id: str, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+def get_notebook(notebook_id: str, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     notebook = db.query(Notebook).filter(Notebook.id == notebook_id).first()
     if not notebook:
         raise HTTPException(status_code=404, detail="笔记本不存在")
@@ -55,7 +49,7 @@ async def get_notebook(notebook_id: str, db: Session = Depends(get_db), current_
     return notebook
 
 @router.put("/{notebook_id}", response_model=NotebookResponse)
-async def update_notebook(notebook_id: str, data: NotebookCreate, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+def update_notebook(notebook_id: str, data: NotebookCreate, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     notebook = db.query(Notebook).filter(Notebook.id == notebook_id).first()
     if not notebook:
         raise HTTPException(status_code=404, detail="笔记本不存在")
@@ -70,7 +64,7 @@ async def update_notebook(notebook_id: str, data: NotebookCreate, db: Session = 
     return notebook
 
 @router.delete("/{notebook_id}")
-async def delete_notebook(notebook_id: str, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+def delete_notebook(notebook_id: str, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     notebook = db.query(Notebook).filter(Notebook.id == notebook_id).first()
     if not notebook:
         raise HTTPException(status_code=404, detail="笔记本不存在")

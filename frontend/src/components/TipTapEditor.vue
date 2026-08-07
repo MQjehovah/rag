@@ -39,7 +39,22 @@ import TableRow from '@tiptap/extension-table-row'
 import TableCell from '@tiptap/extension-table-cell'
 import TableHeader from '@tiptap/extension-table-header'
 import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight'
-import { createLowlight, all } from 'lowlight'
+import { createLowlight } from 'lowlight'
+import javascript from 'highlight.js/lib/languages/javascript'
+import typescript from 'highlight.js/lib/languages/typescript'
+import python from 'highlight.js/lib/languages/python'
+import java from 'highlight.js/lib/languages/java'
+import go from 'highlight.js/lib/languages/go'
+import rust from 'highlight.js/lib/languages/rust'
+import c from 'highlight.js/lib/languages/c'
+import cpp from 'highlight.js/lib/languages/cpp'
+import sql from 'highlight.js/lib/languages/sql'
+import bash from 'highlight.js/lib/languages/bash'
+import json from 'highlight.js/lib/languages/json'
+import yaml from 'highlight.js/lib/languages/yaml'
+import xml from 'highlight.js/lib/languages/xml'
+import css from 'highlight.js/lib/languages/css'
+import markdown from 'highlight.js/lib/languages/markdown'
 import CodeBlockComponent from './CodeBlockComponent.vue'
 import { Markdown } from 'tiptap-markdown'
 import mermaid from 'mermaid'
@@ -59,7 +74,23 @@ const uploadAndInsert = (view: any, file: File) => {
   })
 }
 
-const lowlight = createLowlight(all)
+const lowlight = createLowlight()
+lowlight.register('javascript', javascript)
+lowlight.register('typescript', typescript)
+lowlight.register('python', python)
+lowlight.register('java', java)
+lowlight.register('go', go)
+lowlight.register('rust', rust)
+lowlight.register('c', c)
+lowlight.register('cpp', cpp)
+lowlight.register('sql', sql)
+lowlight.register('bash', bash)
+lowlight.register('json', json)
+lowlight.register('yaml', yaml)
+lowlight.register('xml', xml)
+lowlight.register('html', xml)
+lowlight.register('css', css)
+lowlight.register('markdown', markdown)
 
 const props = defineProps<{
   modelValue: string
@@ -68,6 +99,11 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'update:modelValue', value: string): void
 }>()
+
+// Last markdown this component emitted back to the parent.  Comparing against
+// this is much cheaper than serializing the whole document on every prop
+// change, and it prevents feedback loops without re-parsing content.
+let lastEmitted = props.modelValue
 
 mermaid.initialize({
   startOnLoad: false,
@@ -145,56 +181,79 @@ const editor = useEditor({
   ],
   content: props.modelValue,
   onUpdate: ({ editor }) => {
-    emit('update:modelValue', editor.storage.markdown.getMarkdown())
+    const markdown = editor.storage.markdown.getMarkdown()
+    lastEmitted = markdown
+    emit('update:modelValue', markdown)
     nextTick(() => {
-      renderMermaid()
+      scheduleMermaid()
       disableSpellcheck()
     })
   },
   onCreate: () => {
     nextTick(() => {
-      renderMermaid()
+      scheduleMermaid()
       disableSpellcheck()
     })
   },
 })
 
 watch(() => props.modelValue, (newValue) => {
-  if (editor.value && editor.value.storage.markdown.getMarkdown() !== newValue) {
+  if (editor.value && lastEmitted !== newValue) {
     editor.value.commands.setContent(newValue || '')
+    mermaidCache.clear()
     nextTick(() => {
-      renderMermaid()
+      scheduleMermaid()
       disableSpellcheck()
     })
   }
 })
 
+let mermaidTimer: number | null = null
+const mermaidCache = new Map<string, string>()
+
+const scheduleMermaid = () => {
+  if (mermaidTimer) clearTimeout(mermaidTimer)
+  mermaidTimer = window.setTimeout(() => { renderMermaid() }, 300)
+}
+
 const renderMermaid = async () => {
-  await new Promise(resolve => setTimeout(resolve, 100))
-  
+  if (mermaidTimer) {
+    clearTimeout(mermaidTimer)
+    mermaidTimer = null
+  }
+
   const editorEl = document.querySelector('.ProseMirror')
   if (!editorEl) return
-  
+
   const mermaidBlocks = editorEl.querySelectorAll('.language-mermaid')
-  
+
   for (const block of mermaidBlocks) {
     const codeBlock = block.querySelector('code')
     if (!codeBlock) continue
-    
+
     const codeText = codeBlock.textContent || ''
     if (!codeText.trim()) continue
-    
+
+    const diagramDiv = block.querySelector('.mermaid-diagram')
+    const cachedSvg = mermaidCache.get(codeText)
+    if (diagramDiv && cachedSvg && diagramDiv.innerHTML === cachedSvg) continue
+
     try {
-      const id = `mermaid-${Math.random().toString(36).substr(2, 9)}`
-      const { svg } = await mermaid.render(id, codeText)
-      
-      let diagramDiv = block.querySelector('.mermaid-diagram')
-      if (!diagramDiv) {
-        diagramDiv = document.createElement('div')
-        diagramDiv.className = 'mermaid-diagram'
-        block.appendChild(diagramDiv)
+      let svg = cachedSvg
+      if (!svg) {
+        const id = `mermaid-${Math.random().toString(36).substr(2, 9)}`
+        const rendered = await mermaid.render(id, codeText)
+        svg = rendered.svg
+        mermaidCache.set(codeText, svg)
       }
-      diagramDiv.innerHTML = svg
+
+      let targetDiv = diagramDiv
+      if (!targetDiv) {
+        targetDiv = document.createElement('div')
+        targetDiv.className = 'mermaid-diagram'
+        block.appendChild(targetDiv)
+      }
+      targetDiv.innerHTML = svg
     } catch (e) {
       console.error('Mermaid error:', e)
     }
@@ -245,10 +304,14 @@ const insertMermaid = () => {
     editor.value?.chain().focus().insertContent(template).run()
   }
   
-  setTimeout(() => renderMermaid(), 200)
+  scheduleMermaid()
 }
 
 onBeforeUnmount(() => {
+  if (mermaidTimer) {
+    clearTimeout(mermaidTimer)
+    mermaidTimer = null
+  }
   editor.value?.destroy()
 })
 </script>

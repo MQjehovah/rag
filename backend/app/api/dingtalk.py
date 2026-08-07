@@ -5,18 +5,16 @@ from typing import Optional, List
 import uuid
 import logging
 
-from app.models.database import Page, Notebook, PageChunk, get_session, get_engine, init_db
+from app.models.database import Page, Notebook, PageChunk, get_session, get_engine
 from app.core.rag import EmbeddingService, VectorStore
 from app.core.dingtalk import DingTalkClient
+from app.api.deps import get_db
 from app.core.jwt_utils import get_current_user
 from app.config import settings
 
 router = APIRouter(prefix="/api/dingtalk", tags=["钉钉同步"])
 
 logger = logging.getLogger(__name__)
-
-_engine = None
-_session = None
 
 SYNC_STATUS = {
     "running": False,
@@ -26,17 +24,6 @@ SYNC_STATUS = {
     "errors": 0,
     "last_sync": "",
 }
-
-
-def get_db():
-    global _engine, _session
-    if _engine is None:
-        _engine = get_engine(settings.database_url)
-        init_db(_engine)
-    if _session is None:
-        _session = get_session(_engine)
-    return _session
-
 
 class SyncRequest(BaseModel):
     notebook_id: Optional[str] = None
@@ -239,7 +226,7 @@ async def list_docs(
 
 
 @router.post("/sync-selected")
-async def start_sync_selected(
+def start_sync_selected(
     req: SyncSelectedRequest,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
@@ -269,7 +256,7 @@ async def start_sync_selected(
 
 
 @router.post("/sync")
-async def start_sync(
+def start_sync(
     req: SyncRequest,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
@@ -296,7 +283,7 @@ async def start_sync(
 
 
 @router.get("/status")
-async def get_sync_status(current_user=Depends(get_current_user)):
+def get_sync_status(current_user=Depends(get_current_user)):
     return SYNC_STATUS
 
 

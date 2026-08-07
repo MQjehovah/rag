@@ -11,14 +11,12 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.models.database import Page, Notebook, get_session, get_engine, init_db
+from app.api.deps import get_db
 from app.core.jwt_utils import get_current_user
 
 router = APIRouter(prefix="/api/organize", tags=["自动整理"])
 
 logger = logging.getLogger(__name__)
-
-_engine = None
-_session = None
 
 ORGANIZE_BATCH_PROMPT = """你是一个企业知识库管理助手。请分析以下笔记，完成全面整理。
 
@@ -55,16 +53,6 @@ ORGANIZE_BATCH_PROMPT = """你是一个企业知识库管理助手。请分析�
   ]
 }}
 只返回 JSON，不要其他内容。"""
-
-
-def get_db():
-    global _engine, _session
-    if _engine is None:
-        _engine = get_engine(settings.database_url)
-        init_db(_engine)
-    if _session is None:
-        _session = get_session(_engine)
-    return _session
 
 
 async def _call_llm_json(messages: list) -> dict:

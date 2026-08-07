@@ -18,6 +18,11 @@ class NotebookResponse(NotebookBase):
     class Config:
         from_attributes = True
 
+
+class NotebookListResponse(BaseModel):
+    notebooks: List[NotebookResponse]
+    unassigned_count: int
+
 class PageBase(BaseModel):
     title: str = '无标题'
     content: str = ''

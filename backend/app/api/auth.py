@@ -6,26 +6,13 @@ import uuid
 from app.models.database import User, UserGroup, get_session, get_engine, init_db
 from app.models.schema import LoginRequest, LoginResponse, UserResponse, GroupResponse
 from app.core.auth import ldap_auth
+from app.api.deps import get_db
 from app.core.jwt_utils import create_access_token, get_current_user
 from app.config import settings
 
 router = APIRouter(prefix="/api/auth", tags=["认证"])
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
-_engine = None
-_session = None
-
-
-def get_db():
-    global _engine, _session
-    if _engine is None:
-        _engine = get_engine(settings.database_url)
-        init_db(_engine)
-    if _session is None:
-        _session = get_session(_engine)
-    return _session
-
 
 def _sync_user_groups(db: Session, user_id: str, groups: list[str]):
     db.query(UserGroup).filter(UserGroup.user_id == user_id).delete()
@@ -65,12 +52,17 @@ def _create_local_admin(db: Session):
 
 @router.on_event("startup")
 def startup():
-    db = get_db()
-    _create_local_admin(db)
+    engine = get_engine(settings.database_url)
+    init_db(engine)
+    db = get_session(engine)
+    try:
+        _create_local_admin(db)
+    finally:
+        db.close()
 
 
 @router.post("/login", response_model=LoginResponse)
-async def login(data: LoginRequest, db: Session = Depends(get_db)):
+def login(data: LoginRequest, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.username == data.username).first()
 
     if user and user.is_local:
@@ -145,10 +137,10 @@ async def login(data: LoginRequest, db: Session = Depends(get_db)):
 
 
 @router.get("/me", response_model=UserResponse)
-async def get_me(current_user=Depends(get_current_user), db: Session = Depends(get_db)):
+def get_me(current_user=Depends(get_current_user), db: Session = Depends(get_db)):
     return UserResponse(**current_user)
 
 
 @router.get("/groups", response_model=list[GroupResponse])
-async def get_groups(current_user=Depends(get_current_user)):
+def get_groups(current_user=Depends(get_current_user)):
     return [GroupResponse(group_name=g) for g in current_user["groups"]]

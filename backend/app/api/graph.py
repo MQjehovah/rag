@@ -4,27 +4,15 @@ from sqlalchemy import or_
 from typing import List, Dict, Any
 from collections import Counter, defaultdict
 
-from app.models.database import Page, GraphEdge, Notebook, PageChunk, get_session, get_engine, init_db
+from app.models.database import Page, GraphEdge, Notebook
 from app.models.schema import GraphDataResponse, GraphNodeResponse, GraphEdgeResponse, GraphStatsResponse
 from app.core.rag import EmbeddingService
 from app.core.graph import GraphBuilder
+from app.api.deps import get_db
 from app.core.jwt_utils import get_current_user
 from app.config import settings
 
 router = APIRouter(prefix="/api/graph", tags=["知识图谱"])
-
-_engine = None
-_session = None
-
-def get_db():
-    global _engine, _session
-    if _engine is None:
-        _engine = get_engine(settings.database_url)
-        init_db(_engine)
-    if _session is None:
-        _session = get_session(_engine)
-    return _session
-
 
 def _get_visible_pages(db, current_user):
     if "__local_admin__" in current_user["groups"]:
@@ -36,7 +24,7 @@ def _get_visible_pages(db, current_user):
 
 
 @router.get("/data")
-async def get_graph_data(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+def get_graph_data(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     pages = _get_visible_pages(db, current_user)
     visible_ids = {p.id for p in pages}
     edges = db.query(GraphEdge).filter(
@@ -72,7 +60,7 @@ async def get_graph_data(db: Session = Depends(get_db), current_user=Depends(get
 
 
 @router.get("/stats")
-async def get_graph_stats(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+def get_graph_stats(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     pages = _get_visible_pages(db, current_user)
     visible_ids = {p.id for p in pages}
     total_nodes = len(pages)
@@ -115,7 +103,7 @@ async def get_graph_stats(db: Session = Depends(get_db), current_user=Depends(ge
 
 
 @router.post("/rebuild")
-async def rebuild_graph(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+def rebuild_graph(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     pages = _get_visible_pages(db, current_user)
     if not pages:
         return {"message": "没有笔记，跳过构建"}
