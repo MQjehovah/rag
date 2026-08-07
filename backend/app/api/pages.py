@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import or_, text
 from typing import List, Optional
 import uuid
+import time
 from datetime import datetime
 import logging
 
@@ -11,6 +12,8 @@ logger = logging.getLogger(__name__)
 from app.models.database import Page, Notebook, PageChunk, get_engine
 from app.models.schema import PageCreate, PageUpdate, PageResponse, PageListItem, PageListResponse
 from app.core.rag import EmbeddingService, VectorStore
+from app.core.hybrid import HybridIndex
+from app.core.entity_graph import EntityGraphStore
 from app.api.deps import get_db
 from app.core.jwt_utils import get_current_user
 from app.config import settings
@@ -18,6 +21,17 @@ from app.config import settings
 router = APIRouter(prefix="/api/pages", tags=["笔记"])
 
 _embedding_service = None
+_last_index_time = {}
+
+
+def _should_index(page_id: str, cooldown: float = 15.0) -> bool:
+    """Throttle auto-indexing so autosave bursts do not queue an LLM/embedding
+    job for every keystroke burst."""
+    now = time.time()
+    if now - _last_index_time.get(page_id, 0.0) < cooldown:
+        return False
+    _last_index_time[page_id] = now
+    return True
 
 def get_embedding_service():
     global _embedding_service
@@ -25,25 +39,33 @@ def get_embedding_service():
         _embedding_service = EmbeddingService()
     return _embedding_service
 
-async def background_index_page(page_id: str, title: str, content: str):
+async def background_index_page(page_id: str):
     try:
         emb_svc = EmbeddingService()
         engine = get_engine(settings.database_url)
         from app.models.database import get_session as _get_session
         db = _get_session(engine)
 
+        page = db.query(Page).filter(Page.id == page_id).first()
+        if not page:
+            db.close()
+            await emb_svc.close()
+            return
+        title = page.title or ""
+        content = page.content or ""
+
         chunks = await emb_svc.encode_chunks(content, title)
         if chunks:
             vec_store = VectorStore(db)
             await vec_store.add_page_chunks(page_id, chunks)
 
-            keywords = EmbeddingService.extract_keywords(
-                (title or "") + " " + (content or ""), 20
-            )
-            page = db.query(Page).filter(Page.id == page_id).first()
-            if page:
-                page.keywords = ",".join(keywords)
-                db.commit()
+        keywords = EmbeddingService.extract_keywords(
+            title + " " + content, 20
+        )
+        page.keywords = ",".join(keywords)
+        HybridIndex(db).index_page(page_id, title, content, page.keywords)
+        await EntityGraphStore(db).extract_and_store(page_id, title, content)
+        db.commit()
 
         db.close()
         await emb_svc.close()
@@ -81,6 +103,8 @@ def create_page(data: PageCreate, background_tasks: BackgroundTasks, db: Session
     db.add(page)
     db.commit()
     db.refresh(page)
+    if page.content and _should_index(page.id):
+        background_tasks.add_task(background_index_page, page.id)
     return page
 
 @router.get("", response_model=PageListResponse)
@@ -153,6 +177,8 @@ def update_page(page_id: str, data: PageUpdate, background_tasks: BackgroundTask
 
     db.commit()
     db.refresh(page)
+    if _should_index(page.id):
+        background_tasks.add_task(background_index_page, page.id)
     return page
 
 @router.delete("/{page_id}")
@@ -162,6 +188,8 @@ def delete_page(page_id: str, db: Session = Depends(get_db), current_user=Depend
         raise HTTPException(status_code=404, detail="笔记不存在")
     _check_page_access(page, current_user, db)
 
+    HybridIndex(db).delete_page(page_id)
+    EntityGraphStore(db).delete_page(page_id)
     db.query(PageChunk).filter(PageChunk.page_id == page_id).delete()
     db.delete(page)
     db.commit()
@@ -182,16 +210,15 @@ async def index_page(page_id: str, db: Session = Depends(get_db), current_user=D
 
         if chunks:
             await vec_store.add_page_chunks(page.id, chunks)
-            keywords = EmbeddingService.extract_keywords(
-                (page.title or "") + " " + (page.content or ""), 20
-            )
-            page.keywords = ",".join(keywords)
-            db.commit()
-            await emb_svc.close()
-            return {"message": f"索引成功，共 {len(chunks)} 个分块"}
-        else:
-            await emb_svc.close()
-            return {"message": "内容为空，未创建索引"}
+        keywords = EmbeddingService.extract_keywords(
+            (page.title or "") + " " + (page.content or ""), 20
+        )
+        page.keywords = ",".join(keywords)
+        HybridIndex(db).index_page(page.id, page.title, page.content, page.keywords)
+        await EntityGraphStore(db).extract_and_store(page.id, page.title, page.content)
+        db.commit()
+        await emb_svc.close()
+        return {"message": f"索引成功，共 {len(chunks)} 个分块"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"索引失败: {str(e)}")
 
@@ -215,13 +242,14 @@ async def reindex_all(db: Session = Depends(get_db), current_user=Depends(get_cu
         try:
             vec_store.delete_page_chunks(page.id)
             db.commit()
-            chunks = await emb_svc.encode_chunks(page.content, page.title)
+            chunks = await emb_svc.encode_chunks(page.content, page.title, enrich_context=False)
             if chunks:
                 await vec_store.add_page_chunks(page.id, chunks)
             keywords = EmbeddingService.extract_keywords(
                 (page.title or "") + " " + (page.content or ""), 20
             )
             page.keywords = ",".join(keywords)
+            HybridIndex(db).index_page(page.id, page.title, page.content, page.keywords)
             db.commit()
             success += 1
         except Exception as e:

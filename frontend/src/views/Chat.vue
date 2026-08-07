@@ -11,12 +11,16 @@
           <div class="message-content markdown-body" :class="{ typing: !msg.content && loading }" v-html="msg.content ? renderContent(msg.content) : '思考中...'"></div>
           <div v-if="msg.sources && msg.sources.length" class="message-sources">
             <div class="sources-label">引用来源：</div>
-            <router-link
-              v-for="src in msg.sources"
-              :key="src.id"
-              :to="{ path: '/notes', query: { page: src.id } }"
-              class="source-link"
-            >{{ src.title }}</router-link>
+            <div v-for="(src, i) in msg.sources" :key="src.id" class="source-item">
+              <router-link
+                :to="{ path: '/notes', query: { page: src.id } }"
+                class="source-link"
+              >[{{ i + 1 }}] {{ src.title }}</router-link>
+              <div v-if="src.chunks && src.chunks.length" class="source-chunk">
+                <span v-if="src.chunks[0].context" class="source-chunk-ctx">{{ src.chunks[0].context }}</span>
+                {{ src.chunks[0].content }}
+              </div>
+            </div>
           </div>
           <div v-if="msg.role === 'assistant' && msg.content && !loading" class="message-actions">
             <el-button size="small" text type="primary" @click="handleSaveNote(idx)">保存为笔记</el-button>
@@ -98,6 +102,7 @@ const md = new MarkdownIt({
 interface Source {
   id: string
   title: string
+  chunks?: { content: string; context?: string }[]
 }
 
 interface Message {
@@ -430,6 +435,28 @@ const confirmSaveNote = async () => {
 }
 .source-link:hover {
   background: rgba(56,189,248,0.2);
+}
+.source-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(56,189,248,0.06);
+  border: 1px solid rgba(56,189,248,0.12);
+}
+.source-chunk {
+  font-size: 12px;
+  color: #94a3b8;
+  line-height: 1.5;
+  max-height: 60px;
+  overflow: hidden;
+  word-break: break-word;
+}
+.source-chunk-ctx {
+  display: block;
+  color: #7dd3fc;
+  margin-bottom: 2px;
 }
 .message-actions {
   margin-top: 8px;

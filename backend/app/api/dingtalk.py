@@ -7,6 +7,7 @@ import logging
 
 from app.models.database import Page, Notebook, PageChunk, get_session, get_engine
 from app.core.rag import EmbeddingService, VectorStore
+from app.core.hybrid import HybridIndex
 from app.core.dingtalk import DingTalkClient
 from app.api.deps import get_db
 from app.core.jwt_utils import get_current_user
@@ -94,9 +95,11 @@ async def _do_sync_selected(notebook_id: str, selected_docs: List[dict]):
 
                 if content and content.strip():
                     try:
-                        chunks = await emb_svc.encode_chunks(content, title)
+                        chunks = await emb_svc.encode_chunks(content, title, enrich_context=False)
                         if chunks:
                             await vec_store.add_page_chunks(page_id, chunks)
+                        HybridIndex(db).index_page(page_id, title, content)
+                        db.commit()
                     except Exception as e:
                         logger.warning(f"Index failed for {title}: {e}")
 
@@ -183,9 +186,11 @@ async def _do_sync(notebook_id: str, space_id: str = None):
 
                 if content and content.strip():
                     try:
-                        chunks = await emb_svc.encode_chunks(content, title)
+                        chunks = await emb_svc.encode_chunks(content, title, enrich_context=False)
                         if chunks:
                             await vec_store.add_page_chunks(page_id, chunks)
+                        HybridIndex(db).index_page(page_id, title, content)
+                        db.commit()
                     except Exception as e:
                         logger.warning(f"Index failed for {title}: {e}")
 

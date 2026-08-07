@@ -2,17 +2,34 @@
   <div class="graph-page">
     <header class="graph-header">
       <div class="graph-stats">
-        <span>{{ stats.total_nodes }} 个节点</span>
-        <span>{{ stats.total_edges }} 条关系</span>
-        <span>{{ stats.avg_connections }} 平均连接</span>
-        <span>{{ stats.clusters }} 个聚类</span>
+        <template v-if="viewMode === 'pages'">
+          <span>{{ stats.total_nodes }} 个节点</span>
+          <span>{{ stats.total_edges }} 条关系</span>
+          <span>{{ stats.avg_connections }} 平均连接</span>
+          <span>{{ stats.clusters }} 个聚类</span>
+        </template>
+        <template v-else>
+          <span>{{ stats.total_entities }} 个实体</span>
+          <span>{{ stats.total_relations }} 条实体关系</span>
+          <span>{{ entityNodeCount }} 个页面关联</span>
+        </template>
       </div>
       <div class="graph-controls">
-        <el-input v-model="filterText" placeholder="过滤节点..." clearable style="width: 200px" />
+        <el-radio-group v-model="viewMode" size="small">
+          <el-radio-button value="pages">知识图谱</el-radio-button>
+          <el-radio-button value="entities">实体图谱</el-radio-button>
+        </el-radio-group>
+        <el-input v-model="filterText" placeholder="过滤节点..." clearable style="width: 180px" />
         <el-button @click="zoomIn">放大</el-button>
         <el-button @click="zoomOut">缩小</el-button>
         <el-button @click="zoomFit">适应</el-button>
         <el-button type="primary" @click="rebuildGraph" :loading="rebuilding">重建图谱</el-button>
+        <el-button
+          v-if="viewMode === 'entities'"
+          type="warning"
+          @click="rebuildEntities"
+          :loading="rebuildingEntities"
+        >重建实体图谱</el-button>
       </div>
     </header>
     <div class="graph-container" ref="containerRef">
@@ -20,13 +37,16 @@
     </div>
     <div v-if="hoveredNode" class="node-tooltip" :style="{ left: tooltipPos.x + 'px', top: tooltipPos.y + 'px' }">
       <strong>{{ hoveredNode.title }}</strong>
+      <div v-if="hoveredNode.kind === 'entity' && hoveredNode.entity_type" class="tooltip-type">
+        {{ hoveredNode.entity_type }}
+      </div>
       <div>{{ hoveredNode.link_count }} 个连接</div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount, watch } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import http from '../api/http'
@@ -37,6 +57,8 @@ interface GraphNode {
   title: string
   notebook_id: string | null
   link_count: number
+  kind?: 'page' | 'entity'
+  entity_type?: string | null
 }
 
 interface GraphEdge {
@@ -45,22 +67,51 @@ interface GraphEdge {
   target_id: string
   weight: number
   edge_type: string
+  label?: string
 }
+
+type ViewMode = 'pages' | 'entities'
 
 const router = useRouter()
 const containerRef = ref<HTMLDivElement>()
 const svgRef = ref<SVGSVGElement>()
 const filterText = ref('')
 const rebuilding = ref(false)
+const rebuildingEntities = ref(false)
+const viewMode = ref<ViewMode>('pages')
 const hoveredNode = ref<GraphNode | null>(null)
 const tooltipPos = ref({ x: 0, y: 0 })
-const stats = ref({ total_nodes: 0, total_edges: 0, avg_connections: 0, clusters: 0 })
+const stats = ref({
+  total_nodes: 0, total_edges: 0, avg_connections: 0, clusters: 0,
+  total_entities: 0, total_relations: 0,
+})
 
 const notebookColors = [
   '#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6',
   '#ec4899', '#06b6d4', '#84cc16', '#f97316', '#6366f1',
   '#14b8a6', '#e11d48', '#7c3aed', '#0ea5e9', '#d946ef',
 ]
+
+const entityTypeColors: Record<string, string> = {
+  '人物': '#f472b6',
+  '组织': '#fb923c',
+  '项目': '#34d399',
+  '系统': '#38bdf8',
+  '技术栈': '#a78bfa',
+  '产品': '#facc15',
+  '概念': '#94a3b8',
+  '版本号': '#e879f9',
+  '文档': '#4ade80',
+}
+
+const entityNodeCount = computed(() => {
+  if (viewMode.value !== 'entities') return 0
+  return nodes.filter(
+    n => n.kind === 'page' && edges.some(
+      e => e.edge_type === 'page_entity' && (e.source_id === n.id || e.target_id === n.id)
+    )
+  ).length
+})
 
 let simulation: d3.Simulation<any, undefined> | null = null
 let zoomBehavior: d3.ZoomBehavior<SVGSVGElement, unknown> | null = null
@@ -89,6 +140,9 @@ const loadData = async () => {
 }
 
 const getColor = (node: GraphNode) => {
+  if (node.kind === 'entity') {
+    return entityTypeColors[node.entity_type || ''] || '#94a3b8'
+  }
   if (!node.notebook_id) return '#9ca3af'
   if (!(node.notebook_id in notebookMap)) {
     const idx = Object.keys(notebookMap).length % notebookColors.length
@@ -117,16 +171,31 @@ const renderGraph = () => {
     })
   svgSelection.call(zoomBehavior)
 
+  const isEntityView = viewMode.value === 'entities'
+  const effectiveNodes = isEntityView
+    ? nodes.filter(
+        n => n.kind === 'entity' || edges.some(
+          e => e.edge_type === 'page_entity' && (e.source_id === n.id || e.target_id === n.id)
+        )
+      )
+    : nodes.filter(n => n.kind !== 'entity')
+  const effectiveEdges = isEntityView
+    ? edges.filter(e => e.edge_type === 'entity_relation' || e.edge_type === 'page_entity')
+    : edges.filter(e => e.edge_type !== 'entity_relation' && e.edge_type !== 'page_entity')
+
   const filteredNodes = filterText.value
-    ? nodes.filter(n => n.title.toLowerCase().includes(filterText.value.toLowerCase()))
-    : nodes
+    ? effectiveNodes.filter(n => n.title.toLowerCase().includes(filterText.value.toLowerCase()))
+    : effectiveNodes
   const filteredNodeIds = new Set(filteredNodes.map(n => n.id))
-  const filteredEdges = edges.filter(e => filteredNodeIds.has(e.source_id) && filteredNodeIds.has(e.target_id))
+  const filteredEdges = effectiveEdges.filter(
+    e => filteredNodeIds.has(e.source_id) && filteredNodeIds.has(e.target_id)
+  )
 
   const simNodes: (GraphNode & d3.SimulationNodeDatum)[] = filteredNodes.map(n => ({ ...n }))
   const simLinks: d3.SimulationLinkDatum<typeof simNodes[0]>[] = filteredEdges.map(e => ({
     source: e.source_id,
     target: e.target_id,
+    label: e.label || '',
   }))
 
   const link = g.append('g')
@@ -141,7 +210,7 @@ const renderGraph = () => {
     .selectAll<SVGCircleElement, typeof simNodes[0]>('circle')
     .data(simNodes)
     .join('circle')
-    .attr('r', (d) => Math.max(6, Math.sqrt(d.link_count + 1) * 5))
+    .attr('r', (d) => d.kind === 'entity' ? 8 : Math.max(6, Math.sqrt(d.link_count + 1) * 5))
     .attr('fill', (d) => getColor(d))
     .attr('stroke', '#1e293b')
     .attr('stroke-width', 2)
@@ -174,7 +243,9 @@ const renderGraph = () => {
       link.attr('stroke', '#334155').attr('stroke-width', 1)
     })
     .on('click', (_event, d) => {
-      router.push({ path: '/notes', query: { pageId: d.id } })
+      if (d.kind === 'page') {
+        router.push({ path: '/notes', query: { page: d.id } })
+      }
     })
     .call(d3.drag<SVGCircleElement, typeof simNodes[0]>()
       .on('start', (event, d) => {
@@ -201,7 +272,18 @@ const renderGraph = () => {
     .attr('font-size', 11)
     .attr('fill', '#94a3b8')
     .attr('text-anchor', 'middle')
-    .attr('dy', (d) => -(Math.max(6, Math.sqrt(d.link_count + 1) * 5) + 6))
+    .attr('dy', (d) => -(d.kind === 'entity' ? 14 : Math.max(6, Math.sqrt(d.link_count + 1) * 5) + 6))
+
+  const edgeLabel = g.append('g')
+    .selectAll('text')
+    .data(simLinks.filter((l: any) => l.label))
+    .join('text')
+    .text((d: any) => d.label)
+    .attr('font-size', 9)
+    .attr('fill', '#7dd3fc')
+    .attr('text-anchor', 'middle')
+    .attr('pointer-events', 'none')
+    .attr('opacity', 0.85)
 
   simulation = d3.forceSimulation(simNodes)
     .force('link', d3.forceLink(simLinks).id((d: any) => d.id).distance(100))
@@ -220,6 +302,9 @@ const renderGraph = () => {
       label
         .attr('x', (d: any) => d.x)
         .attr('y', (d: any) => d.y)
+      edgeLabel
+        .attr('x', (d: any) => (d.source.x + d.target.x) / 2)
+        .attr('y', (d: any) => (d.source.y + d.target.y) / 2 - 4)
     })
 }
 
@@ -255,7 +340,24 @@ const rebuildGraph = async () => {
   }
 }
 
+const rebuildEntities = async () => {
+  rebuildingEntities.value = true
+  try {
+    const res = await http.post('/api/graph/rebuild-entities')
+    ElMessage.success(res.data.message)
+    await loadData()
+  } catch {
+    ElMessage.error('重建实体图谱失败')
+  } finally {
+    rebuildingEntities.value = false
+  }
+}
+
 watch(filterText, () => {
+  renderGraph()
+})
+
+watch(viewMode, () => {
   renderGraph()
 })
 
@@ -317,5 +419,10 @@ onBeforeUnmount(() => {
   z-index: 100;
   pointer-events: none;
   color: #e2e8f0;
+}
+.tooltip-type {
+  color: #7dd3fc;
+  font-size: 12px;
+  margin-top: 2px;
 }
 </style>

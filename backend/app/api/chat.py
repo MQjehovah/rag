@@ -1,6 +1,5 @@
 import json
 import logging
-import asyncio
 from typing import List, Dict, Any
 
 import httpx
@@ -10,10 +9,10 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.core.rag import EmbeddingService, VectorStore, RerankerService
+from app.core.rag import EmbeddingService, RerankerService
+from app.core.retrieval import RetrievalPipeline
 from app.models.database import Page
 from app.api.deps import get_db
-from app.api.search_common import get_visible_page_ids, keyword_search
 from app.core.jwt_utils import get_current_user
 
 router = APIRouter(prefix="/api/chat", tags=["AI问答"])
@@ -47,7 +46,8 @@ SYSTEM_PROMPT = """你是一个基于企业知识库的智能助手。请根据�
 要求：
 - 只根据参考资料中的信息回答，不要编造内容
 - 如果参考资料中没有相关信息，请诚实说明
-- 回答时引用来源笔记的标题
+- 回答时用 [1][2] 等编号标注对应资料，编号与参考资料列表一致
+- 每个关键结论都要有编号引用，方便用户核对
 - 使用中文回答"""
 
 RAG_PROMPT_TEMPLATE = """参考资料：
@@ -57,97 +57,79 @@ RAG_PROMPT_TEMPLATE = """参考资料：
 
 用户问题：{query}
 
-请根据以上参考资料回答问题。"""
+请根据以上参考资料回答问题，并在相应位置用 [1][2] 等编号标注引用来源。"""
 
 
-async def _search_notes(query: str, db: Session, current_user) -> List[Dict[str, Any]]:
-    embedding_service = get_embedding_service()
-    reranker_svc = get_reranker_service()
-    try:
-        query_embedding = await embedding_service.encode(query)
-    except Exception as e:
-        logger.error(f"Embedding failed: {e}")
-        return []
+JUDGE_PROMPT = """判断已检索到的资料是否足够回答用户问题。
 
-    visible_ids = await asyncio.to_thread(get_visible_page_ids, db, current_user)
+用户问题: {query}
 
-    vec_scores: Dict[str, float] = {}
-    vec_store = VectorStore(db)
-    try:
-        vec_results = await vec_store.search(query_embedding, settings.vector_recall_k)
-        for item in vec_results:
-            page_id = item["page_id"]
-            if page_id not in visible_ids:
-                continue
-            sim = 1.0 - item["distance"]
-            if sim < 0.35:
-                continue
-            if page_id not in vec_scores or sim > vec_scores[page_id]:
-                vec_scores[page_id] = sim
-    except Exception as e:
-        logger.warning(f"Vector search error: {e}")
+已检索到的资料:
+{notes}
 
-    kw_scores: Dict[str, float] = {}
-    try:
-        query_kw = await asyncio.to_thread(EmbeddingService.extract_keywords, query, 10, True)
-        if query_kw:
-            kw_scores, _ = await asyncio.to_thread(keyword_search, db, query_kw, visible_ids)
-    except Exception as e:
-        logger.warning(f"Keyword search error: {e}")
+只返回 JSON，不要其他内容:
+{{
+  "sufficient": true 或 false,
+  "gap": "缺少的信息（一句话）",
+  "followup_query": "还需要补充检索的子问题；如果已足够则为空字符串"
+}}"""
 
-    candidate_ids = set(vec_scores.keys()) | set(kw_scores.keys())
-    if not candidate_ids:
-        return []
 
-    pages = db.query(Page).filter(Page.id.in_(list(candidate_ids))).all()
-    page_map = {p.id: p for p in pages}
+async def _judge_sufficiency(query: str, notes: List[Dict[str, Any]]) -> Dict[str, Any]:
+    parts = []
+    for i, note in enumerate(notes, 1):
+        chunks = note.get("chunks") or []
+        excerpt = ""
+        if chunks:
+            excerpt = (chunks[0].get("content") or "")[:500]
+        if not excerpt:
+            excerpt = (note.get("content") or "")[:500]
+        parts.append(f"[{i}] {note.get('title', '')}\n{excerpt}")
+    return await _call_llm_json(
+        [{"role": "user", "content": JUDGE_PROMPT.format(
+            query=query,
+            notes="\n\n".join(parts) if parts else "无",
+        )}],
+        context="agentic-judge",
+    )
 
-    rr_scores: Dict[str, float] = {}
-    rerank_candidates = []
-    for pid in candidate_ids:
-        p = page_map.get(pid)
-        if p:
-            rerank_candidates.append({
-                "id": pid,
-                "text": (p.title or "") + " " + (p.content or "")[:500],
-            })
 
-    if rerank_candidates and len(rerank_candidates) > 1:
+async def _agentic_search_notes(
+    query: str,
+    db: Session,
+    current_user,
+) -> List[Dict[str, Any]]:
+    """Multi-hop retrieval: search, judge sufficiency, re-search if needed."""
+    pipeline = RetrievalPipeline(
+        db,
+        embedding_svc=get_embedding_service(),
+        reranker_svc=get_reranker_service(),
+    )
+    max_hops = max(settings.agentic_max_hops, 1)
+    all_notes: List[Dict[str, Any]] = []
+    seen_ids = set()
+    current_q = query
+
+    for hop in range(max_hops):
+        outcome = await pipeline.retrieve(current_q, current_user, top_k=5)
+        for note in outcome["results"]:
+            if note["id"] not in seen_ids:
+                seen_ids.add(note["id"])
+                all_notes.append(note)
+
+        if hop >= max_hops - 1 or not settings.llm_api_url:
+            break
         try:
-            docs = [c["text"] for c in rerank_candidates]
-            rerank_results = await reranker_svc.rerank(query, docs, top_k=10)
-            for r in rerank_results:
-                idx = r.get("index", 0)
-                if idx < len(rerank_candidates):
-                    rr_scores[rerank_candidates[idx]["id"]] = r.get("relevance_score", 0.0)
+            decision = await _judge_sufficiency(query, all_notes)
         except Exception as e:
-            logger.warning(f"Reranker error: {e}")
+            logger.warning(f"Agentic judge failed: {e}")
+            break
+        followup = (decision.get("followup_query") or "").strip()
+        if decision.get("sufficient") is True or not followup:
+            break
+        current_q = followup
 
-    W_VEC, W_KW, W_RR = 1.0, 1.5, 5.0
-    scored = []
-    for pid in candidate_ids:
-        v = vec_scores.get(pid, 0.0)
-        k = kw_scores.get(pid, 0.0)
-        r = rr_scores.get(pid, 0.0)
-        final = v * W_VEC + k * W_KW + r * W_RR
-        scored.append((pid, final))
-
-    scored.sort(key=lambda x: -x[1])
-    top_ids = [pid for pid, _ in scored[:5]]
-
-    results = []
-    for pid in top_ids:
-        p = page_map.get(pid)
-        if p:
-            content = p.content or ""
-            if len(content) > 3000:
-                content = content[:3000] + "\n...(内容过长已截断)"
-            results.append({
-                "id": pid,
-                "title": p.title or "",
-                "content": content,
-            })
-    return results
+    return all_notes
 
 
 @router.post("")
@@ -155,13 +137,22 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db), current_user
     if not settings.llm_api_url:
         raise HTTPException(status_code=500, detail="未配置 LLM API")
 
-    notes = await _search_notes(request.query, db, current_user)
+    notes = await _agentic_search_notes(request.query, db, current_user)
 
     context_parts = []
     sources = []
-    for note in notes:
-        context_parts.append(f"【{note['title']}】\n{note['content']}")
-        sources.append({"id": note["id"], "title": note["title"]})
+    for i, note in enumerate(notes, 1):
+        chunks = note.get("chunks") or []
+        chunk_texts = [c.get("content") or "" for c in chunks]
+        excerpt = chunk_texts[0] if chunk_texts else (note.get("content") or "")[:500]
+        if len(excerpt) > 2000:
+            excerpt = excerpt[:2000] + "\n...(内容过长已截断)"
+        context_parts.append(f"[{i}]《{note['title']}》\n{excerpt}")
+        sources.append({
+            "id": note["id"],
+            "title": note["title"],
+            "chunks": chunks[:3],
+        })
 
     context = "\n\n".join(context_parts) if context_parts else "未找到相关笔记"
     user_message = RAG_PROMPT_TEMPLATE.format(context=context, query=request.query)

@@ -30,6 +30,7 @@ class Page(Base):
     title = Column(String(255), nullable=False, default='无标题')
     content = Column(Text, default='')
     keywords = Column(Text, default='')
+    term_count = Column(Integer, nullable=True, default=0)
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now, index=True)
 
@@ -42,9 +43,24 @@ class PageChunk(Base):
     chunk_index = Column(Integer, nullable=False, default=0)
     content = Column(Text, nullable=False)
     embedding = Column(Text, nullable=True)
+    context = Column(Text, nullable=True)
 
     __table_args__ = (
         Index('ix_page_chunks_page_idx', 'page_id', 'chunk_index'),
+    )
+
+
+class PageTerm(Base):
+    __tablename__ = 'page_terms'
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    page_id = Column(String(36), ForeignKey('pages.id', ondelete='CASCADE'), nullable=False, index=True)
+    term = Column(String(128), nullable=False, index=True)
+    tf = Column(Integer, nullable=False, default=1)
+
+    __table_args__ = (
+        Index('ix_page_terms_page_term', 'page_id', 'term'),
+        Index('ix_page_terms_term_page', 'term', 'page_id'),
     )
 
 
@@ -60,6 +76,33 @@ class GraphEdge(Base):
 
     __table_args__ = (
         Index('ix_graph_edges_pair', 'source_id', 'target_id'),
+    )
+
+
+class GraphEntity(Base):
+    __tablename__ = 'graph_entities'
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    name = Column(String(255), nullable=False, index=True)
+    entity_type = Column(String(64), nullable=True, default='')
+    page_id = Column(String(36), ForeignKey('pages.id', ondelete='CASCADE'), nullable=True, index=True)
+    properties = Column(Text, nullable=True, default='')
+    created_at = Column(DateTime, default=datetime.now)
+
+
+class GraphEntityEdge(Base):
+    __tablename__ = 'graph_entity_edges'
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    source_entity_id = Column(String(36), ForeignKey('graph_entities.id', ondelete='CASCADE'), nullable=False, index=True)
+    target_entity_id = Column(String(36), ForeignKey('graph_entities.id', ondelete='CASCADE'), nullable=False, index=True)
+    relation = Column(String(255), nullable=True, default='')
+    page_id = Column(String(36), ForeignKey('pages.id', ondelete='CASCADE'), nullable=True, index=True)
+    weight = Column(Float, default=1.0)
+    created_at = Column(DateTime, default=datetime.now)
+
+    __table_args__ = (
+        Index('ix_graph_entity_edges_pair', 'source_entity_id', 'target_entity_id'),
     )
 
 

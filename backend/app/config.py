@@ -16,6 +16,12 @@ class Settings(BaseSettings):
     top_k: int = 5
     vector_recall_k: int = 50
 
+    hybrid_bm25_enabled: bool = True
+    query_rewrite_enabled: bool = True
+    contextual_retrieval_enabled: bool = True
+    entity_graph_enabled: bool = True
+    agentic_max_hops: int = 2
+
     reranker_api_url: str = ""
     reranker_model: str = ""
 

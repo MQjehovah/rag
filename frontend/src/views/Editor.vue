@@ -152,6 +152,12 @@
             <el-tag size="small" :type="getSourceTagType(result.source)">{{ result.source }}</el-tag>
           </div>
           <div class="result-content">{{ result.content }}</div>
+          <div v-if="result.chunks && result.chunks.length" class="result-chunks">
+            <div v-for="(c, ci) in result.chunks.slice(0, 2)" :key="ci" class="result-chunk">
+              <span v-if="c.context" class="result-chunk-ctx">{{ c.context }}</span>
+              {{ c.content }}
+            </div>
+          </div>
           <div class="result-footer">
             <el-tag size="small" type="info">得分: {{ result.score?.toFixed(3) }}</el-tag>
           </div>
@@ -303,10 +309,13 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage, ElNotification } from 'element-plus'
 import type { UploadFile as ElUploadFile } from 'element-plus'
 import http from '../api/http'
 import TipTapEditor from '../components/TipTapEditor.vue'
+
+const route = useRoute()
 
 interface Notebook {
   id: string
@@ -453,6 +462,29 @@ const selectPage = async (page: PageListItem) => {
     currentPage.value = res.data
   } catch (e) {
     ElMessage.error('加载笔记内容失败')
+  }
+}
+
+const openPageById = async (pageId: string) => {
+  try {
+    const res = await http.get(`/api/pages/${pageId}`)
+    const page = res.data
+    currentPage.value = page
+    if (page.notebook_id) {
+      const nb = notebooks.value.find(n => n.id === page.notebook_id)
+      if (nb) {
+        currentNotebook.value = nb
+        await loadPages(true)
+      } else {
+        currentNotebook.value = { id: '__unassigned__', name: '未分类' }
+        await loadUnassignedPages()
+      }
+    } else {
+      currentNotebook.value = { id: '__unassigned__', name: '未分类' }
+      await loadUnassignedPages()
+    }
+  } catch (e) {
+    ElMessage.error('打开笔记失败')
   }
 }
 
@@ -798,9 +830,13 @@ watch(showDingTalk, (val) => {
   if (val) dtStep.value = 0
 })
 
-onMounted(() => {
-  loadNotebooks()
+onMounted(async () => {
+  await loadNotebooks()
   window.addEventListener('keydown', handleKeydown)
+  const targetId = route.query.page as string | undefined
+  if (targetId) {
+    await openPageById(targetId)
+  }
 })
 
 onBeforeUnmount(() => {
@@ -945,6 +981,19 @@ html, body, #app { height: 100%; }
 .search-result:hover { background: #f8fafc; }
 .result-title { font-weight: 600; margin-bottom: 6px; color: #1e293b; }
 .result-content { color: #64748b; font-size: 13px; margin-bottom: 8px; line-height: 1.5; }
+.result-chunks { margin-bottom: 8px; display: flex; flex-direction: column; gap: 4px; }
+.result-chunk {
+  font-size: 12px;
+  color: #64748b;
+  background: #f8fafc;
+  border-radius: 6px;
+  padding: 6px 10px;
+  line-height: 1.5;
+  max-height: 72px;
+  overflow: hidden;
+  word-break: break-word;
+}
+.result-chunk-ctx { display: block; color: #2563eb; margin-bottom: 2px; }
 .result-header {
   display: flex;
   align-items: center;

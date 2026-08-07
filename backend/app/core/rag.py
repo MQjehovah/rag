@@ -3,6 +3,7 @@ import json
 import numpy as np
 from typing import List, Dict, Any, Optional, Tuple
 from app.config import settings
+from app.core.llm import call_llm_json
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -87,17 +88,104 @@ class EmbeddingService:
         chunks = self.splitter.split_text(full_text)
         return [chunk for chunk in chunks if chunk.strip()]
 
-    async def encode_chunks(self, content: str, title: str = "") -> List[Tuple[str, List[float]]]:
-        chunks = self.split_text(content, title)
-        if not chunks:
+    def split_text_structured(self, content: str, title: str = "") -> List[Dict[str, str]]:
+        """Split markdown by headings, keeping the heading chain as context.
+
+        Returns a list of {text, context}; every chunk knows which document and
+        which section it belongs to, so retrieval can carry that context.
+        """
+        lines = (content or "").splitlines()
+        sections: List[Dict[str, Any]] = []
+        chain: List[str] = []
+        buf: List[str] = []
+
+        def flush():
+            if not buf:
+                return
+            text = "\n".join(buf).strip()
+            if text:
+                sections.append({"chain": list(chain), "text": text})
+            buf.clear()
+
+        for line in lines:
+            m = re.match(r'^(#{1,6})\s+(.*)$', line.strip())
+            if m:
+                flush()
+                level = len(m.group(1))
+                heading = m.group(2).strip()
+                chain = chain[:level - 1] + [heading]
+            else:
+                buf.append(line)
+        flush()
+
+        if not sections and (content or "").strip():
+            sections.append({"chain": [], "text": (content or "").strip()})
+
+        chunks = []
+        for sec in sections:
+            context = " > ".join(sec["chain"])
+            if title:
+                context = f"{title} > {context}" if context else title
+            for piece in self.splitter.split_text(sec["text"]):
+                if piece.strip():
+                    chunks.append({"text": piece.strip(), "context": context})
+        return chunks
+
+    async def _enrich_contexts(
+        self,
+        units: List[Dict[str, str]],
+        title: str,
+        content: str,
+    ) -> List[Dict[str, str]]:
+        """Optionally ask the LLM for a short context per chunk (max 10)."""
+        enriched = []
+        limit = 10
+        for i, unit in enumerate(units[:limit]):
+            prompt = (
+                "你是文档分块助手。根据整篇文档，为下面的分块生成一句不超过50字的中文上下文描述，"
+                "说明它在文档中的位置和主题，方便检索时理解该块的背景。\n\n"
+                f"文档标题: {title or '无'}\n\n"
+                f"文档内容: {content[:6000]}\n\n"
+                f"分块内容:\n{unit['text'][:1000]}\n\n"
+                '只返回 JSON: {"context": "..."}'
+            )
+            result = await call_llm_json(
+                [{"role": "user", "content": prompt}],
+                context="chunk-context",
+            )
+            ctx = (result.get("context") or "").strip()
+            if ctx:
+                unit = {"text": unit["text"], "context": f"{unit['context']}\n{ctx}".strip()}
+            enriched.append(unit)
+        enriched.extend(units[limit:])
+        return enriched
+
+    async def encode_chunks(
+        self,
+        content: str,
+        title: str = "",
+        enrich_context: bool = True,
+    ) -> List[Tuple[str, List[float], Optional[str]]]:
+        """Encode chunks with structure/context-aware text.
+
+        Returns (chunk_text, embedding, context).  The embedding is computed
+        over ``context + chunk`` so recall benefits from surrounding context.
+        """
+        units = self.split_text_structured(content, title)
+        if not units:
             return []
+        if enrich_context and settings.contextual_retrieval_enabled and settings.llm_api_url:
+            units = await self._enrich_contexts(units, title, content)
 
         results = []
-        for chunk_text in chunks:
+        for unit in units:
+            chunk_text = unit["text"]
+            ctx = unit.get("context") or ""
+            embed_text = f"{ctx}\n\n{chunk_text}" if ctx else chunk_text
             try:
-                emb = await self.encode(chunk_text)
+                emb = await self.encode(embed_text)
                 if emb:
-                    results.append((chunk_text, emb))
+                    results.append((chunk_text, emb, ctx))
             except Exception as e:
                 logger.error(f"Encode chunk error: {e}")
         return results
@@ -181,13 +269,21 @@ class VectorStore:
     def __init__(self, db: Session):
         self.db = db
 
-    async def add_page_chunks(self, page_id: str, chunks: List[Tuple[str, List[float]]]):
+    async def add_page_chunks(
+        self,
+        page_id: str,
+        chunks: List[Tuple[str, List[float], Optional[str]]],
+    ):
         self.delete_page_chunks(page_id)
 
         dialect = self.db.bind.dialect.name
         has_vector_col = dialect == "postgresql"
 
-        for i, (chunk_text, embedding) in enumerate(chunks):
+        for i, item in enumerate(chunks):
+            if len(item) == 2:
+                chunk_text, embedding, context = item[0], item[1], None
+            else:
+                chunk_text, embedding, context = item[0], item[1], item[2]
             import uuid
             chunk_id = str(uuid.uuid4())
             emb_json = json.dumps(embedding)
@@ -196,8 +292,8 @@ class VectorStore:
             if has_vector_col:
                 self.db.execute(
                     text(
-                        "INSERT INTO page_chunks (id, page_id, chunk_index, content, embedding, embedding_vec) "
-                        "VALUES (:id, :page_id, :chunk_index, :content, :embedding, :embedding_vec::vector)"
+                        "INSERT INTO page_chunks (id, page_id, chunk_index, content, embedding, context, embedding_vec) "
+                        "VALUES (:id, :page_id, :chunk_index, :content, :embedding, :context, :embedding_vec::vector)"
                     ),
                     {
                         "id": chunk_id,
@@ -205,14 +301,15 @@ class VectorStore:
                         "chunk_index": i,
                         "content": chunk_text,
                         "embedding": emb_json,
+                        "context": context,
                         "embedding_vec": emb_str,
                     }
                 )
             else:
                 self.db.execute(
                     text(
-                        "INSERT INTO page_chunks (id, page_id, chunk_index, content, embedding) "
-                        "VALUES (:id, :page_id, :chunk_index, :content, :embedding)"
+                        "INSERT INTO page_chunks (id, page_id, chunk_index, content, embedding, context) "
+                        "VALUES (:id, :page_id, :chunk_index, :content, :embedding, :context)"
                     ),
                     {
                         "id": chunk_id,
@@ -220,6 +317,7 @@ class VectorStore:
                         "chunk_index": i,
                         "content": chunk_text,
                         "embedding": emb_json,
+                        "context": context,
                     }
                 )
         self.db.flush()
@@ -231,20 +329,32 @@ class VectorStore:
         )
         self.db.flush()
 
-    def _search_sync(self, query_embedding: List[float], top_k: int = 50) -> List[Dict[str, Any]]:
+    def _search_sync(
+        self,
+        query_embedding: List[float],
+        top_k: int = 50,
+        visible_page_ids=None,
+    ) -> List[Dict[str, Any]]:
         emb_str = "[" + ",".join(str(v) for v in query_embedding) + "]"
 
         dialect = self.db.bind.dialect.name
 
         if dialect == "postgresql":
             try:
+                params: Dict[str, Any] = {"query_emb": emb_str, "limit": top_k}
+                where_sql = ""
+                if visible_page_ids:
+                    ids = list(visible_page_ids)
+                    placeholders = ",".join(f":vid{i}" for i in range(len(ids)))
+                    params.update({f"vid{i}": pid for i, pid in enumerate(ids)})
+                    where_sql = f"WHERE pc.page_id IN ({placeholders})"
                 result = self.db.execute(text(
-                    "SELECT pc.page_id, pc.content, pc.chunk_index, "
-                    "pc.embedding_vec <=> :query_emb::vector AS distance "
-                    "FROM page_chunks pc "
-                    "ORDER BY pc.embedding_vec <=> :query_emb::vector "
-                    "LIMIT :limit"
-                ), {"query_emb": emb_str, "limit": top_k})
+                    f"SELECT pc.page_id, pc.content, pc.context, pc.chunk_index, "
+                    f"pc.embedding_vec <=> :query_emb::vector AS distance "
+                    f"FROM page_chunks pc {where_sql} "
+                    f"ORDER BY pc.embedding_vec <=> :query_emb::vector "
+                    f"LIMIT :limit"
+                ), params)
 
                 rows = result.fetchall()
                 results = []
@@ -252,17 +362,34 @@ class VectorStore:
                     results.append({
                         "page_id": row[0],
                         "content": row[1],
-                        "chunk_index": row[2],
-                        "distance": float(row[3]),
+                        "context": row[2],
+                        "chunk_index": row[3],
+                        "distance": float(row[4]),
                     })
                 return results
             except Exception as e:
                 logger.warning(f"pgvector search failed, falling back: {e}")
 
-        result = self.db.execute(
-            text("SELECT id, page_id, content, chunk_index, embedding FROM page_chunks")
-        )
-        rows = result.fetchall()
+        if visible_page_ids:
+            ids = list(visible_page_ids)
+            rows_all = []
+            for i in range(0, len(ids), 500):
+                chunk = ids[i:i + 500]
+                placeholders = ",".join(f":vid{j}" for j in range(len(chunk)))
+                result = self.db.execute(
+                    text(
+                        f"SELECT id, page_id, content, context, chunk_index, embedding "
+                        f"FROM page_chunks WHERE page_id IN ({placeholders})"
+                    ),
+                    {f"vid{j}": pid for j, pid in enumerate(chunk)},
+                )
+                rows_all.extend(result.fetchall())
+            rows = rows_all
+        else:
+            result = self.db.execute(
+                text("SELECT id, page_id, content, context, chunk_index, embedding FROM page_chunks")
+            )
+            rows = result.fetchall()
 
         query_vec = np.array(query_embedding)
         query_norm = np.linalg.norm(query_vec)
@@ -272,31 +399,37 @@ class VectorStore:
         candidates = []
         for row in rows:
             try:
-                emb = json.loads(row[4]) if row[4] else None
+                emb = json.loads(row[5]) if row[5] else None
                 if emb:
                     vec = np.array(emb)
                     vec_norm = np.linalg.norm(vec)
                     if vec_norm > 0:
                         sim = float(np.dot(query_vec, vec) / (query_norm * vec_norm))
                         dist = 1.0 - sim
-                        candidates.append({
-                            "page_id": row[1],
-                            "content": row[2],
-                            "chunk_index": row[3],
-                            "distance": dist,
-                        })
+                    candidates.append({
+                        "page_id": row[1],
+                        "content": row[2],
+                        "context": row[3],
+                        "chunk_index": row[4],
+                        "distance": dist,
+                    })
             except Exception:
                 continue
 
         candidates.sort(key=lambda x: x["distance"])
         return candidates[:top_k]
 
-    async def search(self, query_embedding: List[float], top_k: int = 50) -> List[Dict[str, Any]]:
+    async def search(
+        self,
+        query_embedding: List[float],
+        top_k: int = 50,
+        visible_page_ids=None,
+    ) -> List[Dict[str, Any]]:
         # The SQLite fallback scans every chunk and runs numpy similarity,
         # which can take seconds on a large corpus.  Run it in a thread so the
         # event loop is not blocked while note pages are being loaded.
         import asyncio
-        return await asyncio.to_thread(self._search_sync, query_embedding, top_k)
+        return await asyncio.to_thread(self._search_sync, query_embedding, top_k, visible_page_ids)
 
     async def get_chunk_count(self, page_id: str = None) -> int:
         if page_id:
