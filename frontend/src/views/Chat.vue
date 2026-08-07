@@ -9,19 +9,31 @@
         <div class="message-avatar">{{ msg.role === 'user' ? 'U' : 'AI' }}</div>
         <div class="message-body">
           <div class="message-content markdown-body" :class="{ typing: !msg.content && loading }" v-html="msg.content ? renderContent(msg.content) : '思考中...'"></div>
-          <div v-if="msg.sources && msg.sources.length" class="message-sources">
-            <div class="sources-label">引用来源：</div>
-            <div v-for="(src, i) in msg.sources" :key="src.id" class="source-item">
-              <router-link
-                :to="{ path: '/notes', query: { page: src.id } }"
-                class="source-link"
-              >[{{ i + 1 }}] {{ src.title }}</router-link>
-              <div v-if="src.chunks && src.chunks.length" class="source-chunk">
-                <span v-if="src.chunks[0].context" class="source-chunk-ctx">{{ src.chunks[0].context }}</span>
-                {{ src.chunks[0].content }}
+        <div v-if="msg.sources && msg.sources.length" class="message-sources">
+          <span class="sources-label">引用</span>
+          <el-tooltip
+            v-for="(src, i) in msg.sources"
+            :key="src.id"
+            placement="top"
+            :show-after="200"
+            :hide-after="100"
+            popper-class="source-tooltip"
+          >
+            <template #content>
+              <div class="source-tooltip-title">
+                <span class="source-tooltip-index">{{ i + 1 }}</span>
+                {{ src.title }}
               </div>
-            </div>
-          </div>
+              <div v-if="src.chunks && src.chunks.length" class="source-tooltip-chunk">
+                <span v-if="src.chunks[0].context" class="source-tooltip-ctx">{{ src.chunks[0].context }}</span>
+                <div class="source-tooltip-text">{{ src.chunks[0].content }}</div>
+              </div>
+            </template>
+            <router-link :to="{ path: '/notes', query: { page: src.id } }" class="source-chip">
+              [{{ i + 1 }}] {{ src.title }}
+            </router-link>
+          </el-tooltip>
+        </div>
           <div v-if="msg.role === 'assistant' && msg.content && !loading" class="message-actions">
             <el-button size="small" text type="primary" @click="handleSaveNote(idx)">保存为笔记</el-button>
           </div>
@@ -81,7 +93,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, nextTick } from 'vue'
+import { ref, nextTick, watch, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage } from 'element-plus'
 import http from '../api/http'
 import MarkdownIt from 'markdown-it'
@@ -111,7 +123,28 @@ interface Message {
   sources?: Source[]
 }
 
-const messages = ref<Message[]>([])
+const STORAGE_KEY = 'rag_chat_history_v1'
+
+const loadHistory = (): Message[] => {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    // Drop malformed messages and unfinished assistant answers (empty
+    // content means the page was refreshed mid-stream).
+    return parsed.filter((m: any) =>
+      m &&
+      (m.role === 'user' || m.role === 'assistant') &&
+      typeof m.content === 'string' &&
+      (m.role === 'user' || m.content.length > 0)
+    )
+  } catch {
+    return []
+  }
+}
+
+const messages = ref<Message[]>(loadHistory())
 const input = ref('')
 const loading = ref(false)
 const messagesRef = ref<HTMLElement>()
@@ -129,6 +162,30 @@ const scrollToBottom = () => {
     }
   })
 }
+
+let saveTimer: number | null = null
+watch(messages, () => {
+  if (saveTimer) clearTimeout(saveTimer)
+  saveTimer = window.setTimeout(() => {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(messages.value))
+    } catch { /* storage full / unavailable */ }
+  }, 600)
+}, { deep: true })
+
+onMounted(() => {
+  scrollToBottom()
+})
+
+onBeforeUnmount(() => {
+  if (saveTimer) {
+    clearTimeout(saveTimer)
+    saveTimer = null
+  }
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(messages.value))
+  } catch { /* ignore */ }
+})
 
 const renderContent = (text: string) => {
   return md.render(text)
@@ -413,50 +470,85 @@ const confirmSaveNote = async () => {
 }
 .markdown-body :deep(strong) { color: #f1f5f9; }
 .message-sources {
-  margin-top: 10px;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  align-items: center;
-}
-.sources-label {
-  font-size: 12px;
-  color: #64748b;
-}
-.source-link {
-  font-size: 12px;
-  color: #38bdf8;
-  text-decoration: none;
-  background: rgba(56,189,248,0.1);
-  padding: 3px 10px;
-  border-radius: 6px;
-  border: 1px solid rgba(56,189,248,0.15);
-  transition: all 0.2s;
-}
-.source-link:hover {
-  background: rgba(56,189,248,0.2);
-}
-.source-item {
+  margin-top: 8px;
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 8px 10px;
-  border-radius: 8px;
-  background: rgba(56,189,248,0.06);
-  border: 1px solid rgba(56,189,248,0.12);
+  align-items: flex-start;
+  gap: 3px;
 }
-.source-chunk {
+.sources-label {
+  font-size: 11px;
+  color: #64748b;
+  margin-bottom: 2px;
+}
+.source-chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
   font-size: 12px;
   color: #94a3b8;
-  line-height: 1.5;
-  max-height: 60px;
+  text-decoration: none;
+  background: rgba(148, 163, 184, 0.08);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  padding: 1px 9px;
+  border-radius: 10px;
+  line-height: 18px;
   overflow: hidden;
-  word-break: break-word;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: all 0.15s;
 }
-.source-chunk-ctx {
+.source-chip:hover {
+  color: #7dd3fc;
+  border-color: rgba(56, 189, 248, 0.35);
+  background: rgba(56, 189, 248, 0.1);
+}
+:global(.source-tooltip) {
+  background: #1e293b !important;
+  border: 1px solid #334155 !important;
+  color: #e2e8f0 !important;
+  max-width: 420px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+:global(.source-tooltip .el-popper__arrow::before) {
+  background: #1e293b !important;
+  border-color: #334155 !important;
+}
+:global(.source-tooltip-title) {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #f1f5f9;
+  margin-bottom: 6px;
+}
+:global(.source-tooltip-index) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  border-radius: 5px;
+  background: rgba(56, 189, 248, 0.18);
+  color: #7dd3fc;
+  font-size: 11px;
+}
+:global(.source-tooltip-ctx) {
   display: block;
   color: #7dd3fc;
-  margin-bottom: 2px;
+  font-size: 11px;
+  margin-bottom: 4px;
+}
+:global(.source-tooltip-text) {
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: #cbd5e1;
+  word-break: break-word;
+  max-height: 220px;
+  overflow-y: auto;
 }
 .message-actions {
   margin-top: 8px;
