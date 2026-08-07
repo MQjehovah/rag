@@ -30,76 +30,127 @@ def _get_visible_pages(db, current_user):
 
 
 @router.get("/data")
-def get_graph_data(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+def get_graph_data(
+    view: str = "pages",
+    max_nodes: int = 400,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Return a capped, importance-ranked slice of the graph.
+
+    Rendering thousands of nodes/edges in the browser is slow, so we keep the
+    most-connected ``max_nodes`` nodes per view and only the edges between
+    them.
+    """
+    view = view if view in ("pages", "entities") else "pages"
+    max_nodes = max(20, min(max_nodes, 1500))
+
     pages = _get_visible_pages(db, current_user)
     visible_ids = {p.id for p in pages}
-    edges = db.query(GraphEdge).filter(
-        GraphEdge.source_id.in_(visible_ids)
-    ).all()
-    edges = [e for e in edges if e.target_id in visible_ids]
 
-    edge_map: Dict[str, int] = Counter()
-    for e in edges:
-        edge_map[e.source_id] += 1
-        edge_map[e.target_id] += 1
-
-    nodes = []
-    for p in pages:
-        nodes.append(GraphNodeResponse(
-            id=p.id,
-            title=p.title or "无标题",
-            notebook_id=p.notebook_id,
-            link_count=edge_map.get(p.id, 0),
-        ))
-
-    edge_responses = []
-    for e in edges:
-        edge_responses.append(GraphEdgeResponse(
-            id=e.id,
-            source_id=e.source_id,
-            target_id=e.target_id,
-            weight=float(e.weight),
-            edge_type=e.edge_type,
-        ))
-
-    # ---- entity-level graph (LightRAG-style) ----
-    entity_nodes = []
-    entity_edges = []
-    page_entity_links = []
-    if visible_ids:
-        visible_list = list(visible_ids)
-        entity_rows = db.query(GraphEntity).filter(
-            GraphEntity.page_id.in_(visible_list)
+    if view == "pages":
+        all_edges = db.query(GraphEdge).filter(
+            GraphEdge.source_id.in_(visible_ids)
         ).all()
-        ent_by_id = {e.id: e for e in entity_rows}
+        all_edges = [e for e in all_edges if e.target_id in visible_ids]
 
-        entity_edge_rows = db.query(GraphEntityEdge).filter(
-            GraphEntityEdge.page_id.in_(visible_list)
-        ).all()
-        for ee in entity_edge_rows:
-            for eid in (ee.source_entity_id, ee.target_entity_id):
-                if eid not in ent_by_id:
-                    row = db.query(GraphEntity).filter(GraphEntity.id == eid).first()
-                    if row:
-                        ent_by_id[row.id] = row
+        degree: Dict[str, int] = Counter()
+        for e in all_edges:
+            degree[e.source_id] += 1
+            degree[e.target_id] += 1
 
-        ent_degree: Dict[str, int] = Counter()
-        for ee in entity_edge_rows:
-            ent_degree[ee.source_entity_id] += 1
-            ent_degree[ee.target_entity_id] += 1
+        ranked = sorted(visible_ids, key=lambda pid: degree.get(pid, 0), reverse=True)
+        keep_ids = set(ranked[:max_nodes])
 
-        for e in ent_by_id.values():
-            entity_nodes.append(GraphNodeResponse(
-                id=f"entity-{e.id}",
-                title=e.name or "未命名实体",
-                notebook_id=None,
-                link_count=ent_degree[e.id] + (1 if e.page_id in visible_ids else 0),
-                kind="entity",
-                entity_type=e.entity_type,
+        nodes = []
+        for p in pages:
+            if p.id not in keep_ids:
+                continue
+            nodes.append(GraphNodeResponse(
+                id=p.id,
+                title=p.title or "无标题",
+                notebook_id=p.notebook_id,
+                link_count=degree.get(p.id, 0),
+                kind="page",
             ))
 
-        for ee in entity_edge_rows:
-            entity_edges.append(GraphEdgeResponse(
+        keep_edges = [e for e in all_edges if e.source_id in keep_ids and e.target_id in keep_ids]
+        keep_edges.sort(key=lambda e: float(e.weight), reverse=True)
+        keep_edges = keep_edges[: max(2000, max_nodes * 8)]
+
+        edge_responses = []
+        for e in keep_edges:
+            edge_responses.append(GraphEdgeResponse(
+                id=e.id,
+                source_id=e.source_id,
+                target_id=e.target_id,
+                weight=float(e.weight),
+                edge_type=e.edge_type,
+            ))
+        return GraphDataResponse(nodes=nodes, edges=edge_responses)
+
+    # ---- entity view ----
+    visible_list = list(visible_ids)
+    entity_rows = db.query(GraphEntity).filter(
+        GraphEntity.page_id.in_(visible_list)
+    ).all()
+    ent_by_id = {e.id: e for e in entity_rows}
+
+    relation_rows = db.query(GraphEntityEdge).filter(
+        GraphEntityEdge.page_id.in_(visible_list)
+    ).all()
+    for ee in relation_rows:
+        for eid in (ee.source_entity_id, ee.target_entity_id):
+            if eid not in ent_by_id:
+                row = db.query(GraphEntity).filter(GraphEntity.id == eid).first()
+                if row:
+                    ent_by_id[row.id] = row
+
+    degree = Counter()
+    for ee in relation_rows:
+        degree[ee.source_entity_id] += 1
+        degree[ee.target_entity_id] += 1
+
+    ranked = sorted(ent_by_id, key=lambda eid: degree.get(eid, 0), reverse=True)
+    keep_ent = set(ranked[:max_nodes])
+
+    linked_page_ids = set()
+    for ee in relation_rows:
+        if ee.page_id in visible_ids and (ee.source_entity_id in keep_ent or ee.target_entity_id in keep_ent):
+            linked_page_ids.add(ee.page_id)
+    for ent in ent_by_id.values():
+        if ent.id in keep_ent and ent.page_id in visible_ids:
+            linked_page_ids.add(ent.page_id)
+    keep_pages = set(list(linked_page_ids)[:120])
+    page_by_id = {p.id: p for p in pages}
+
+    nodes = []
+    for eid in ranked[:max_nodes]:
+        e = ent_by_id[eid]
+        nodes.append(GraphNodeResponse(
+            id=f"entity-{e.id}",
+            title=e.name or "未命名实体",
+            notebook_id=None,
+            link_count=degree.get(e.id, 0),
+            kind="entity",
+            entity_type=e.entity_type,
+        ))
+    for pid in keep_pages:
+        p = page_by_id.get(pid)
+        if p is None:
+            continue
+        nodes.append(GraphNodeResponse(
+            id=pid,
+            title=p.title or "无标题",
+            notebook_id=p.notebook_id,
+            link_count=0,
+            kind="page",
+        ))
+
+    edges = []
+    for ee in relation_rows:
+        if ee.source_entity_id in keep_ent and ee.target_entity_id in keep_ent:
+            edges.append(GraphEdgeResponse(
                 id=f"er-{ee.id}",
                 source_id=f"entity-{ee.source_entity_id}",
                 target_id=f"entity-{ee.target_entity_id}",
@@ -107,22 +158,19 @@ def get_graph_data(db: Session = Depends(get_db), current_user=Depends(get_curre
                 edge_type="entity_relation",
                 label=ee.relation or "",
             ))
+    for eid in keep_ent:
+        ent = ent_by_id[eid]
+        if ent.page_id in keep_pages:
+            edges.append(GraphEdgeResponse(
+                id=f"pe-{ent.id}",
+                source_id=ent.page_id,
+                target_id=f"entity-{ent.id}",
+                weight=1.0,
+                edge_type="page_entity",
+                label="提及",
+            ))
 
-        for e in ent_by_id.values():
-            if e.page_id in visible_ids:
-                page_entity_links.append(GraphEdgeResponse(
-                    id=f"pe-{e.id}",
-                    source_id=e.page_id,
-                    target_id=f"entity-{e.id}",
-                    weight=1.0,
-                    edge_type="page_entity",
-                    label="提及",
-                ))
-
-    return GraphDataResponse(
-        nodes=nodes + entity_nodes,
-        edges=edge_responses + entity_edges + page_entity_links,
-    )
+    return GraphDataResponse(nodes=nodes, edges=edges)
 
 
 @router.get("/stats")
@@ -205,6 +253,9 @@ async def rebuild_entities(db: Session = Depends(get_db), current_user=Depends(g
     for p in pages:
         try:
             total += await store.extract_and_store(p.id, p.title, p.content)
+            # Commit per page so the write transaction is not held across the
+            # next LLM call (that would lock SQLite for the whole rebuild).
+            db.commit()
         except Exception as e:
             errors += 1
             logger.warning(f"Entity extraction failed for {p.id}: {e}")

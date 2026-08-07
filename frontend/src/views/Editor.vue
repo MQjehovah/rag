@@ -121,7 +121,9 @@
             placeholder="无标题"
             @input="scheduleSave"
           />
-          <TipTapEditor v-model="currentPage.content" @update:modelValue="scheduleSave" />
+          <div v-loading="pageLoading" class="editor-body">
+            <TipTapEditor v-model="currentPage.content" @update:modelValue="scheduleSave" />
+          </div>
           <div class="editor-footer">
             <span class="editor-hint">自动保存</span>
             <el-button size="small" @click="reindexCurrentPage" :loading="indexing">重新索引</el-button>
@@ -373,6 +375,9 @@ const confirmForm = ref<{ should_save: boolean; action: string; title: string; n
 const organizing = ref(false)
 
 let saveTimeout: number | null = null
+const pageLoading = ref(false)
+let pageLoadSeq = 0
+let loadAbort: AbortController | null = null
 const indexing = ref(false)
 const currentPageNum = ref(1)
 const totalPages = ref(0)
@@ -454,37 +459,75 @@ const selectPage = async (page: PageListItem) => {
     clearTimeout(saveTimeout)
     saveTimeout = null
   }
-  if (saveStatus.value === 'unsaved' && currentPage.value) {
-    await savePage()
+  // Fire the pending save without blocking the switch; it captured its own
+  // page reference, so it still writes to the note the user just left.
+  const prev = currentPage.value
+  if (saveStatus.value === 'unsaved' && prev) {
+    savePage(prev)
   }
+
+  // Switch the UI immediately (placeholder) and load content in the
+  // background, so clicking a note never blocks on the network or parse.
+  currentPage.value = {
+    id: page.id,
+    notebook_id: page.notebook_id ?? null,
+    title: page.title,
+    content: '',
+    updated_at: page.updated_at,
+  }
+  pageLoading.value = true
+  const seq = ++pageLoadSeq
+  loadAbort?.abort()
+  const controller = new AbortController()
+  loadAbort = controller
   try {
-    const res = await http.get(`/api/pages/${page.id}`)
+    const res = await http.get(`/api/pages/${page.id}`, { signal: controller.signal })
+    if (seq !== pageLoadSeq) return
     currentPage.value = res.data
-  } catch (e) {
+  } catch (e: any) {
+    if (seq !== pageLoadSeq) return
     ElMessage.error('加载笔记内容失败')
+  } finally {
+    if (seq === pageLoadSeq) {
+      pageLoading.value = false
+      loadAbort = null
+    }
   }
 }
 
 const openPageById = async (pageId: string) => {
+  currentPage.value = { id: pageId, notebook_id: null, title: '加载中...', content: '', updated_at: '' }
+  pageLoading.value = true
+  const seq = ++pageLoadSeq
+  loadAbort?.abort()
+  const controller = new AbortController()
+  loadAbort = controller
   try {
-    const res = await http.get(`/api/pages/${pageId}`)
+    const res = await http.get(`/api/pages/${pageId}`, { signal: controller.signal })
+    if (seq !== pageLoadSeq) return
     const page = res.data
     currentPage.value = page
     if (page.notebook_id) {
       const nb = notebooks.value.find(n => n.id === page.notebook_id)
       if (nb) {
         currentNotebook.value = nb
-        await loadPages(true)
+        loadPages(true)
       } else {
         currentNotebook.value = { id: '__unassigned__', name: '未分类' }
-        await loadUnassignedPages()
+        loadUnassignedPages()
       }
     } else {
       currentNotebook.value = { id: '__unassigned__', name: '未分类' }
-      await loadUnassignedPages()
+      loadUnassignedPages()
     }
-  } catch (e) {
+  } catch (e: any) {
+    if (seq !== pageLoadSeq) return
     ElMessage.error('打开笔记失败')
+  } finally {
+    if (seq === pageLoadSeq) {
+      pageLoading.value = false
+      loadAbort = null
+    }
   }
 }
 
@@ -559,7 +602,11 @@ const createPage = async () => {
       notebook_id: currentNotebook.value.id
     })
     notebookPages.value.unshift({ id: res.data.id, title: res.data.title, notebook_id: res.data.notebook_id, updated_at: res.data.updated_at })
+    pageLoadSeq++
+    loadAbort?.abort()
+    loadAbort = null
     currentPage.value = res.data
+    pageLoading.value = false
     ElMessage.success('创建成功')
   } catch (e) {
     ElMessage.error('创建失败')
@@ -572,26 +619,31 @@ const scheduleSave = () => {
   saveTimeout = window.setTimeout(() => savePage(), 1000)
 }
 
-const savePage = async () => {
-  if (!currentPage.value) return
+const savePage = async (target?: Page) => {
+  const page = target || currentPage.value
+  if (!page) return
   if (saveTimeout) {
     clearTimeout(saveTimeout)
     saveTimeout = null
   }
   saveStatus.value = 'saving'
   try {
-    await http.put(`/api/pages/${currentPage.value.id}`, {
-      title: currentPage.value.title,
-      content: currentPage.value.content
+    await http.put(`/api/pages/${page.id}`, {
+      title: page.title,
+      content: page.content
     })
-    saveStatus.value = 'saved'
-    const idx = notebookPages.value.findIndex(p => p.id === currentPage.value!.id)
+    if (currentPage.value?.id === page.id) {
+      saveStatus.value = 'saved'
+    }
+    const idx = notebookPages.value.findIndex(p => p.id === page.id)
     if (idx >= 0) {
-      notebookPages.value[idx] = { ...notebookPages.value[idx], title: currentPage.value.title }
+      notebookPages.value[idx] = { ...notebookPages.value[idx], title: page.title }
     }
   } catch (e) {
     ElMessage.error('保存失败')
-    saveStatus.value = 'unsaved'
+    if (currentPage.value?.id === page.id) {
+      saveStatus.value = 'unsaved'
+    }
   }
 }
 
@@ -700,19 +752,31 @@ const doSearch = async () => {
 }
 
 const openFromSearch = async (result: any) => {
+  showSearch.value = false
+  currentPage.value = { id: result.id, notebook_id: null, title: result.title || '加载中...', content: '', updated_at: '' }
+  pageLoading.value = true
+  const seq = ++pageLoadSeq
+  loadAbort?.abort()
+  const controller = new AbortController()
+  loadAbort = controller
   try {
-    const res = await http.get(`/api/pages/${result.id}`)
+    const res = await http.get(`/api/pages/${result.id}`, { signal: controller.signal })
+    if (seq !== pageLoadSeq) return
     const page = res.data
     currentPage.value = page
-
     const nb = notebooks.value.find(n => n.id === page.notebook_id)
     if (nb && currentNotebook.value?.id !== nb.id) {
       currentNotebook.value = nb
-      await loadPages(true)
+      loadPages(true)
     }
-    showSearch.value = false
-  } catch {
+  } catch (e: any) {
+    if (seq !== pageLoadSeq) return
     ElMessage.error('打开笔记失败')
+  } finally {
+    if (seq === pageLoadSeq) {
+      pageLoading.value = false
+      loadAbort = null
+    }
   }
 }
 
@@ -1008,4 +1072,5 @@ html, body, #app { height: 100%; }
 .dt-doc-item:hover { background: #f8fafc; }
 .dt-doc-title { font-size: 13px; font-weight: 500; color: #1e293b; }
 .dt-doc-path { font-size: 12px; color: #94a3b8; margin-left: 8px; }
+.editor-body { position: relative; min-height: 400px; }
 </style>

@@ -1,4 +1,5 @@
-from sqlalchemy import create_engine, Column, String, Text, DateTime, ForeignKey, Boolean, Integer, Float, Index, inspect, text as sqlalchemy_text
+from sqlalchemy import create_engine, event, Column, String, Text, DateTime, ForeignKey, Boolean, Integer, Float, Index, inspect, text as sqlalchemy_text
+from sqlalchemy.pool import NullPool
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from datetime import datetime
@@ -130,10 +131,28 @@ class UserGroup(Base):
 
 def get_engine(database_url: str):
     connect_args = {}
+    pool_kwargs = {"pool_pre_ping": True, "pool_size": 20, "max_overflow": 10}
     if database_url.startswith("sqlite"):
         os.makedirs("./data", exist_ok=True)
+        # SQLite: one fresh connection per session (no cross-thread sharing)
+        # and wait up to 60s for a busy database instead of the default 5s.
         connect_args["check_same_thread"] = False
-    return create_engine(database_url, pool_pre_ping=True, pool_size=20, max_overflow=10, connect_args=connect_args)
+        connect_args["timeout"] = 60
+        pool_kwargs = {"poolclass": NullPool}
+    engine = create_engine(database_url, connect_args=connect_args, **pool_kwargs)
+
+    if database_url.startswith("sqlite"):
+        @event.listens_for(engine, "connect")
+        def _set_sqlite_pragma(dbapi_connection, connection_record):
+            cursor = dbapi_connection.cursor()
+            # WAL allows readers while a writer is active; without it one
+            # writer blocks every read (and vice versa) -> "database is locked".
+            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.execute("PRAGMA synchronous=NORMAL")
+            cursor.execute("PRAGMA busy_timeout=60000")
+            cursor.close()
+
+    return engine
 
 
 def _migrate_schema(engine):

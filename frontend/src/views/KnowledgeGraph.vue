@@ -32,7 +32,7 @@
         >重建实体图谱</el-button>
       </div>
     </header>
-    <div class="graph-container" ref="containerRef">
+    <div class="graph-container" ref="containerRef" v-loading="graphLoading">
       <svg ref="svgRef" width="100%" height="100%"></svg>
     </div>
     <div v-if="hoveredNode" class="node-tooltip" :style="{ left: tooltipPos.x + 'px', top: tooltipPos.y + 'px' }">
@@ -85,6 +85,7 @@ const stats = ref({
   total_nodes: 0, total_edges: 0, avg_connections: 0, clusters: 0,
   total_entities: 0, total_relations: 0,
 })
+const graphLoading = ref(false)
 
 const notebookColors = [
   '#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6',
@@ -128,14 +129,17 @@ const loadStats = async () => {
 }
 
 const loadData = async () => {
+  graphLoading.value = true
   try {
-    const res = await http.get('/api/graph/data')
+    const res = await http.get('/api/graph/data', { params: { view: viewMode.value, max_nodes: 400 } })
     nodes = res.data.nodes || []
     edges = res.data.edges || []
     await loadStats()
     renderGraph()
   } catch {
     ElMessage.error('加载图谱数据失败')
+  } finally {
+    graphLoading.value = false
   }
 }
 
@@ -171,23 +175,11 @@ const renderGraph = () => {
     })
   svgSelection.call(zoomBehavior)
 
-  const isEntityView = viewMode.value === 'entities'
-  const effectiveNodes = isEntityView
-    ? nodes.filter(
-        n => n.kind === 'entity' || edges.some(
-          e => e.edge_type === 'page_entity' && (e.source_id === n.id || e.target_id === n.id)
-        )
-      )
-    : nodes.filter(n => n.kind !== 'entity')
-  const effectiveEdges = isEntityView
-    ? edges.filter(e => e.edge_type === 'entity_relation' || e.edge_type === 'page_entity')
-    : edges.filter(e => e.edge_type !== 'entity_relation' && e.edge_type !== 'page_entity')
-
   const filteredNodes = filterText.value
-    ? effectiveNodes.filter(n => n.title.toLowerCase().includes(filterText.value.toLowerCase()))
-    : effectiveNodes
+    ? nodes.filter(n => n.title.toLowerCase().includes(filterText.value.toLowerCase()))
+    : nodes
   const filteredNodeIds = new Set(filteredNodes.map(n => n.id))
-  const filteredEdges = effectiveEdges.filter(
+  const filteredEdges = edges.filter(
     e => filteredNodeIds.has(e.source_id) && filteredNodeIds.has(e.target_id)
   )
 
@@ -264,9 +256,14 @@ const renderGraph = () => {
       })
     )
 
+  // Large graphs: skip text labels entirely (hover tooltip still shows the
+  // title), otherwise thousands of <text> elements kill the frame rate.
+  const showLabels = simNodes.length <= 150
+  const showEdgeLabels = simLinks.length <= 300
+
   const label = g.append('g')
     .selectAll('text')
-    .data(simNodes)
+    .data(showLabels ? simNodes : [])
     .join('text')
     .text(d => d.title.length > 8 ? d.title.slice(0, 8) + '...' : d.title)
     .attr('font-size', 11)
@@ -276,7 +273,7 @@ const renderGraph = () => {
 
   const edgeLabel = g.append('g')
     .selectAll('text')
-    .data(simLinks.filter((l: any) => l.label))
+    .data(showEdgeLabels ? simLinks.filter((l: any) => l.label) : [])
     .join('text')
     .text((d: any) => d.label)
     .attr('font-size', 9)
@@ -285,6 +282,7 @@ const renderGraph = () => {
     .attr('pointer-events', 'none')
     .attr('opacity', 0.85)
 
+  simulation?.stop()
   simulation = d3.forceSimulation(simNodes)
     .force('link', d3.forceLink(simLinks).id((d: any) => d.id).distance(100))
     .force('charge', d3.forceManyBody().strength(-200))
@@ -353,20 +351,26 @@ const rebuildEntities = async () => {
   }
 }
 
+let filterTimer: number | null = null
 watch(filterText, () => {
-  renderGraph()
+  if (filterTimer) clearTimeout(filterTimer)
+  filterTimer = window.setTimeout(() => renderGraph(), 250)
 })
 
 watch(viewMode, () => {
-  renderGraph()
+  loadData()
 })
 
 let resizeObserver: ResizeObserver | null = null
+let resizeTimer: number | null = null
 
 onMounted(() => {
   loadData()
   if (containerRef.value) {
-    resizeObserver = new ResizeObserver(() => renderGraph())
+    resizeObserver = new ResizeObserver(() => {
+      if (resizeTimer) clearTimeout(resizeTimer)
+      resizeTimer = window.setTimeout(() => renderGraph(), 250)
+    })
     resizeObserver.observe(containerRef.value)
   }
 })
@@ -374,6 +378,8 @@ onMounted(() => {
 onBeforeUnmount(() => {
   simulation?.stop()
   resizeObserver?.disconnect()
+  if (filterTimer) clearTimeout(filterTimer)
+  if (resizeTimer) clearTimeout(resizeTimer)
 })
 </script>
 

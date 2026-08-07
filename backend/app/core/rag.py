@@ -177,17 +177,26 @@ class EmbeddingService:
         if enrich_context and settings.contextual_retrieval_enabled and settings.llm_api_url:
             units = await self._enrich_contexts(units, title, content)
 
-        results = []
+        # Batch the embedding calls (32 at a time) instead of one HTTP request
+        # per chunk: reindexing a large corpus otherwise takes tens of
+        # thousands of sequential round-trips to the embedding service.
+        embed_inputs = []
+        unit_refs = []
         for unit in units:
             chunk_text = unit["text"]
             ctx = unit.get("context") or ""
             embed_text = f"{ctx}\n\n{chunk_text}" if ctx else chunk_text
-            try:
-                emb = await self.encode(embed_text)
+            embed_inputs.append(embed_text)
+            unit_refs.append((chunk_text, ctx))
+
+        results = []
+        batch_size = 32
+        for start in range(0, len(embed_inputs), batch_size):
+            batch = embed_inputs[start:start + batch_size]
+            embs = await self.encode_batch(batch)
+            for (chunk_text, ctx), emb in zip(unit_refs[start:start + batch_size], embs):
                 if emb:
                     results.append((chunk_text, emb, ctx))
-            except Exception as e:
-                logger.error(f"Encode chunk error: {e}")
         return results
 
     STOP_WORDS = {

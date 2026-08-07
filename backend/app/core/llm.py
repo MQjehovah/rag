@@ -8,7 +8,7 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 
-async def call_llm_json(messages: list, context: str = "", timeout: float = 60.0) -> dict:
+async def call_llm_json(messages: list, context: str = "", timeout: float = 120.0) -> dict:
     """Call the configured LLM API and parse the response as JSON.
 
     Returns {} when the LLM is not configured or the response cannot be

@@ -58,6 +58,7 @@ class Settings(BaseSettings):
     dingtalk_operator_id: str = ""
 
     llm_api_url: str = ""
+    llm_base_url: str = ""
     llm_api_key: str = ""
     llm_model: str = ""
 
@@ -66,6 +67,12 @@ class Settings(BaseSettings):
 
     class Config:
         env_file = ".env"
+
+    def model_post_init(self, __context):
+        # Accept either LLM_API_URL (full chat/completions endpoint) or
+        # LLM_BASE_URL (OpenAI-style base URL; /chat/completions is appended).
+        if not self.llm_api_url and self.llm_base_url:
+            self.llm_api_url = self.llm_base_url.rstrip("/") + "/chat/completions"
 
 
 settings = Settings()

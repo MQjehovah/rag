@@ -3,6 +3,8 @@ from sqlalchemy.orm import Session
 import uuid
 
 from app.models.database import Page, PageChunk, Notebook
+from app.core.hybrid import HybridIndex
+from app.core.entity_graph import EntityGraphStore
 from app.models.schema import NotebookCreate, NotebookResponse, NotebookListResponse
 from app.core.rag import VectorStore
 from app.api.deps import get_db
@@ -75,6 +77,8 @@ def delete_notebook(notebook_id: str, db: Session = Depends(get_db), current_use
     pages = db.query(Page).filter(Page.notebook_id == notebook_id).all()
     for page in pages:
         db.query(PageChunk).filter(PageChunk.page_id == page.id).delete()
+        HybridIndex(db).delete_page(page.id)
+        EntityGraphStore(db).delete_page(page.id)
         db.delete(page)
 
     db.delete(notebook)

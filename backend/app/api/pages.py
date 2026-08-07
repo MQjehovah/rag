@@ -40,38 +40,66 @@ def get_embedding_service():
     return _embedding_service
 
 async def background_index_page(page_id: str):
+    """Index a page without holding a DB transaction across slow calls.
+
+    Embedding/LLM calls can take tens of seconds; keeping a write transaction
+    open for the whole time locks the whole SQLite database ("database is
+    locked" for every other request).  Each stage commits as soon as its DB
+    writes are done, so the lock window is only a few milliseconds per stage.
+    """
+    engine = get_engine(settings.database_url)
+    from app.models.database import get_session as _get_session
+    emb_svc = EmbeddingService()
     try:
-        emb_svc = EmbeddingService()
-        engine = get_engine(settings.database_url)
-        from app.models.database import get_session as _get_session
+        # 1) Read the latest content in a short read transaction.
         db = _get_session(engine)
-
-        page = db.query(Page).filter(Page.id == page_id).first()
-        if not page:
+        try:
+            page = db.query(Page).filter(Page.id == page_id).first()
+            if not page:
+                return
+            title = page.title or ""
+            content = page.content or ""
+        finally:
             db.close()
-            await emb_svc.close()
+
+        if not (title or content).strip():
             return
-        title = page.title or ""
-        content = page.content or ""
 
+        # 2) Embedding call - no DB lock held while waiting on Ollama.
         chunks = await emb_svc.encode_chunks(content, title)
-        if chunks:
-            vec_store = VectorStore(db)
-            await vec_store.add_page_chunks(page_id, chunks)
 
-        keywords = EmbeddingService.extract_keywords(
-            title + " " + content, 20
-        )
-        page.keywords = ",".join(keywords)
-        HybridIndex(db).index_page(page_id, title, content, page.keywords)
-        await EntityGraphStore(db).extract_and_store(page_id, title, content)
-        db.commit()
+        # 3) Replace chunks, commit immediately.
+        db = _get_session(engine)
+        try:
+            if chunks:
+                await VectorStore(db).add_page_chunks(page_id, chunks)
+            db.commit()
+        finally:
+            db.close()
 
-        db.close()
-        await emb_svc.close()
+        # 4) Keywords + BM25 index, commit immediately.
+        keywords = EmbeddingService.extract_keywords(title + " " + content, 20)
+        db = _get_session(engine)
+        try:
+            page = db.query(Page).filter(Page.id == page_id).first()
+            if page:
+                page.keywords = ",".join(keywords)
+            HybridIndex(db).index_page(page_id, title, content, page.keywords)
+            db.commit()
+        finally:
+            db.close()
+
+        # 5) Entity graph (LLM call), then commit.
+        db = _get_session(engine)
+        try:
+            await EntityGraphStore(db).extract_and_store(page_id, title, content)
+            db.commit()
+        finally:
+            db.close()
     except Exception as e:
-        import logging
-        logging.getLogger(__name__).error(f"Auto-index failed for {page_id}: {e}")
+        logger.error(f"Auto-index failed for {page_id}: {e}")
+    finally:
+        await emb_svc.close()
 
 def _check_page_access(page, current_user, db):
     if "__local_admin__" in current_user["groups"]:
@@ -203,23 +231,32 @@ async def index_page(page_id: str, db: Session = Depends(get_db), current_user=D
         raise HTTPException(status_code=404, detail="笔记不存在")
     _check_page_access(page, current_user, db)
 
+    title = page.title or ""
+    content = page.content or ""
+    db.commit()  # close the read transaction before the slow calls
+
     try:
         emb_svc = EmbeddingService()
-        vec_store = VectorStore(db)
-        chunks = await emb_svc.encode_chunks(page.content, page.title)
+        try:
+            chunks = await emb_svc.encode_chunks(content, title)
+            if chunks:
+                await VectorStore(db).add_page_chunks(page.id, chunks)
+            db.commit()
 
-        if chunks:
-            await vec_store.add_page_chunks(page.id, chunks)
-        keywords = EmbeddingService.extract_keywords(
-            (page.title or "") + " " + (page.content or ""), 20
-        )
-        page.keywords = ",".join(keywords)
-        HybridIndex(db).index_page(page.id, page.title, page.content, page.keywords)
-        await EntityGraphStore(db).extract_and_store(page.id, page.title, page.content)
-        db.commit()
-        await emb_svc.close()
-        return {"message": f"索引成功，共 {len(chunks)} 个分块"}
+            keywords = EmbeddingService.extract_keywords(title + " " + content, 20)
+            page = db.query(Page).filter(Page.id == page_id).first()
+            if page:
+                page.keywords = ",".join(keywords)
+            HybridIndex(db).index_page(page_id, title, content, page.keywords)
+            db.commit()
+
+            await EntityGraphStore(db).extract_and_store(page_id, title, content)
+            db.commit()
+            return {"message": f"索引成功，共 {len(chunks)} 个分块"}
+        finally:
+            await emb_svc.close()
     except Exception as e:
+        logger.error(f"Index failed for {page_id}: {e}")
         raise HTTPException(status_code=500, detail=f"索引失败: {str(e)}")
 
 
@@ -254,7 +291,6 @@ async def reindex_all(db: Session = Depends(get_db), current_user=Depends(get_cu
             success += 1
         except Exception as e:
             logger.error(f"Reindex failed for {page.id}: {e}")
-            errors += 1
             errors += 1
 
     await emb_svc.close()

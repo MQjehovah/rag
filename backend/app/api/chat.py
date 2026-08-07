@@ -116,6 +116,9 @@ async def _agentic_search_notes(
             if note["id"] not in seen_ids:
                 seen_ids.add(note["id"])
                 all_notes.append(note)
+        # Close the read transaction before the judge LLM call / streaming, so
+        # SQLite writers are never blocked by an idle read transaction.
+        db.commit()
 
         if hop >= max_hops - 1 or not settings.llm_api_url:
             break
@@ -156,6 +159,7 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db), current_user
 
     context = "\n\n".join(context_parts) if context_parts else "未找到相关笔记"
     user_message = RAG_PROMPT_TEMPLATE.format(context=context, query=request.query)
+    db.commit()  # no open read transaction while streaming the answer
 
     async def generate():
         try:

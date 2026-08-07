@@ -104,6 +104,9 @@ const emit = defineEmits<{
 // this is much cheaper than serializing the whole document on every prop
 // change, and it prevents feedback loops without re-parsing content.
 let lastEmitted = props.modelValue
+// True while we are applying an external content load (note switch), so the
+// resulting onUpdate is not emitted back as a user edit -> no phantom saves.
+let applyingExternal = false
 
 mermaid.initialize({
   startOnLoad: false,
@@ -183,7 +186,7 @@ const editor = useEditor({
   onUpdate: ({ editor }) => {
     const markdown = editor.storage.markdown.getMarkdown()
     lastEmitted = markdown
-    emit('update:modelValue', markdown)
+    if (!applyingExternal) emit('update:modelValue', markdown)
     nextTick(() => {
       scheduleMermaid()
       disableSpellcheck()
@@ -198,13 +201,26 @@ const editor = useEditor({
 })
 
 watch(() => props.modelValue, (newValue) => {
-  if (editor.value && lastEmitted !== newValue) {
+  if (!editor.value || lastEmitted === newValue) return
+  const apply = () => {
+    if (!editor.value) return
+    if (props.modelValue !== newValue) return // a newer note arrived meanwhile
+    if (lastEmitted === newValue) return
+    applyingExternal = true
     editor.value.commands.setContent(newValue || '')
+    applyingExternal = false
     mermaidCache.clear()
     nextTick(() => {
       scheduleMermaid()
       disableSpellcheck()
     })
+  }
+  // Parsing large markdown is synchronous and can take tens of ms; defer it
+  // to the next idle slot so switching notes never blocks the UI.
+  if (typeof requestIdleCallback !== 'undefined') {
+    requestIdleCallback(apply, { timeout: 300 })
+  } else {
+    window.setTimeout(apply, 0)
   }
 })
 
