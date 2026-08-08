@@ -121,6 +121,36 @@ class WikiPage(Base):
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 
 
+class GraphCommunity(Base):
+    """GraphRAG community summaries (global Q&A layer)."""
+    __tablename__ = 'graph_communities'
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    level = Column(Integer, default=1)
+    title = Column(String(255), default='')
+    summary = Column(Text, default='')
+    member_ids = Column(Text, default='[]')
+    embedding = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class ImageAsset(Base):
+    """Image assets extracted from notes (multimodal pre-support, off by
+    default).  When multimodal is enabled, OCR/caption/embedding fill in."""
+    __tablename__ = 'image_assets'
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    page_id = Column(String(36), ForeignKey('pages.id', ondelete='CASCADE'), nullable=True, index=True)
+    url = Column(Text, nullable=False)
+    alt = Column(Text, default='')
+    chunk_index = Column(Integer, default=0)
+    ocr_text = Column(Text, default='')
+    caption = Column(Text, default='')
+    embedding = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.now)
+
+
 class User(Base):
     __tablename__ = 'users'
 

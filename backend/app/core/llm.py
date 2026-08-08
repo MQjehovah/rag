@@ -70,3 +70,32 @@ async def call_llm_json(messages: list, context: str = "", timeout: float = 120.
 
     logger.warning(f"LLM response could not be parsed as JSON [{context}]: {content[:300]}")
     return {}
+
+
+async def call_llm_text(messages: list, context: str = "", timeout: float = 180.0) -> str:
+    """Call the configured LLM and return the plain text content (no JSON
+    parsing).  Used for tasks like wiki page merging where the output is
+    arbitrary Markdown."""
+    if not settings.llm_api_url:
+        return ""
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.post(
+                settings.llm_api_url,
+                headers={
+                    "Authorization": f"Bearer {settings.llm_api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": settings.llm_model,
+                    "messages": messages,
+                    "stream": False,
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+        return (content or "").strip()
+    except Exception as e:
+        logger.warning(f"LLM text call failed [{context}]: {e}")
+        return ""

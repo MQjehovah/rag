@@ -1,3 +1,5 @@
+import asyncio
+
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
@@ -5,11 +7,12 @@ from typing import List, Dict, Any
 from collections import Counter, defaultdict
 import logging
 
-from app.models.database import Page, GraphEdge, GraphEntity, GraphEntityEdge, Notebook
+from app.models.database import Page, GraphEdge, GraphEntity, GraphEntityEdge, Notebook, get_engine, get_session, init_db
 from app.models.schema import GraphDataResponse, GraphNodeResponse, GraphEdgeResponse, GraphStatsResponse
 from app.core.rag import EmbeddingService
 from app.core.graph import GraphBuilder
 from app.core.entity_graph import EntityGraphStore
+from app.core.graphrag import rebuild_communities, sync_image_assets
 from app.api.deps import get_db
 from app.core.jwt_utils import get_current_user
 from app.config import settings
@@ -264,4 +267,102 @@ async def rebuild_entities(db: Session = Depends(get_db), current_user=Depends(g
         "entities": total,
         "total_pages": len(pages),
         "errors": errors,
+    }
+
+
+_graphrag_status = {
+    "running": False,
+    "phase": "",
+    "processed": 0,
+    "total": 0,
+    "message": "",
+}
+_graphrag_task: asyncio.Task | None = None
+
+
+async def _complete_entities(engine, status):
+    db = get_session(engine)
+    try:
+        pages = db.query(Page.id, Page.title, Page.content).all()
+        todo = []
+        for pid, title, content in pages:
+            cnt = db.query(GraphEntity.id).filter(GraphEntity.page_id == pid).count()
+            if cnt == 0 and (content or "").strip():
+                todo.append((pid, title, content))
+    finally:
+        db.close()
+    status["phase"] = "entity-extract"
+    status["total"] = len(todo)
+    status["processed"] = 0
+    if not todo:
+        status["message"] = "实体已全部抽取"
+        return
+    sem = asyncio.Semaphore(3)
+    done = 0
+
+    async def work(pid, title, content):
+        nonlocal done
+        async with sem:
+            db = get_session(engine)
+            try:
+                await EntityGraphStore(db).extract_and_store(pid, title, content)
+                db.commit()
+            except Exception as e:
+                logger.warning(f"Entity completion failed for {pid}: {e}")
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+            finally:
+                db.close()
+            done += 1
+            status["processed"] = done
+            status["message"] = f"实体抽取 {done}/{len(todo)}"
+
+    await asyncio.gather(*(work(*t) for t in todo))
+
+
+async def _run_graphrag():
+    engine = get_engine(settings.database_url)
+    init_db(engine)
+    try:
+        await _complete_entities(engine, _graphrag_status)
+        await rebuild_communities(_graphrag_status)
+        n = sync_image_assets(engine)
+        _graphrag_status["message"] += f" | 图片资产 {n} 张"
+    except Exception as e:
+        logger.error(f"GraphRAG rebuild failed: {e}")
+        _graphrag_status["running"] = False
+        _graphrag_status["message"] = f"失败: {e}"
+
+
+@router.post("/rebuild-communities")
+async def rebuild_communities_endpoint(current_user=Depends(get_current_user)):
+    if "__local_admin__" not in current_user["groups"]:
+        raise HTTPException(status_code=403, detail="仅管理员可执行")
+    global _graphrag_task
+    if _graphrag_status.get("running"):
+        return {"started": False, "running": True, "message": "社区重建已在运行"}
+    _graphrag_status.update(
+        running=True, phase="start", processed=0, total=0, message="启动社区重建..."
+    )
+    _graphrag_task = asyncio.create_task(_run_graphrag())
+    return {"started": True, "running": True}
+
+
+@router.get("/community-status")
+def community_status(current_user=Depends(get_current_user)):
+    return _graphrag_status
+
+
+@router.post("/rebuild-images")
+def rebuild_images_endpoint(current_user=Depends(get_current_user)):
+    if "__local_admin__" not in current_user["groups"]:
+        raise HTTPException(status_code=403, detail="仅管理员可执行")
+    engine = get_engine(settings.database_url)
+    init_db(engine)
+    n = sync_image_assets(engine)
+    return {
+        "message": f"已同步 {n} 张图片资产",
+        "multimodal_enabled": settings.multimodal_enabled,
     }

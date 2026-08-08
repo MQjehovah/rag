@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.core.llm import call_llm_json
+from app.core.llm import call_llm_json, call_llm_text
 from app.models.database import Notebook, Page, WikiPage, get_engine, get_session, init_db
 
 logger = logging.getLogger(__name__)
@@ -180,8 +180,8 @@ async def _ingest_one(
     async def _read_index():
         if lock:
             async with lock:
-                return _index_text(list(pages.values()))
-        return _index_text(list(pages.values()))
+                return _index_text(pages)
+        return _index_text(pages)
 
     index = await _read_index()
     prompt = WIKI_PROMPT.format(
@@ -215,14 +215,11 @@ async def _ingest_one(
                     note_excerpt=_clean_content(content or "", 3000),
                 )
                 try:
-                    merged = await call_llm_json(
+                    merged_text = await call_llm_text(
                         [{"role": "user", "content": merge_prompt}],
                         context="wiki-merge",
                         timeout=180.0,
                     )
-                    merged_text = ""
-                    if isinstance(merged, dict):
-                        merged_text = (merged.get("content") or "").strip()
                     if merged_text:
                         op["content"] = merged_text
                 except Exception as e:

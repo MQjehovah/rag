@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     contextual_retrieval_enabled: bool = True
     entity_graph_enabled: bool = True
     agentic_max_hops: int = 2
+    mmr_enabled: bool = True
+    mmr_lambda: float = 0.7
+    community_qa_enabled: bool = True
+    multimodal_enabled: bool = False
 
     reranker_api_url: str = ""
     reranker_model: str = ""

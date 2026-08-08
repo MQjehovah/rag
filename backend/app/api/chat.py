@@ -13,6 +13,8 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.core.rag import EmbeddingService, RerankerService
 from app.core.retrieval import RetrievalPipeline
+from app.core.llm import call_llm_text
+from app.core.graphrag import search_communities
 from app.models.database import Page
 from app.api.deps import get_db
 from app.core.jwt_utils import get_current_user
@@ -117,6 +119,14 @@ JUDGE_PROMPT = """判断已检索到的资料是否足够回答用户问题。
 }}"""
 
 
+HISTORY_REWRITE_PROMPT = """根据对话历史，把用户最新的问题改写成一条独立、完整的中文检索查询，用于搜索知识库。只输出改写后的查询语句，不要其他内容。
+
+对话历史：
+{history}
+
+最新问题：{query}"""
+
+
 async def _judge_sufficiency(query: str, notes: List[Dict[str, Any]]) -> Dict[str, Any]:
     parts = []
     for i, note in enumerate(notes, 1):
@@ -151,6 +161,7 @@ async def _agentic_search_notes(
     all_notes: List[Dict[str, Any]] = []
     seen_ids = set()
     current_q = query
+    sufficient = False
 
     for hop in range(max_hops):
         outcome = await pipeline.retrieve(current_q, current_user, top_k=5)
@@ -170,9 +181,33 @@ async def _agentic_search_notes(
             logger.warning(f"Agentic judge failed: {e}")
             break
         followup = (decision.get("followup_query") or "").strip()
-        if decision.get("sufficient") is True or not followup:
+        if decision.get("sufficient") is True:
+            sufficient = True
+            break
+        if not followup:
             break
         current_q = followup
+
+    # Global fallback: when local retrieval is not sufficient, answer from
+    # GraphRAG community summaries (whole-knowledge-base view).
+    if not sufficient and settings.community_qa_enabled and settings.llm_api_url:
+        try:
+            emb = await pipeline.embedding_svc.encode(query)
+            communities = search_communities(db, emb, top_k=5)
+            for c in communities:
+                cid = f"community:{c['id']}"
+                if cid in seen_ids:
+                    continue
+                seen_ids.add(cid)
+                all_notes.append({
+                    "id": cid,
+                    "title": c.get("title") or "知识库综述",
+                    "content": c.get("summary") or "",
+                    "chunks": [{"content": c.get("summary") or ""}],
+                    "source_kind": "community",
+                })
+        except Exception as e:
+            logger.warning(f"Community search failed: {e}")
 
     return all_notes
 
@@ -182,7 +217,28 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db), current_user
     if not settings.llm_api_url:
         raise HTTPException(status_code=500, detail="未配置 LLM API")
 
-    notes = await _agentic_search_notes(request.query, db, current_user)
+    retrieval_query = request.query
+    if request.history:
+        history_msgs = []
+        for h in (request.history or [])[-6:]:
+            role = h.get("role")
+            content = (h.get("content") or "").strip()
+            if role in ("user", "assistant") and content:
+                label = "用户" if role == "user" else "助手"
+                history_msgs.append(f"{label}：{content[:200]}")
+        if history_msgs:
+            rewritten = await call_llm_text(
+                [{"role": "user", "content": HISTORY_REWRITE_PROMPT.format(
+                    history="\n".join(history_msgs),
+                    query=request.query,
+                )}],
+                context="history-rewrite",
+                timeout=90.0,
+            )
+            if rewritten:
+                retrieval_query = rewritten
+
+    notes = await _agentic_search_notes(retrieval_query, db, current_user)
 
     context_parts = []
     sources = []

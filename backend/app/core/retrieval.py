@@ -1,8 +1,10 @@
 import asyncio
+import json
 import logging
 from collections import defaultdict
 from typing import Any, Dict, List, Optional, Set
 
+import numpy as np
 from sqlalchemy import text as sql_text
 from sqlalchemy.orm import Session
 
@@ -44,6 +46,64 @@ def _merge_rank(existing: List[str], new: List[str]) -> List[str]:
 
 def _chunk_placeholders(ids: List[str]) -> List[List[str]]:
     return [ids[i:i + 500] for i in range(0, len(ids), 500)]
+
+
+def _fetch_embeddings(db, page_ids: List[str]) -> Dict[str, Any]:
+    """Best chunk embedding per page (for MMR diversity)."""
+    embs: Dict[str, Any] = {}
+    if not page_ids:
+        return embs
+    for chunk in _chunk_placeholders(page_ids):
+        ph = ",".join(f":v{i}" for i in range(len(chunk)))
+        rows = db.execute(sql_text(
+            f"SELECT page_id, embedding FROM page_chunks "
+            f"WHERE page_id IN ({ph}) AND embedding IS NOT NULL "
+            f"ORDER BY chunk_index"
+        ), {f"v{i}": pid for i, pid in enumerate(chunk)}).fetchall()
+        for pid, emb_json in rows:
+            if pid in embs:
+                continue
+            try:
+                embs[pid] = np.array(json.loads(emb_json))
+            except Exception:
+                pass
+    return embs
+
+
+def _mmr_rank(
+    page_ids: List[str],
+    rel_scores: Dict[str, float],
+    embs: Dict[str, Any],
+    lam: float = 0.7,
+    top_k: int = 5,
+) -> List[str]:
+    """Maximal Marginal Relevance: trade relevance against redundancy."""
+    selected: List[str] = []
+    remaining = list(page_ids)
+    while len(selected) < top_k and remaining:
+        best_pid = None
+        best_val = float("-inf")
+        for pid in remaining:
+            rel = rel_scores.get(pid, 0.0)
+            sim = 0.0
+            if selected and pid in embs:
+                for s in selected:
+                    if s not in embs:
+                        continue
+                    v1, v2 = embs[pid], embs[s]
+                    n1 = float(np.linalg.norm(v1))
+                    n2 = float(np.linalg.norm(v2))
+                    if n1 > 0 and n2 > 0:
+                        sim = max(sim, float(np.dot(v1, v2) / (n1 * n2)))
+            mmr = lam * rel - (1.0 - lam) * sim
+            if mmr > best_val:
+                best_val = mmr
+                best_pid = pid
+        if best_pid is None:
+            break
+        selected.append(best_pid)
+        remaining.remove(best_pid)
+    return selected
 
 
 async def _rewrite_query(query: str) -> List[str]:
@@ -273,7 +333,18 @@ class RetrievalPipeline:
         except Exception as e:
             logger.warning(f"Graph expansion error: {e}")
 
-        ranked = sorted(final.items(), key=lambda x: x[1], reverse=True)
+        if settings.mmr_enabled and len(final) > 1:
+            candidates = list(final.keys())[:40]
+            ranked_ids = _mmr_rank(
+                candidates,
+                final,
+                _fetch_embeddings(self.db, candidates),
+                lam=settings.mmr_lambda,
+                top_k=top_k,
+            )
+            ranked = [(pid, final[pid]) for pid in ranked_ids]
+        else:
+            ranked = sorted(final.items(), key=lambda x: x[1], reverse=True)
         results = []
         for pid, score in ranked[:top_k]:
             p = page_map.get(pid) or {}
