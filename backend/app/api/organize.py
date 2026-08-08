@@ -246,20 +246,56 @@ def run_organize_sync():
         _organize_running = False
 
 
+_jira_running = False
+
+
+def run_jira_sync_sync():
+    global _jira_running
+    if _jira_running:
+        logger.info("Jira sync already running, skipping")
+        return
+    _jira_running = True
+    try:
+        from app.core.jira import sync_jira
+
+        status = {}
+
+        async def _run():
+            await sync_jira(status)
+
+        loop = asyncio.new_event_loop()
+        loop.run_until_complete(_run())
+        loop.close()
+        logger.info(f"Jira sync: {status.get('message')}")
+    except Exception as e:
+        logger.error(f"Jira sync failed: {e}")
+    finally:
+        _jira_running = False
+
+
 def start_scheduler():
-    if not settings.auto_organize_enabled:
+    if not settings.auto_organize_enabled and not settings.jira_enabled:
         return
     try:
         from apscheduler.schedulers.background import BackgroundScheduler
         scheduler = BackgroundScheduler()
-        scheduler.add_job(
-            run_organize_sync,
-            "interval",
-            hours=settings.auto_organize_interval_hours,
-            id="auto_organize",
-            replace_existing=True,
-        )
+        if settings.auto_organize_enabled:
+            scheduler.add_job(
+                run_organize_sync,
+                "interval",
+                hours=settings.auto_organize_interval_hours,
+                id="auto_organize",
+                replace_existing=True,
+            )
+        if settings.jira_enabled and settings.jira_auto_sync:
+            scheduler.add_job(
+                run_jira_sync_sync,
+                "interval",
+                hours=settings.jira_sync_interval_hours,
+                id="jira_sync",
+                replace_existing=True,
+            )
         scheduler.start()
-        logger.info(f"Auto-organize scheduler started (every {settings.auto_organize_interval_hours}h)")
+        logger.info(f"Scheduler started: organize={settings.auto_organize_enabled}, jira={settings.jira_enabled}")
     except Exception as e:
         logger.error(f"Failed to start scheduler: {e}")

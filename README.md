@@ -137,6 +137,26 @@
 - 聊天回答可嵌入文章图片（LLM 上下文附图片 URL + 前端缩略图展示）
 - 多模态预支持：`image_assets` 记录全部图片（1100+ 张），`MULTIMODAL_ENABLED=false` 时不做 OCR/向量，开启后填充
 
+### 4.7 数据源插件（企业知识自动搜集）
+
+企业系统以**插件**方式接入，统一走"LLM 分析 → 形成笔记 → 编译进 Wiki"管道：
+
+```
+数据源插件（Jira / 钉钉 / 文件目录...）
+  → 增量拉取原始内容（游标去重，`source_items` 表）
+  → LLM 分析（价值判断 should_save + 提炼标题/正文/关键词）
+  → 生成笔记（归入对应笔记本，如"Jira 知识"）
+  → 向量 + BM25 索引（不启用 LLM 上下文增强）
+  → Wiki 增量刷新（编译进知识库）
+```
+
+- 插件框架：`app/sources/`（注册表 + `DataSource` 基类），新增源只需实现 `test()` / `sync()`
+- 通用管道：`app/core/ingest.py` 的 `analyze_and_upsert()`
+- 已注册插件：**Jira 工单**（增量同步已解决 issue）、**钉钉知识库**（适配现有同步）
+- 接口：`GET /api/sources`（列表）、`POST /api/sources/{key}/test|sync`、`GET /api/sources/{key}/status`
+- 前端：`/sources` 数据源页（测试连接 / 立即同步 / 进度）
+- 配置：`JIRA_ENABLED`、`JIRA_URL`、`JIRA_USERNAME`、`JIRA_PASSWORD`、`JIRA_BACKFILL_DAYS`、`JIRA_SYNC_INTERVAL_HOURS`
+
 ---
 
 ## 五、配置（`backend/.env`）

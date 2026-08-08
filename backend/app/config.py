@@ -27,6 +27,15 @@ class Settings(BaseSettings):
     community_qa_enabled: bool = True
     multimodal_enabled: bool = False
 
+    jira_enabled: bool = False
+    jira_url: str = ""
+    jira_username: str = ""
+    jira_password: str = ""
+    jira_projects: str = ""
+    jira_backfill_days: int = 90
+    jira_sync_interval_hours: int = 24
+    jira_auto_sync: bool = False
+
     reranker_api_url: str = ""
     reranker_model: str = ""
 

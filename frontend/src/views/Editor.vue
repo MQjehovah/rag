@@ -12,7 +12,6 @@
       <div class="header-actions">
         <el-tag type="success" v-if="saveStatus === 'saved'">已保存</el-tag>
         <el-tag type="warning" v-else-if="saveStatus === 'saving'">保存中...</el-tag>
-        <el-button @click="showDingTalk = true">钉钉同步</el-button>
         <el-button @click="importDialogVisible = true">导入知识</el-button>
         <el-button :loading="organizing" @click="handleOrganize">{{ organizing ? '整理中...' : '自动整理' }}</el-button>
         <el-button type="primary" @click="showNewNotebook = true">新建笔记本</el-button>
@@ -202,82 +201,6 @@
       <el-empty v-else description="未找到相关笔记" />
     </el-dialog>
 
-    <!-- 钉钉同步对话框 -->
-    <el-dialog v-model="showDingTalk" title="钉钉知识库同步" width="700px" top="5vh">
-      <!-- 同步进行中 -->
-      <div v-if="syncStatus.running">
-        <el-alert type="info" :closable="false" show-icon>
-          <template #title>{{ syncStatus.progress }}</template>
-        </el-alert>
-        <el-progress
-          :percentage="syncStatus.total > 0 ? Math.round(syncStatus.imported / syncStatus.total * 100) : 0"
-          :format="() => `${syncStatus.imported}/${syncStatus.total}`"
-          style="margin-top: 15px"
-        />
-      </div>
-      <!-- 步骤1: 配置 -->
-      <div v-else-if="dtStep === 0">
-        <el-form label-width="120px">
-          <el-form-item label="导入到笔记本">
-            <el-input v-model="dtNotebookName" placeholder="笔记本名称（不存在则自动创建）" />
-          </el-form-item>
-          <el-form-item label="知识库ID">
-            <el-input v-model="dtSpaceId" placeholder="留空则列出所有知识库" />
-          </el-form-item>
-        </el-form>
-        <div v-if="syncStatus.last_sync" style="color: #999; font-size: 12px; margin-top: 10px">
-          上次同步: {{ syncStatus.last_sync }}
-        </div>
-      </div>
-      <!-- 步骤2: 文档列表 -->
-      <div v-else-if="dtStep === 1">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px">
-          <el-checkbox v-model="dtSelectAll" @change="toggleSelectAll">全选 ({{ dtSelectedDocs.length }}/{{ dtDocs.length }})</el-checkbox>
-          <el-input v-model="dtFilter" placeholder="搜索文档..." style="width: 200px" clearable size="small" />
-        </div>
-        <div class="dt-doc-list">
-          <el-checkbox-group v-model="dtSelectedIds">
-            <div v-for="doc in filteredDocs" :key="doc.id" class="dt-doc-item">
-              <el-checkbox :value="doc.id">
-                <span class="dt-doc-title">{{ doc.title }}</span>
-                <el-tag size="small" type="info" style="margin-left: 6px">{{ doc.extension || 'wiki' }}</el-tag>
-                <span class="dt-doc-path">{{ doc.path }}</span>
-              </el-checkbox>
-            </div>
-          </el-checkbox-group>
-          <div v-if="dtDocs.length === 0" style="text-align: center; color: #999; padding: 20px">
-            未找到文档
-          </div>
-        </div>
-      </div>
-      <!-- 步骤3: 同步完成 -->
-      <div v-else-if="dtStep === 2">
-        <div v-if="syncStatus.progress && !syncStatus.running">
-          <el-result
-            :icon="syncStatus.errors > 0 ? 'warning' : 'success'"
-            :title="syncStatus.errors > 0 ? '同步完成（部分失败）' : '同步完成'"
-            :sub-title="`成功导入 ${syncStatus.imported} 篇，失败 ${syncStatus.errors} 篇`"
-          />
-        </div>
-      </div>
-      <template #footer>
-        <template v-if="dtStep === 0">
-          <el-button @click="showDingTalk = false">取消</el-button>
-          <el-button type="primary" @click="fetchDingTalkDocs" :loading="dtLoading">获取文档列表</el-button>
-        </template>
-        <template v-else-if="dtStep === 1">
-          <el-button @click="dtStep = 0">返回</el-button>
-          <el-button type="primary" @click="startSelectedSync" :disabled="dtSelectedIds.length === 0">
-            同步选中 ({{ dtSelectedIds.length }})
-          </el-button>
-        </template>
-        <template v-else>
-          <el-button @click="dtStep = 1">继续选择</el-button>
-          <el-button type="primary" @click="showDingTalk = false">关闭</el-button>
-        </template>
-      </template>
-    </el-dialog>
-
     <!-- 导入知识对话框 -->
     <el-dialog v-model="importDialogVisible" title="导入知识" width="600px">
       <el-tabs v-model="importTab">
@@ -344,7 +267,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
+import { ref, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElNotification } from 'element-plus'
 import type { UploadFile as ElUploadFile } from 'element-plus'
@@ -384,16 +307,6 @@ const showNewNotebook = ref(false)
 const newNotebookName = ref('')
 const showSearch = ref(false)
 const searchResults = ref<any[]>([])
-const showDingTalk = ref(false)
-const dtNotebookName = ref('钉钉知识库')
-const dtSpaceId = ref('')
-const syncStatus = ref<any>({ running: false, progress: '', total: 0, imported: 0, errors: 0, last_sync: '' })
-let syncPollTimer: number | null = null
-const dtStep = ref(0)
-const dtLoading = ref(false)
-const dtDocs = ref<any[]>([])
-const dtSelectedIds = ref<string[]>([])
-const dtFilter = ref('')
 
 const importDialogVisible = ref(false)
 const importTab = ref('file')
@@ -723,78 +636,6 @@ const getSourceTagType = (source: string) => {
   return 'info'
 }
 
-const pollSyncStatus = async () => {
-  try {
-    const res = await http.get('/api/dingtalk/status')
-    syncStatus.value = res.data
-    if (!res.data.running && syncPollTimer) {
-      clearInterval(syncPollTimer)
-      syncPollTimer = null
-      if (res.data.imported > 0) {
-        dtStep.value = 2
-        loadNotebooks()
-      }
-    }
-  } catch { /* ignore */ }
-}
-
-const dtSelectedDocs = computed(() => dtDocs.value.filter((d: any) => dtSelectedIds.value.includes(d.id)))
-
-const dtSelectAll = computed({
-  get: () => dtDocs.value.length > 0 && dtSelectedIds.value.length === filteredDocs.value.length,
-  set: () => {},
-})
-
-const filteredDocs = computed(() => {
-  if (!dtFilter.value) return dtDocs.value
-  const q = dtFilter.value.toLowerCase()
-  return dtDocs.value.filter((d: any) => d.title.toLowerCase().includes(q) || d.path.toLowerCase().includes(q))
-})
-
-const toggleSelectAll = (val: any) => {
-  if (val) {
-    dtSelectedIds.value = filteredDocs.value.map((d: any) => d.id)
-  } else {
-    dtSelectedIds.value = []
-  }
-}
-
-const fetchDingTalkDocs = async () => {
-  dtLoading.value = true
-  try {
-    const params: any = {}
-    if (dtSpaceId.value) params.space_id = dtSpaceId.value
-    const res = await http.get('/api/dingtalk/docs', { params })
-    dtDocs.value = res.data.docs || []
-    dtSelectedIds.value = []
-    dtStep.value = 1
-    if (dtDocs.value.length === 0) {
-      ElMessage.warning('未找到文档')
-    }
-  } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail || '获取文档列表失败')
-  } finally {
-    dtLoading.value = false
-  }
-}
-
-const startSelectedSync = async () => {
-  if (dtSelectedIds.value.length === 0) {
-    ElMessage.warning('请选择要同步的文档')
-    return
-  }
-  try {
-    await http.post('/api/dingtalk/sync-selected', {
-      notebook_name: dtNotebookName.value,
-      docs: dtSelectedDocs.value,
-    })
-    syncPollTimer = window.setInterval(pollSyncStatus, 2000)
-    ElMessage.success(`开始同步 ${dtSelectedIds.value.length} 篇文档`)
-  } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail || '启动同步失败')
-  }
-}
-
 const doSearch = async () => {
   if (!searchQuery.value.trim()) return
   try {
@@ -997,10 +838,6 @@ const highlightCitation = () => {
   }
   tryHighlight()
 }
-
-watch(showDingTalk, (val) => {
-  if (val) dtStep.value = 0
-})
 
 onMounted(async () => {
   await loadNotebooks()

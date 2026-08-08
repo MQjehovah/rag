@@ -302,7 +302,7 @@ class VectorStore:
                 self.db.execute(
                     text(
                         "INSERT INTO page_chunks (id, page_id, chunk_index, content, embedding, context, embedding_vec) "
-                        "VALUES (:id, :page_id, :chunk_index, :content, :embedding, :context, :embedding_vec::vector)"
+                        "VALUES (:id, :page_id, :chunk_index, :content, :embedding, :context, CAST(:embedding_vec AS vector))"
                     ),
                     {
                         "id": chunk_id,

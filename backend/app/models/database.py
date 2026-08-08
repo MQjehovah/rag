@@ -151,6 +151,33 @@ class ImageAsset(Base):
     created_at = Column(DateTime, default=datetime.now)
 
 
+class JiraIssue(Base):
+    """Sync state for Jira issues imported into notes (dedupe + incremental)."""
+    __tablename__ = 'jira_issues'
+
+    issue_key = Column(String(64), primary_key=True)
+    page_id = Column(String(36), nullable=True)
+    jira_updated = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.now)
+
+
+class SourceItem(Base):
+    """Generic dedupe/sync state for data-source plugin imports."""
+    __tablename__ = 'source_items'
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    source_key = Column(String(64), nullable=False, index=True)
+    item_key = Column(String(128), nullable=False)
+    page_id = Column(String(36), nullable=True)
+    source_updated = Column(DateTime, nullable=True)
+    skipped = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.now)
+
+    __table_args__ = (
+        Index('ix_source_items_source_item', 'source_key', 'item_key', unique=True),
+    )
+
+
 class User(Base):
     __tablename__ = 'users'
 

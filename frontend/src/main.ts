@@ -9,6 +9,7 @@ import KnowledgeGraph from './views/KnowledgeGraph.vue'
 import Login from './views/Login.vue'
 import Chat from './views/Chat.vue'
 import Wiki from './views/Wiki.vue'
+import Sources from './views/Sources.vue'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -19,6 +20,7 @@ const router = createRouter({
     { path: '/graph', component: KnowledgeGraph },
     { path: '/wiki', component: Wiki },
     { path: '/wiki/:id', component: Wiki },
+    { path: '/sources', component: Sources },
   ]
 })
 
