@@ -2,6 +2,7 @@ import logging
 import uuid
 from typing import Any, Dict, List, Optional, Set
 
+from sqlalchemy import or_
 from sqlalchemy import text as sql_text
 from sqlalchemy.orm import Session
 
@@ -127,7 +128,21 @@ class EntityGraphStore:
         return count + edge_count
 
     def delete_page(self, page_id: str) -> None:
+        # Also remove edges from OTHER pages that reference entities owned by
+        # this page; otherwise the entity rows vanish and edges become orphans
+        # (SQLite tolerated that, PostgreSQL rejects it via FK).
+        owned_ids = [
+            eid
+            for (eid,) in self.db.query(GraphEntity.id).filter(GraphEntity.page_id == page_id).all()
+        ]
         self.db.query(GraphEntityEdge).filter(GraphEntityEdge.page_id == page_id).delete()
+        if owned_ids:
+            self.db.query(GraphEntityEdge).filter(
+                or_(
+                    GraphEntityEdge.source_entity_id.in_(owned_ids),
+                    GraphEntityEdge.target_entity_id.in_(owned_ids),
+                )
+            ).delete(synchronize_session=False)
         self.db.query(GraphEntity).filter(GraphEntity.page_id == page_id).delete()
         self.db.flush()
 

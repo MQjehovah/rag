@@ -126,6 +126,7 @@ class RetrievalPipeline:
                         "distance": item["distance"],
                         "content": item.get("content", ""),
                         "context": item.get("context", "") or "",
+                        "chunk_index": item.get("chunk_index", 0),
                     }
             vector_rank = _merge_rank(vector_rank, [i["page_id"] for i in vec_results])
 
@@ -280,17 +281,21 @@ class RetrievalPipeline:
             snippet = chunk["content"] if chunk and chunk["content"] else (p.get("content") or "")[:300]
             chunks = []
             if chunk and chunk["content"]:
-                chunks.append({"content": chunk["content"], "context": chunk.get("context", "")})
+                chunks.append({
+                    "content": chunk["content"],
+                    "context": chunk.get("context", ""),
+                    "chunk_index": chunk.get("chunk_index", 0),
+                })
             if not chunks:
                 rows = self.db.execute(
                     sql_text(
-                        "SELECT content, COALESCE(context, '') FROM page_chunks "
+                        "SELECT content, COALESCE(context, ''), chunk_index FROM page_chunks "
                         "WHERE page_id = :pid ORDER BY chunk_index LIMIT 1"
                     ),
                     {"pid": pid},
                 ).fetchall()
                 if rows:
-                    chunks.append({"content": rows[0][0], "context": rows[0][1]})
+                    chunks.append({"content": rows[0][0], "context": rows[0][1], "chunk_index": rows[0][2]})
             results.append({
                 "id": pid,
                 "title": p.get("title") or "",

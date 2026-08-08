@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 from datetime import datetime
 
 
@@ -94,7 +94,7 @@ class EnhancedSearchResult(BaseModel):
     content: str
     score: float
     source: str
-    chunks: List[Dict[str, Optional[str]]] = []
+    chunks: List[Dict[str, Any]] = []
 
 class EnhancedSearchResponse(BaseModel):
     results: List[EnhancedSearchResult]

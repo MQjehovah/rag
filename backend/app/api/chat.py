@@ -39,6 +39,7 @@ def get_reranker_service():
 
 class ChatRequest(BaseModel):
     query: str
+    history: List[Dict[str, str]] = []
 
 
 SYSTEM_PROMPT = """你是一个基于企业知识库的智能助手。请根据以下参考资料回答用户的问题。
@@ -54,8 +55,7 @@ RAG_PROMPT_TEMPLATE = """参考资料：
 {context}
 
 ---
-
-用户问题：{query}
+{history}用户问题：{query}
 
 请根据以上参考资料回答问题，并在相应位置用 [1][2] 等编号标注引用来源。"""
 
@@ -158,7 +158,19 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db), current_user
         })
 
     context = "\n\n".join(context_parts) if context_parts else "未找到相关笔记"
-    user_message = RAG_PROMPT_TEMPLATE.format(context=context, query=request.query)
+    history_msgs = []
+    for h in (request.history or [])[-8:]:
+        role = h.get("role")
+        content = (h.get("content") or "").strip()
+        if role in ("user", "assistant") and content:
+            label = "用户" if role == "user" else "助手"
+            history_msgs.append(f"{label}：{content[:1000]}")
+    history_text = ("对话历史：\n" + "\n".join(history_msgs) + "\n\n") if history_msgs else ""
+    user_message = RAG_PROMPT_TEMPLATE.format(
+        context=context,
+        query=request.query,
+        history=history_text,
+    )
     db.commit()  # no open read transaction while streaming the answer
 
     async def generate():
@@ -341,28 +353,82 @@ async def _extract_text_from_bytes(content: bytes, filename: str) -> str:
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
     if ext == "pdf":
         import io
-        from pypdf import PdfReader
-        reader = PdfReader(io.BytesIO(content))
-        return "\n".join(page.extract_text() or "" for page in reader.pages)
-    elif ext in ("docx", "doc"):
+        try:
+            import fitz
+            import pymupdf4llm
+            doc = fitz.open(stream=content, filetype="pdf")
+            try:
+                return pymupdf4llm.to_markdown(doc)
+            finally:
+                doc.close()
+        except Exception:
+            from pypdf import PdfReader
+            reader = PdfReader(io.BytesIO(content))
+            return "\n".join(page.extract_text() or "" for page in reader.pages)
+    elif ext == "docx":
         import io
-        import xml.etree.ElementTree as ET
-        import zipfile
-        with zipfile.ZipFile(io.BytesIO(content)) as z:
-            doc_xml = z.read("word/document.xml")
-            tree = ET.fromstring(doc_xml)
-            ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
-            paragraphs = tree.findall(".//w:p", ns)
-            lines = []
-            for p in paragraphs:
-                texts = [t.text for t in p.findall(".//w:t", ns) if t.text]
-                if texts:
-                    lines.append("".join(texts))
-            return "\n".join(lines)
+        from docx import Document
+        doc = Document(io.BytesIO(content))
+        lines = [p.text.strip() for p in doc.paragraphs if p.text and p.text.strip()]
+        for table in doc.tables:
+            for row in table.rows:
+                cells = [c.text.strip() for c in row.cells]
+                if any(cells):
+                    lines.append(" | ".join(cells))
+        return "\n".join(lines)
+    elif ext in ("xlsx", "xlsm"):
+        import io
+        from openpyxl import load_workbook
+        wb = load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+        lines = []
+        try:
+            for ws in wb.worksheets:
+                if ws.max_row is None:
+                    continue
+                for row in ws.iter_rows(values_only=True):
+                    vals = [str(v) for v in row if v is not None and str(v).strip()]
+                    if vals:
+                        lines.append(" | ".join(vals))
+        finally:
+            wb.close()
+        return "\n".join(lines)
+    elif ext == "pptx":
+        import io
+        from pptx import Presentation
+        prs = Presentation(io.BytesIO(content))
+        lines = []
+        for slide in prs.slides:
+            for shape in slide.shapes:
+                if shape.has_text_frame:
+                    for para in shape.text_frame.paragraphs:
+                        t = "".join(run.text for run in para.runs).strip()
+                        if t:
+                            lines.append(t)
+                if getattr(shape, "has_table", False):
+                    for row in shape.table.rows:
+                        cells = [cell.text.strip() for cell in row.cells]
+                        if any(cells):
+                            lines.append(" | ".join(cells))
+        return "\n".join(lines)
     elif ext in ("txt", "md", "csv", "json"):
         return content.decode("utf-8", errors="ignore")
     else:
         return content.decode("utf-8", errors="ignore")
+
+
+def _looks_like_text(text: str) -> bool:
+    """Reject binary/garbage content (failed file imports used to store raw
+    file bytes as note content, which bloated the database and broke search)."""
+    if not text or not text.strip():
+        return False
+    sample = text[:5000]
+    if "\x00" in sample:
+        return False
+    control = sum(1 for ch in sample if ord(ch) < 32 and ch not in "\n\r\t")
+    printable = sum(1 for ch in sample if ch.isprintable())
+    if not sample:
+        return False
+    return control / len(sample) < 0.05 and printable / len(sample) > 0.6
 
 
 def _extract_main_content(html: str) -> str:
@@ -439,8 +505,8 @@ async def import_file(
     content_bytes = await file.read()
     text = await _extract_text_from_bytes(content_bytes, file.filename or "file.txt")
 
-    if not text.strip():
-        raise HTTPException(status_code=400, detail="无法提取文本内容")
+    if not _looks_like_text(text):
+        raise HTTPException(status_code=400, detail="无法从文件中提取有效文本（文件可能已损坏或格式不支持）")
 
     kb = _get_kb_context(db)
     prompt = ORGANIZE_PROMPT.format(
@@ -485,8 +551,8 @@ async def import_url(request: ImportUrlRequest, db: Session = Depends(get_db), c
 
     page_title, text = _extract_main_content(html)
 
-    if not text.strip():
-        raise HTTPException(status_code=400, detail="无法提取网页正文内容")
+    if not _looks_like_text(text):
+        raise HTTPException(status_code=400, detail="无法提取有效的网页正文内容")
 
     kb = _get_kb_context(db)
     prompt = ORGANIZE_PROMPT.format(

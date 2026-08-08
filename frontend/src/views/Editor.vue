@@ -890,6 +890,59 @@ const handleKeydown = (e: KeyboardEvent) => {
   }
 }
 
+const selectTextInElement = (root: Element, needles: string[]): boolean => {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
+  let node: Node | null
+  while ((node = walker.nextNode())) {
+    const text = node.textContent || ''
+    for (const needle of needles) {
+      const idx = text.indexOf(needle)
+      if (idx >= 0) {
+        const range = document.createRange()
+        range.setStart(node, idx)
+        range.setEnd(node, Math.min(idx + needle.length, text.length))
+        const sel = window.getSelection()
+        sel?.removeAllRanges()
+        sel?.addRange(range)
+        node.parentElement?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        window.setTimeout(() => sel?.removeAllRanges(), 4000)
+        return true
+      }
+    }
+  }
+  return false
+}
+
+const highlightCitation = () => {
+  const m = (route.hash || '').match(/^#c(\d+)$/)
+  if (!m) return
+  let snippet = ''
+  let pageId = ''
+  try {
+    const saved = JSON.parse(sessionStorage.getItem('cite-snippet') || 'null')
+    if (saved && saved.text) {
+      snippet = saved.text
+      pageId = saved.pageId || ''
+    }
+  } catch { /* ignore */ }
+  if (!snippet) return
+  if (pageId && currentPage.value && currentPage.value.id !== pageId) return
+  const needles = [
+    snippet.slice(0, 40),
+    snippet.replace(/[`#*_>]/g, '').replace(/\s+/g, ' ').slice(0, 40),
+  ]
+  let attempts = 0
+  const tryHighlight = () => {
+    attempts++
+    const editorEl = document.querySelector('.ProseMirror')
+    if (editorEl && selectTextInElement(editorEl, needles)) return
+    if (attempts < 30) {
+      window.setTimeout(tryHighlight, 200)
+    }
+  }
+  tryHighlight()
+}
+
 watch(showDingTalk, (val) => {
   if (val) dtStep.value = 0
 })
@@ -901,6 +954,7 @@ onMounted(async () => {
   if (targetId) {
     await openPageById(targetId)
   }
+  highlightCitation()
 })
 
 onBeforeUnmount(() => {

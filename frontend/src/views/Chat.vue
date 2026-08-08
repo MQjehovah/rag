@@ -29,7 +29,11 @@
                 <div class="source-tooltip-text">{{ src.chunks[0].content }}</div>
               </div>
             </template>
-            <router-link :to="{ path: '/notes', query: { page: src.id } }" class="source-chip">
+            <router-link
+              :to="{ path: '/notes', query: { page: src.id } }"
+              class="source-chip"
+              @click.prevent="openSource(src)"
+            >
               [{{ i + 1 }}] {{ src.title }}
             </router-link>
           </el-tooltip>
@@ -94,6 +98,7 @@
 
 <script setup lang="ts">
 import { ref, nextTick, watch, onMounted, onBeforeUnmount } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import http from '../api/http'
 import MarkdownIt from 'markdown-it'
@@ -110,6 +115,8 @@ const md = new MarkdownIt({
     return (hljs.highlightAuto(str) as any).value
   },
 })
+
+const router = useRouter()
 
 interface Source {
   id: string
@@ -195,6 +202,11 @@ const sendMessage = async () => {
   const query = input.value.trim()
   if (!query || loading.value) return
 
+  const history = messages.value
+    .filter(m => m.content)
+    .slice(-8)
+    .map(m => ({ role: m.role, content: m.content }))
+
   messages.value.push({ role: 'user', content: query })
   input.value = ''
   loading.value = true
@@ -211,7 +223,7 @@ const sendMessage = async () => {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${token}`,
       },
-      body: JSON.stringify({ query }),
+      body: JSON.stringify({ query, history }),
     })
 
     if (!resp.ok) {
@@ -260,6 +272,22 @@ const sendMessage = async () => {
     loading.value = false
     scrollToBottom()
   }
+}
+
+const openSource = (src: any) => {
+  const chunk = src.chunks && src.chunks[0]
+  try {
+    sessionStorage.setItem('cite-snippet', JSON.stringify({
+      pageId: src.id,
+      index: chunk ? chunk.chunk_index ?? 0 : 0,
+      text: chunk ? String(chunk.content || '').slice(0, 120) : '',
+    }))
+  } catch { /* ignore */ }
+  router.push({
+    path: '/notes',
+    query: { page: src.id },
+    hash: chunk ? `#c${chunk.chunk_index ?? 0}` : '',
+  })
 }
 
 const handleSaveNote = async (idx: number) => {

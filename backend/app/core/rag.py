@@ -359,9 +359,9 @@ class VectorStore:
                     where_sql = f"WHERE pc.page_id IN ({placeholders})"
                 result = self.db.execute(text(
                     f"SELECT pc.page_id, pc.content, pc.context, pc.chunk_index, "
-                    f"pc.embedding_vec <=> :query_emb::vector AS distance "
+                    f"pc.embedding_vec <=> CAST(:query_emb AS vector) AS distance "
                     f"FROM page_chunks pc {where_sql} "
-                    f"ORDER BY pc.embedding_vec <=> :query_emb::vector "
+                    f"ORDER BY pc.embedding_vec <=> CAST(:query_emb AS vector) "
                     f"LIMIT :limit"
                 ), params)
 
