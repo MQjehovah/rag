@@ -14,7 +14,7 @@ from app.models.database import Notebook, Page, WikiPage, get_engine, get_sessio
 
 logger = logging.getLogger(__name__)
 
-IMAGE_RE = re.compile(r'!\[[^\]]*\]\([^)]*\)')
+IMAGE_RE = re.compile(r'!\[([^\]]*)\]\(([^)]*)\)')
 
 WIKI_PROMPT = """你是一个企业知识库 Wiki 编辑。知识库由多篇原始笔记蒸馏而来，你负责把新笔记的信息整合进 Wiki。
 
@@ -36,7 +36,8 @@ WIKI_PROMPT = """你是一个企业知识库 Wiki 编辑。知识库由多篇原
 3. 分类从以下选择或自拟简洁分类：产品资料、操作指南、故障排查、开发技术、部署运维、业务流程。
 4. 正文用 Markdown；页面间引用用 [[页面标题]] 语法；保留关键命令/代码；内容要具体可执行，不要泛泛而谈。
 5. 每页给 30 字以内的摘要。
-6. 只返回 JSON，不要其他内容：
+6. 如果笔记中包含与主题直接相关的图片，请在页面正文中用 Markdown 图片语法保留：![图片说明](图片URL)；只使用笔记中出现的 URL，不要编造。
+7. 只返回 JSON，不要其他内容：
 {{"ops": [{{"action": "create", "title": "...", "category": "...", "content": "...", "summary": "..."}}, {{"action": "update", "title": "现有页面标题", "content": "完整新正文", "summary": "..."}}]}}
 """
 
@@ -44,6 +45,7 @@ MERGE_PROMPT = """你正在更新一个 Wiki 页面。请把"现有页面"和"�
 - 保留现有页面中仍然有效的内容（包括用户人工润色/修正过的段落），不要丢弃；
 - 用新资料补充、修正、扩展；
 - 删除已被新资料取代的过时内容；
+- 保留现有页面中的图片链接；
 - 保持原有结构，必要时新增小节。
 
 现有页面《{title}》内容：
@@ -55,10 +57,23 @@ MERGE_PROMPT = """你正在更新一个 Wiki 页面。请把"现有页面"和"�
 只输出合并后的 Markdown 正文，不要任何其他内容。"""
 
 
-def _clean_content(content: str, limit: int = 4000) -> str:
+def _clean_content(content: str, limit: int = 4000, max_images: int = 12) -> str:
     if not content:
         return ""
-    cleaned = IMAGE_RE.sub("[图片]", content)
+    counter = [0]
+
+    def _repl(m):
+        alt = (m.group(1) or "").strip()
+        url = (m.group(2) or "").strip()
+        if url.startswith("data:") or counter[0] >= max_images:
+            return "[图片]"
+        # docmost files need auth / wrong origin: do not propagate broken URLs
+        if url.startswith("/api/files/") or url.startswith("/files/") or "docmost.xzrobot.com" in url:
+            return "[图片]"
+        counter[0] += 1
+        return f"![{alt or '图片'}]({url})"
+
+    cleaned = IMAGE_RE.sub(_repl, content)
     cleaned = re.sub(r'data:image/[^)]+', '[base64图片]', cleaned)
     if len(cleaned) > limit:
         cleaned = cleaned[:limit] + "\n...(内容过长已截断)"
@@ -259,6 +274,79 @@ async def refresh_note_wiki(note_id: str) -> None:
         pages,
         engine,
     )
+
+
+async def refresh_stale_wiki(status: Dict[str, Any]) -> None:
+    """Re-distill only wiki pages whose source notes changed since the page
+    was last compiled (differentiated rebuild, no full recompile)."""
+    engine = get_engine(settings.database_url)
+    init_db(engine)
+    db = get_session(engine)
+    try:
+        note_updated = dict(
+            db.query(Page.id, Page.updated_at).all()
+        )
+        pages = db.query(WikiPage.id, WikiPage.source_note_ids, WikiPage.updated_at).all()
+        stale_note_ids = set()
+        for _pid, src_json, page_updated in pages:
+            try:
+                src_ids = json.loads(src_json or "[]")
+            except Exception:
+                src_ids = []
+            for sid in src_ids:
+                if sid in note_updated and note_updated[sid] is not None:
+                    if page_updated is None or note_updated[sid] > page_updated:
+                        stale_note_ids.add(sid)
+    finally:
+        db.close()
+
+    if not stale_note_ids:
+        status["running"] = False
+        status["processed"] = 0
+        status["total"] = 0
+        status["message"] = "没有需要刷新的页面"
+        return
+
+    db = get_session(engine)
+    try:
+        notes = db.query(
+            Page.id, Page.title, Page.notebook_id, Page.content
+        ).filter(Page.id.in_(stale_note_ids)).all()
+        notebook_names = {}
+        for nb_id, nb_name in db.query(Notebook.id, Notebook.name).all():
+            notebook_names[nb_id] = nb_name
+    finally:
+        db.close()
+
+    pages = _load_pages(engine)
+    lock = asyncio.Lock()
+    sem = asyncio.Semaphore(3)
+    done = 0
+    total = len(notes)
+    status["running"] = True
+    status["total"] = total
+    status["processed"] = 0
+    status["message"] = f"刷新 {total} 篇有变化的笔记"
+
+    async def worker(note):
+        nonlocal done
+        async with sem:
+            await _ingest_one(
+                note[0],
+                note[1],
+                notebook_names.get(note[2], ""),
+                note[3],
+                pages,
+                engine,
+                lock,
+            )
+            done += 1
+            status["processed"] = done
+            status["message"] = f"刷新 {done}/{total}"
+
+    await asyncio.gather(*(worker(n) for n in notes))
+    status["running"] = False
+    status["message"] = f"刷新完成：{total} 篇笔记重新编译"
 
 
 async def build_wiki(

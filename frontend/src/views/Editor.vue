@@ -26,7 +26,41 @@
           <span>笔记本</span>
         </div>
 
+        <div class="tag-filter">
+          <el-select
+            v-model="activeTag"
+            placeholder="按标签过滤..."
+            clearable
+            filterable
+            size="small"
+            style="width: 100%"
+          >
+            <el-option
+              v-for="t in tagOptions"
+              :key="t.tag"
+              :label="`${t.tag} (${t.count})`"
+              :value="t.tag"
+            />
+          </el-select>
+        </div>
+
         <div class="notebook-list">
+          <div v-if="activeTag" class="tag-pages">
+            <div class="tag-pages-header">标签：{{ activeTag }}（{{ tagPages.length }}）</div>
+            <div
+              v-for="page in tagPages"
+              :key="page.id"
+              class="page-item"
+              :class="{ active: currentPage?.id === page.id }"
+              @click="selectPage(page)"
+            >
+              <div class="page-info">
+                <span class="page-icon">📄</span>
+                <span class="page-title">{{ page.title || '无标题' }}</span>
+              </div>
+            </div>
+            <el-empty v-if="tagPages.length === 0" description="该标签下暂无笔记" :image-size="40" />
+          </div>
           <div
             v-for="nb in notebooks"
             :key="nb.id"
@@ -386,6 +420,27 @@ const pageSize = 50
 const hasMorePages = ref(false)
 const unassignedPages = ref<PageListItem[]>([])
 const unassignedCount = ref(0)
+const tagOptions = ref<{ tag: string; count: number }[]>([])
+const activeTag = ref('')
+const tagPages = ref<PageListItem[]>([])
+
+const loadTags = async () => {
+  try {
+    const res = await http.get('/api/pages/tags')
+    tagOptions.value = res.data.tags || []
+  } catch { /* ignore */ }
+}
+
+watch(activeTag, async (tag) => {
+  if (!tag) {
+    tagPages.value = []
+    return
+  }
+  try {
+    const res = await http.get('/api/pages', { params: { tag, page: 1, page_size: 100 } })
+    tagPages.value = res.data.items
+  } catch { /* ignore */ }
+})
 
 const loadUnassignedPages = async () => {
   try {
@@ -949,6 +1004,7 @@ watch(showDingTalk, (val) => {
 
 onMounted(async () => {
   await loadNotebooks()
+  await loadTags()
   window.addEventListener('keydown', handleKeydown)
   const targetId = route.query.page as string | undefined
   if (targetId) {
@@ -1127,4 +1183,17 @@ html, body, #app { height: 100%; }
 .dt-doc-title { font-size: 13px; font-weight: 500; color: #1e293b; }
 .dt-doc-path { font-size: 12px; color: #94a3b8; margin-left: 8px; }
 .editor-body { position: relative; min-height: 400px; }
+.tag-filter {
+  padding: 0 16px 8px;
+  border-bottom: 1px solid #f1f5f9;
+}
+.tag-pages {
+  margin-bottom: 6px;
+}
+.tag-pages-header {
+  font-size: 12px;
+  font-weight: 600;
+  color: #2563eb;
+  padding: 6px 12px;
+}
 </style>

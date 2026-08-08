@@ -18,6 +18,7 @@ class Settings(BaseSettings):
 
     hybrid_bm25_enabled: bool = True
     query_rewrite_enabled: bool = True
+    query_rewrite_min_len: int = 12
     contextual_retrieval_enabled: bool = True
     entity_graph_enabled: bool = True
     agentic_max_hops: int = 2

@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
 from app.core.jwt_utils import get_current_user
-from app.core.wiki import build_wiki
+from app.core.wiki import build_wiki, refresh_stale_wiki
 from app.models.database import Page, WikiPage
 
 router = APIRouter(prefix="/api/wiki", tags=["Wiki"])
@@ -117,4 +117,18 @@ async def rebuild_wiki(current_user=Depends(get_current_user)):
         return {"started": False, "running": True, "message": "Wiki 编译已在运行"}
     _wiki_status.update({"running": True, "processed": 0, "total": 0, "message": "启动编译..."})
     _wiki_task = asyncio.create_task(build_wiki(_wiki_status))
+    return {"started": True, "running": True}
+
+
+@router.post("/refresh-stale")
+async def refresh_stale_endpoint(current_user=Depends(get_current_user)):
+    """Differentiated rebuild: only re-distill pages whose source notes
+    changed since they were last compiled."""
+    if "__local_admin__" not in current_user["groups"]:
+        raise HTTPException(status_code=403, detail="仅管理员可执行")
+    global _wiki_task
+    if _wiki_status.get("running"):
+        return {"started": False, "running": True, "message": "已有编译任务在运行"}
+    _wiki_status.update(running=True, processed=0, total=0, message="检查过期页面...")
+    _wiki_task = asyncio.create_task(refresh_stale_wiki(_wiki_status))
     return {"started": True, "running": True}

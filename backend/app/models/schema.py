@@ -67,6 +67,7 @@ class GraphNodeResponse(BaseModel):
     link_count: int = 0
     kind: str = 'page'
     entity_type: Optional[str] = None
+    community: Optional[str] = None
 
 class GraphEdgeResponse(BaseModel):
     id: str

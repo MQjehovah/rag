@@ -25,6 +25,22 @@ REWRITE_PROMPT = """你是知识库检索助手。把用户的问题改写成最
 
 只返回 JSON，不要其他内容: {{"queries": ["子问题1", "子问题2"]}}"""
 
+COMPLEX_MARKERS = (
+    "和", "与", "以及", "或", "还是", "怎么", "如何", "为什么",
+    "区别", "对比", "哪些", "什么", "分别", "总结", "所有", "包括",
+)
+
+
+def _needs_rewrite(query: str) -> bool:
+    """Only spend an LLM call on queries complex enough to benefit from
+    rewriting; short/simple queries recall fine with the original text."""
+    q = (query or "").strip()
+    if not q:
+        return False
+    if len(q) >= 30:
+        return True
+    return len(q) >= settings.query_rewrite_min_len and any(m in q for m in COMPLEX_MARKERS)
+
 
 def _rrf(rankings: List[List[str]], k: int = 60) -> Dict[str, float]:
     scores: Dict[str, float] = defaultdict(float)
@@ -108,6 +124,8 @@ def _mmr_rank(
 
 async def _rewrite_query(query: str) -> List[str]:
     if not settings.query_rewrite_enabled or not settings.llm_api_url:
+        return []
+    if not _needs_rewrite(query):
         return []
     try:
         result = await call_llm_json(

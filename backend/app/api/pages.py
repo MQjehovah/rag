@@ -6,6 +6,7 @@ import uuid
 import time
 from datetime import datetime
 import logging
+from collections import Counter
 
 logger = logging.getLogger(__name__)
 
@@ -152,6 +153,7 @@ def create_page(data: PageCreate, background_tasks: BackgroundTasks, db: Session
 def list_pages(
     notebook_id: Optional[str] = None,
     unassigned: bool = False,
+    tag: Optional[str] = None,
     page: int = 1,
     page_size: int = 50,
     db: Session = Depends(get_db),
@@ -163,6 +165,8 @@ def list_pages(
         query = query.filter(Page.notebook_id.is_(None))
     elif notebook_id:
         query = query.filter(Page.notebook_id == notebook_id)
+    if tag:
+        query = query.filter(Page.keywords.like(f"%{tag}%"))
     if "__local_admin__" not in current_user["groups"]:
         visible_nb_ids = db.query(Notebook.id).filter(
             or_(Notebook.group_id.in_(current_user["groups"]), Notebook.group_id.is_(None))
@@ -186,6 +190,30 @@ def list_pages(
         page=page,
         page_size=page_size,
     )
+
+
+@router.get("/tags")
+def get_tags(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    """Aggregate note keywords into a tag cloud (visible to the user)."""
+    if "__local_admin__" in current_user["groups"]:
+        rows = db.query(Page.keywords).all()
+    else:
+        visible_nb_ids = db.query(Notebook.id).filter(
+            or_(Notebook.group_id.in_(current_user["groups"]), Notebook.group_id.is_(None))
+        ).subquery()
+        rows = db.query(Page.keywords).filter(
+            or_(Page.notebook_id.is_(None), Page.notebook_id.in_(visible_nb_ids))
+        ).all()
+    counter = Counter()
+    for (kw_str,) in rows:
+        if not kw_str:
+            continue
+        for kw in kw_str.split(","):
+            kw = kw.strip()
+            if len(kw) >= 2:
+                counter[kw] += 1
+    tags = [{"tag": k, "count": v} for k, v in counter.most_common(100)]
+    return {"tags": tags}
 
 @router.get("/{page_id}", response_model=PageResponse)
 def get_page(page_id: str, db: Session = Depends(get_db), current_user=Depends(get_current_user)):

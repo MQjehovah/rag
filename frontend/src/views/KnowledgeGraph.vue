@@ -19,6 +19,10 @@
           <el-radio-button value="pages">知识图谱</el-radio-button>
           <el-radio-button value="entities">实体图谱</el-radio-button>
         </el-radio-group>
+        <el-radio-group v-if="viewMode === 'entities'" v-model="colorMode" size="small">
+          <el-radio-button value="type">按类型</el-radio-button>
+          <el-radio-button value="community">按社区</el-radio-button>
+        </el-radio-group>
         <el-input v-model="filterText" placeholder="过滤节点..." clearable style="width: 180px" />
         <el-button @click="zoomIn">放大</el-button>
         <el-button @click="zoomOut">缩小</el-button>
@@ -59,6 +63,7 @@ interface GraphNode {
   link_count: number
   kind?: 'page' | 'entity'
   entity_type?: string | null
+  community?: string | null
 }
 
 interface GraphEdge {
@@ -79,6 +84,7 @@ const filterText = ref('')
 const rebuilding = ref(false)
 const rebuildingEntities = ref(false)
 const viewMode = ref<ViewMode>('pages')
+const colorMode = ref<'type' | 'community'>('type')
 const hoveredNode = ref<GraphNode | null>(null)
 const tooltipPos = ref({ x: 0, y: 0 })
 const stats = ref({
@@ -104,6 +110,8 @@ const entityTypeColors: Record<string, string> = {
   '版本号': '#e879f9',
   '文档': '#4ade80',
 }
+
+const communityColors: Record<string, string> = {}
 
 const entityNodeCount = computed(() => {
   if (viewMode.value !== 'entities') return 0
@@ -145,6 +153,13 @@ const loadData = async () => {
 
 const getColor = (node: GraphNode) => {
   if (node.kind === 'entity') {
+    if (colorMode.value === 'community' && node.community) {
+      if (!communityColors[node.community]) {
+        communityColors[node.community] =
+          notebookColors[Object.keys(communityColors).length % notebookColors.length]
+      }
+      return communityColors[node.community]
+    }
     return entityTypeColors[node.entity_type || ''] || '#94a3b8'
   }
   if (!node.notebook_id) return '#9ca3af'
@@ -359,6 +374,10 @@ watch(filterText, () => {
 
 watch(viewMode, () => {
   loadData()
+})
+
+watch(colorMode, () => {
+  renderGraph()
 })
 
 let resizeObserver: ResizeObserver | null = null

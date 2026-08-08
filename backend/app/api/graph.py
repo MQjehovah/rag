@@ -1,4 +1,5 @@
 import asyncio
+import json
 
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.orm import Session
@@ -7,7 +8,7 @@ from typing import List, Dict, Any
 from collections import Counter, defaultdict
 import logging
 
-from app.models.database import Page, GraphEdge, GraphEntity, GraphEntityEdge, Notebook, get_engine, get_session, init_db
+from app.models.database import Page, GraphEdge, GraphEntity, GraphEntityEdge, GraphCommunity, Notebook, get_engine, get_session, init_db
 from app.models.schema import GraphDataResponse, GraphNodeResponse, GraphEdgeResponse, GraphStatsResponse
 from app.core.rag import EmbeddingService
 from app.core.graph import GraphBuilder
@@ -114,6 +115,14 @@ def get_graph_data(
         degree[ee.source_entity_id] += 1
         degree[ee.target_entity_id] += 1
 
+    ent_community: Dict[str, str] = {}
+    for cid, member_json in db.query(GraphCommunity.id, GraphCommunity.member_ids).all():
+        try:
+            for eid in json.loads(member_json or "[]"):
+                ent_community[eid] = cid
+        except Exception:
+            pass
+
     ranked = sorted(ent_by_id, key=lambda eid: degree.get(eid, 0), reverse=True)
     keep_ent = set(ranked[:max_nodes])
 
@@ -137,6 +146,7 @@ def get_graph_data(
             link_count=degree.get(e.id, 0),
             kind="entity",
             entity_type=e.entity_type,
+            community=ent_community.get(e.id),
         ))
     for pid in keep_pages:
         p = page_by_id.get(pid)

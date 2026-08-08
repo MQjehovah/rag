@@ -49,7 +49,12 @@
         <h1 class="wiki-title">{{ current.title }}</h1>
         <div v-if="current.summary" class="wiki-summary">{{ current.summary }}</div>
         <template v-if="!editing">
-          <div class="wiki-body markdown-body" v-html="renderContent(current.content)" @click="handleContentClick"></div>
+          <div
+            class="wiki-body markdown-body"
+            v-html="renderContent(current.content)"
+            @click="handleContentClick"
+            @error.capture="handleImgError"
+          ></div>
         </template>
         <template v-else>
           <div class="wiki-edit">
@@ -218,6 +223,17 @@ const handleContentClick = (e: MouseEvent) => {
   if (target && target.dataset.id) {
     openPage(target.dataset.id)
   }
+}
+
+const handleImgError = (e: Event) => {
+  const el = e.target as HTMLImageElement
+  const src = el.getAttribute('src') || ''
+  if (!src.includes('/api/upload/images/proxy') && /^https?:/.test(src)) {
+    // First failure: retry once through the no-Referer backend proxy.
+    el.src = window.location.origin + '/api/upload/images/proxy?url=' + encodeURIComponent(src)
+    return
+  }
+  el.style.display = 'none'
 }
 
 const rebuildWiki = async () => {
