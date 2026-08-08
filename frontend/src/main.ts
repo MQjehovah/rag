@@ -8,6 +8,7 @@ import Editor from './views/Editor.vue'
 import KnowledgeGraph from './views/KnowledgeGraph.vue'
 import Login from './views/Login.vue'
 import Chat from './views/Chat.vue'
+import Wiki from './views/Wiki.vue'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -16,6 +17,8 @@ const router = createRouter({
     { path: '/', component: Chat },
     { path: '/notes', component: Editor },
     { path: '/graph', component: KnowledgeGraph },
+    { path: '/wiki', component: Wiki },
+    { path: '/wiki/:id', component: Wiki },
   ]
 })
 

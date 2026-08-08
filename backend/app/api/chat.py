@@ -1,5 +1,7 @@
 import json
 import logging
+import re
+import urllib.parse
 from typing import List, Dict, Any
 
 import httpx
@@ -49,6 +51,7 @@ SYSTEM_PROMPT = """你是一个基于企业知识库的智能助手。请根据�
 - 如果参考资料中没有相关信息，请诚实说明
 - 回答时用 [1][2] 等编号标注对应资料，编号与参考资料列表一致
 - 每个关键结论都要有编号引用，方便用户核对
+- 如果参考资料附带的图片与回答直接相关，请在回答中直接嵌入图片，格式：![图片说明](图片URL)，只使用参考资料中出现的图片URL
 - 使用中文回答"""
 
 RAG_PROMPT_TEMPLATE = """参考资料：
@@ -58,6 +61,45 @@ RAG_PROMPT_TEMPLATE = """参考资料：
 {history}用户问题：{query}
 
 请根据以上参考资料回答问题，并在相应位置用 [1][2] 等编号标注引用来源。"""
+
+
+IMAGE_RE = re.compile(r'!\[[^\]]*\]\(([^)]+)\)')
+
+SAFE_IMAGE_HOSTS = {"192.168.31.34", "192.168.31.8", "localhost", "127.0.0.1"}
+
+
+def _normalize_image_url(u: str) -> str:
+    """Rewrite external image URLs through our no-Referer proxy so images
+    behind Referer checks (e.g. Alibaba OSS) still load in the browser."""
+    if u.startswith("/"):
+        return u
+    if not (u.startswith("http://") or u.startswith("https://")):
+        return u
+    try:
+        host = urllib.parse.urlsplit(u).hostname or ""
+    except Exception:
+        return u
+    if host in SAFE_IMAGE_HOSTS:
+        return u
+    return "/api/upload/images/proxy?url=" + urllib.parse.quote(u, safe="")
+
+
+def _extract_images(text: str, limit: int = 6) -> list:
+    """Pull image URLs out of markdown content (skip huge base64 blobs)."""
+    urls = []
+    seen = set()
+    for u in IMAGE_RE.findall(text or ""):
+        u = u.strip()
+        if not u or u in seen or u.startswith("data:"):
+            continue
+        norm = _normalize_image_url(u)
+        if norm in seen:
+            continue
+        seen.add(norm)
+        urls.append(norm)
+        if len(urls) >= limit:
+            break
+    return urls
 
 
 JUDGE_PROMPT = """判断已检索到的资料是否足够回答用户问题。
@@ -150,11 +192,18 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db), current_user
         excerpt = chunk_texts[0] if chunk_texts else (note.get("content") or "")[:500]
         if len(excerpt) > 2000:
             excerpt = excerpt[:2000] + "\n...(内容过长已截断)"
-        context_parts.append(f"[{i}]《{note['title']}》\n{excerpt}")
+        imgs = _extract_images(" ".join(chunk_texts))
+        if not imgs:
+            imgs = _extract_images(note.get("content") or "")
+        part = f"[{i}]《{note['title']}》\n{excerpt}"
+        if imgs:
+            part += f"\n相关图片: {', '.join(imgs[:4])}"
+        context_parts.append(part)
         sources.append({
             "id": note["id"],
             "title": note["title"],
             "chunks": chunks[:3],
+            "images": imgs[:6],
         })
 
     context = "\n\n".join(context_parts) if context_parts else "未找到相关笔记"

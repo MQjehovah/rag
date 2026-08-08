@@ -1,8 +1,10 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 import uuid
 import io
 import os
+import hashlib
+import httpx
 from datetime import datetime
 from pathlib import Path
 
@@ -13,6 +15,9 @@ router = APIRouter(prefix="/api/upload", tags=["文件上传"])
 
 UPLOAD_DIR = Path("./data/uploads")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+IMAGE_CACHE_DIR = Path("./data/image_cache")
+IMAGE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 try:
     from minio import Minio
@@ -89,3 +94,37 @@ def get_image(date_dir: str, file_name: str):
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="图片不存在")
     return FileResponse(file_path)
+
+
+@router.get("/images/proxy")
+async def proxy_image(url: str):
+    """Fetch an external image server-side and stream it back.
+
+    Some image hosts (e.g. Alibaba OSS buckets) reject browser requests with a
+    Referer header, which every cross-origin <img> sends.  Fetching without a
+    Referer from the backend bypasses that, with a disk cache so we only fetch
+    each URL once.
+    """
+    if not url.startswith(("http://", "https://")):
+        raise HTTPException(status_code=400, detail="只支持 http/https 图片")
+    cache_key = hashlib.sha256(url.encode("utf-8")).hexdigest()
+    cached = list(IMAGE_CACHE_DIR.glob(cache_key + ".*"))
+    if cached:
+        return FileResponse(cached[0])
+    try:
+        async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
+            resp = await client.get(url)
+            resp.raise_for_status()
+            content = resp.content
+            content_type = resp.headers.get("content-type", "image/png")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"图片获取失败: {str(e)[:120]}")
+    ext = content_type.split("/")[-1].split(";")[0].strip() or "bin"
+    if not ext or len(ext) > 8:
+        ext = "bin"
+    cache_path = IMAGE_CACHE_DIR / f"{cache_key}.{ext}"
+    try:
+        cache_path.write_bytes(content)
+    except Exception:
+        pass
+    return Response(content=content, media_type=content_type)

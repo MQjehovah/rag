@@ -107,6 +107,20 @@ class GraphEntityEdge(Base):
     )
 
 
+class WikiPage(Base):
+    """LLM-generated wiki pages distilled from notes (read-only for users)."""
+    __tablename__ = 'wiki_pages'
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    title = Column(String(255), nullable=False, unique=True, index=True)
+    category = Column(String(128), nullable=True, default='', index=True)
+    content = Column(Text, default='')
+    summary = Column(Text, default='')
+    source_note_ids = Column(Text, default='[]')
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
 class User(Base):
     __tablename__ = 'users'
 

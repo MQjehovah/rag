@@ -22,6 +22,7 @@ router = APIRouter(prefix="/api/pages", tags=["笔记"])
 
 _embedding_service = None
 _last_index_time = {}
+_last_wiki_time = {}
 
 
 def _should_index(page_id: str, cooldown: float = 15.0) -> bool:
@@ -96,6 +97,18 @@ async def background_index_page(page_id: str):
             db.commit()
         finally:
             db.close()
+
+        # 6) Incremental wiki compile for this note (throttled), so note
+        # edits keep the distilled wiki fresh without burning tokens on
+        # autosave bursts.
+        now = time.time()
+        if now - _last_wiki_time.get(page_id, 0.0) > 60.0:
+            _last_wiki_time[page_id] = now
+            try:
+                from app.core.wiki import refresh_note_wiki
+                await refresh_note_wiki(page_id)
+            except Exception as e:
+                logger.warning(f"Wiki refresh failed for {page_id}: {e}")
     except Exception as e:
         logger.error(f"Auto-index failed for {page_id}: {e}")
     finally:

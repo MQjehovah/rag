@@ -28,6 +28,15 @@
                 <span v-if="src.chunks[0].context" class="source-tooltip-ctx">{{ src.chunks[0].context }}</span>
                 <div class="source-tooltip-text">{{ src.chunks[0].content }}</div>
               </div>
+              <div v-if="src.images && src.images.length" class="source-tooltip-imgs">
+                <img
+                  v-for="img in src.images.slice(0, 3)"
+                  :key="img"
+                  :src="resolveUrl(img)"
+                  loading="lazy"
+                  @error="hideImg"
+                />
+              </div>
             </template>
             <router-link
               :to="{ path: '/notes', query: { page: src.id } }"
@@ -37,6 +46,18 @@
               [{{ i + 1 }}] {{ src.title }}
             </router-link>
           </el-tooltip>
+        </div>
+        <div v-if="msg.role === 'assistant' && sourceImages(msg).length" class="message-images">
+          <a
+            v-for="img in sourceImages(msg)"
+            :key="img"
+            :href="resolveUrl(img)"
+            target="_blank"
+            rel="noopener"
+            class="message-image"
+          >
+            <img :src="resolveUrl(img)" loading="lazy" @error="hideImg" />
+          </a>
         </div>
           <div v-if="msg.role === 'assistant' && msg.content && !loading" class="message-actions">
             <el-button size="small" text type="primary" @click="handleSaveNote(idx)">保存为笔记</el-button>
@@ -122,6 +143,7 @@ interface Source {
   id: string
   title: string
   chunks?: { content: string; context?: string }[]
+  images?: string[]
 }
 
 interface Message {
@@ -288,6 +310,37 @@ const openSource = (src: any) => {
     query: { page: src.id },
     hash: chunk ? `#c${chunk.chunk_index ?? 0}` : '',
   })
+}
+
+const resolveUrl = (u: string) => {
+  if (/^(https?:|data:)/.test(u)) return u
+  return window.location.origin + (u.startsWith('/') ? '' : '/') + u
+}
+
+const hideImg = (e: Event) => {
+  const el = e.target as HTMLImageElement
+  const src = el.getAttribute('src') || ''
+  if (!src.includes('/api/upload/images/proxy') && /^https?:/.test(src)) {
+    // First failure: retry once through the no-Referer backend proxy.
+    el.src = window.location.origin + '/api/upload/images/proxy?url=' + encodeURIComponent(src)
+    return
+  }
+  el.style.display = 'none'
+}
+
+const sourceImages = (msg: Message) => {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const s of msg.sources || []) {
+    for (const img of s.images || []) {
+      if (!seen.has(img)) {
+        seen.add(img)
+        out.push(img)
+        if (out.length >= 9) return out
+      }
+    }
+  }
+  return out
 }
 
 const handleSaveNote = async (idx: number) => {
@@ -530,6 +583,44 @@ const confirmSaveNote = async () => {
   color: #7dd3fc;
   border-color: rgba(56, 189, 248, 0.35);
   background: rgba(56, 189, 248, 0.1);
+}
+.message-images {
+  margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.message-image {
+  display: block;
+  width: 72px;
+  height: 72px;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid #334155;
+  background: #1e293b;
+}
+.message-image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.markdown-body :deep(img) {
+  max-width: 100%;
+  border-radius: 8px;
+}
+:global(.source-tooltip-imgs) {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+  flex-wrap: wrap;
+}
+:global(.source-tooltip-imgs img) {
+  width: 64px;
+  height: 64px;
+  object-fit: cover;
+  border-radius: 6px;
+  border: 1px solid #334155;
 }
 :global(.source-tooltip) {
   background: #1e293b !important;

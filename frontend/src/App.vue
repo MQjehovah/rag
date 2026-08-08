@@ -5,6 +5,7 @@
       <div class="nav-links">
         <router-link to="/" class="nav-link" active-class="active">AI 问答</router-link>
         <router-link to="/notes" class="nav-link" active-class="active">笔记</router-link>
+        <router-link to="/wiki" class="nav-link" active-class="active">知识库</router-link>
         <router-link to="/graph" class="nav-link" active-class="active">知识图谱</router-link>
       </div>
       <div class="nav-user" v-if="isLoggedIn">
