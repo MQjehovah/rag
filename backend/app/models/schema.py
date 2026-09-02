@@ -92,29 +92,6 @@ class PageListResponse(BaseModel):
     page: int
     page_size: int
 
-class GraphNodeResponse(BaseModel):
-    id: str
-    title: str
-    notebook_id: Optional[str] = None
-    link_count: int = 0
-
-class GraphEdgeResponse(BaseModel):
-    id: str
-    source_id: str
-    target_id: str
-    weight: float
-    edge_type: str
-
-class GraphDataResponse(BaseModel):
-    nodes: List[GraphNodeResponse]
-    edges: List[GraphEdgeResponse]
-
-class GraphStatsResponse(BaseModel):
-    total_nodes: int
-    total_edges: int
-    avg_connections: float
-    clusters: int
-
 class EnhancedSearchResult(BaseModel):
     id: str
     title: str
@@ -142,6 +119,10 @@ class UserResponse(BaseModel):
     is_local: bool = False
     groups: List[str] = []
     is_active: bool = True
+    is_admin: bool = False
+    # V4 Phase B：明确的角色能力字段
+    is_wiki_editor: bool = False
+    roles: List[str] = ["user"]
 
 class LoginResponse(BaseModel):
     token: str

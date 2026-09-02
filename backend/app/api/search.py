@@ -1,268 +1,36 @@
-from fastapi import APIRouter, HTTPException, Depends
-from pydantic import BaseModel
-from typing import List, Dict, Any, Optional
-from collections import defaultdict
-from sqlalchemy import or_
-from sqlalchemy.orm import Session
-import logging
+"""搜索 API（V4 Phase G）。
 
-from app.core.rag import EmbeddingService, VectorStore, RerankerService
-from app.models.database import Page, GraphEdge, Notebook, get_session, get_engine, init_db
-from app.models.schema import EnhancedSearchResult, EnhancedSearchResponse
+`/api/search` 与 `/api/search/v2` 共用同一个新服务 `run_search_query`（Wiki + Page/Chunk，
+不查询 Card/KO）。旧的 EmbeddingService/VectorStore/Reranker Search 不再作为默认可达接口。
+"""
+from __future__ import annotations
+
+from typing import Optional
+
+from fastapi import APIRouter, Depends
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
+
+from app.api.deps import get_db
 from app.core.jwt_utils import get_current_user
-from app.config import settings
+from app.api.search_v2 import run_search_query
 
 router = APIRouter(prefix="/api/search", tags=["搜索"])
-
-_engine = None
-_session = None
-_reranker = None
-
-logger = logging.getLogger(__name__)
-
-def get_db():
-    global _engine, _session
-    if _engine is None:
-        _engine = get_engine(settings.database_url)
-        init_db(_engine)
-    if _session is None:
-        _session = get_session(_engine)
-    return _session
-
-def get_reranker():
-    global _reranker
-    if _reranker is None:
-        _reranker = RerankerService()
-    return _reranker
-
-def _get_visible_page_ids(db, current_user) -> set:
-    if "__local_admin__" in current_user["groups"]:
-        return set(p[0] for p in db.query(Page.id).all())
-    visible_nb_ids = db.query(Notebook.id).filter(
-        or_(Notebook.group_id.in_(current_user["groups"]), Notebook.group_id.is_(None))
-    ).subquery()
-    return set(p[0] for p in db.query(Page.id).filter(Page.notebook_id.in_(visible_nb_ids)).all())
 
 
 class SearchRequest(BaseModel):
     query: str
+    scope_id: Optional[str] = None
     top_k: int = 5
 
 
 @router.post("")
-async def search(request: SearchRequest, db: Session = Depends(get_db), reranker_svc=Depends(get_reranker), current_user=Depends(get_current_user)):
-    embedding_service = EmbeddingService()
-
-    try:
-        query_embedding = await embedding_service.encode(request.query)
-    except Exception as e:
-        await embedding_service.close()
-        raise HTTPException(status_code=500, detail=f"Embedding失败: {str(e)}")
-
-    visible_ids = _get_visible_page_ids(db, current_user)
-
-    vec_scores: Dict[str, float] = {}
-    vec_metadata: Dict[str, Dict[str, Any]] = {}
-    visible_chunk_candidates: List[Dict[str, Any]] = []
-    vec_store = VectorStore(db)
-    try:
-        vec_results = await vec_store.search(query_embedding, settings.vector_recall_k)
-        for item in vec_results:
-            page_id = item["page_id"]
-            if page_id not in visible_ids:
-                continue
-            sim = 1.0 - item["distance"]
-            if sim < 0.35:
-                continue
-            visible_chunk_candidates.append({**item, "similarity": sim})
-            if page_id not in vec_scores or sim > vec_scores[page_id]:
-                vec_scores[page_id] = sim
-                vec_metadata[page_id] = {
-                    "content": item.get("content") or "",
-                    "page_number": item.get("page_number"),
-                    "content_type": item.get("content_type") or "text",
-                }
-    except Exception as e:
-        logger.warning(f"Vector search error: {e}")
-
-    kw_scores: Dict[str, float] = {}
-    content_snippets: Dict[str, str] = {}
-
-    # 先在向量候选块内部重排，解决一篇大型 PDF 被聚合成单个页面后页码丢失的问题。
-    if visible_chunk_candidates:
-        try:
-            chunk_docs = [item.get("content") or "" for item in visible_chunk_candidates]
-            chunk_top_k = min(
-                len(chunk_docs),
-                max(request.top_k * 6, 12),
-            )
-            chunk_reranked = await reranker_svc.rerank(
-                request.query,
-                chunk_docs,
-                top_k=chunk_top_k,
-            )
-            best_chunk_score: Dict[str, float] = {}
-            for result in chunk_reranked:
-                index = int(result.get("index", -1))
-                if not 0 <= index < len(visible_chunk_candidates):
-                    continue
-                item = visible_chunk_candidates[index]
-                page_id = item["page_id"]
-                score = float(result.get("relevance_score", 0.0))
-                if score <= best_chunk_score.get(page_id, float("-inf")):
-                    continue
-                best_chunk_score[page_id] = score
-                content_snippets[page_id] = item.get("content") or ""
-                vec_metadata[page_id] = {
-                    "content": item.get("content") or "",
-                    "page_number": item.get("page_number"),
-                    "content_type": item.get("content_type") or "text",
-                }
-        except Exception as exc:
-            logger.warning(f"Chunk reranker error: {exc}")
-    try:
-        query_kw = EmbeddingService.extract_keywords(request.query, 10, fine_grained=True)
-        if query_kw:
-            kw_like_conditions = []
-            params = {}
-            for i, kw in enumerate(query_kw):
-                kw_like_conditions.append(f"keywords LIKE :kw{i}")
-                params[f"kw{i}"] = f"%{kw}%"
-
-            if kw_like_conditions:
-                from sqlalchemy import text as sql_text
-                where_clause = " OR ".join(kw_like_conditions)
-                if visible_ids:
-                    placeholders = ",".join([f":vid{i}" for i in range(len(visible_ids))])
-                    for i, vid in enumerate(visible_ids):
-                        params[f"vid{i}"] = vid
-                    where_clause = f"({where_clause}) AND id IN ({placeholders})"
-
-                result = db.execute(
-                    sql_text(f"SELECT id, title, content, keywords FROM pages WHERE {where_clause}"),
-                    params
-                )
-                for row in result.fetchall():
-                    pid = row[0]
-                    if pid not in visible_ids:
-                        continue
-                    page_kw_str = row[3] or ""
-                    page_kw = set(page_kw_str.split(",")) if page_kw_str else set()
-                    overlap = set()
-                    for qkw in query_kw:
-                        for pkw in page_kw:
-                            if qkw in pkw or pkw in qkw:
-                                overlap.add(qkw)
-                                break
-                    if overlap:
-                        kw_score = len(overlap) / max(len(query_kw), 1)
-                        title_bonus = 0.3 if any(kw in (row[1] or "") for kw in overlap) else 0.0
-                        kw_scores[pid] = min(kw_score + title_bonus, 1.0)
-                        content_snippets.setdefault(pid, (row[2] or "")[:300])
-    except Exception as e:
-        logger.warning(f"Keyword search error: {e}")
-
-    candidate_ids = set(vec_scores.keys()) | set(kw_scores.keys())
-    if not candidate_ids:
-        await embedding_service.close()
-        return EnhancedSearchResponse(results=[], total=0, graph_expanded=0)
-
-    for pid in vec_scores:
-        if pid not in content_snippets:
-            content_snippets[pid] = vec_metadata.get(pid, {}).get("content", "")
-
-    candidate_pages = db.query(Page).filter(Page.id.in_(list(candidate_ids))).all()
-    page_map = {p.id: p for p in candidate_pages}
-
-    rr_scores: Dict[str, float] = {}
-    rerank_candidates = []
-    for pid in candidate_ids:
-        p = page_map.get(pid)
-        if p:
-            rerank_candidates.append({
-                "id": pid,
-                "text": (p.title or "") + " " + content_snippets.get(pid, "")[:700],
-            })
-
-    if rerank_candidates and len(rerank_candidates) > 1:
-        try:
-            docs = [c["text"] for c in rerank_candidates]
-            rerank_results = await reranker_svc.rerank(request.query, docs, top_k=request.top_k * 2)
-            for r in rerank_results:
-                idx = r.get("index", 0)
-                if idx < len(rerank_candidates):
-                    pid = rerank_candidates[idx]["id"]
-                    rr_scores[pid] = r.get("relevance_score", 0.0)
-        except Exception as e:
-            logger.warning(f"Reranker error: {e}")
-
-    scores: Dict[str, Dict[str, Any]] = {}
-    W_VEC, W_KW, W_RR = 1.0, 1.5, 5.0
-    for pid in candidate_ids:
-        v = vec_scores.get(pid, 0.0)
-        k = kw_scores.get(pid, 0.0)
-        r = rr_scores.get(pid, 0.0)
-        final = v * W_VEC + k * W_KW + r * W_RR
-        sources = set()
-        if v > 0:
-            sources.add("vector")
-        if k > 0:
-            sources.add("keyword")
-        if r > 0:
-            sources.add("reranker")
-        scores[pid] = {"score": final, "sources": sources, "content_snippet": content_snippets.get(pid, "")}
-
-    graph_expanded = 0
-    try:
-        seed_ids = list(scores.keys())[:20]
-        if seed_ids and len(seed_ids) > 1:
-            edges = db.query(GraphEdge).filter(
-                (GraphEdge.source_id.in_(seed_ids)) | (GraphEdge.target_id.in_(seed_ids))
-            ).all()
-            adj: Dict[str, List[tuple]] = defaultdict(list)
-            for e in edges:
-                adj[e.source_id].append((e.target_id, float(e.weight)))
-                adj[e.target_id].append((e.source_id, float(e.weight)))
-
-            for seed_id in seed_ids:
-                for neighbor_id, edge_weight in adj.get(seed_id, []):
-                    if neighbor_id in visible_ids and neighbor_id not in scores:
-                        p = page_map.get(neighbor_id)
-                        if p is None:
-                            p = db.query(Page).filter(Page.id == neighbor_id).first()
-                        if p:
-                            scores[neighbor_id] = {
-                                "score": scores[seed_id]["score"] * 0.5 * edge_weight,
-                                "sources": {"graph"},
-                                "content_snippet": (p.content or "")[:200],
-                            }
-                            page_map[neighbor_id] = p
-                            graph_expanded += 1
-    except Exception as e:
-        logger.warning(f"Graph expansion error: {e}")
-
-    sorted_results = sorted(scores.items(), key=lambda x: x[1]["score"], reverse=True)
-    top_results = sorted_results[:request.top_k]
-
-    results = []
-    for page_id, data in top_results:
-        p = page_map.get(page_id)
-        title = p.title if p else ""
-        content = data.get("content_snippet", (p.content or "")[:300] if p else "")
-        results.append(EnhancedSearchResult(
-            id=page_id,
-            title=title,
-            content=content[:300],
-            score=round(data["score"], 4),
-            source="+".join(sorted(data["sources"])) if data["sources"] else "unknown",
-            page_number=vec_metadata.get(page_id, {}).get("page_number"),
-            content_type=vec_metadata.get(page_id, {}).get("content_type", "text"),
-            source_url=p.source_url if p else None,
-        ))
-
-    await embedding_service.close()
-    return EnhancedSearchResponse(
-        results=results,
-        total=len(results),
-        graph_expanded=graph_expanded,
+async def search(
+    request: SearchRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """默认 Search：复用新 Wiki + Page/Chunk 服务，scope 校验在检索前完成。"""
+    return run_search_query(
+        db, current_user, request.query, request.scope_id, top_k=request.top_k
     )

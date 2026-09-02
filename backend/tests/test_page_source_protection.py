@@ -6,7 +6,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.api.pages import create_page, import_source_page, update_page
-from app.models.database import Base, Notebook, Page
+from app.models.database import Base, Notebook, Page, SourceConnection, SourceItem
 from app.models.schema import PageCreate, PageUpdate, SourcePageImport
 
 
@@ -31,6 +31,14 @@ def db():
         indexed_content_hash=digest,
         index_dirty=False,
     ))
+    # J-1：远程 Page 必须有同 Connector 的 active SourceItem，否则在权限层 fail closed，
+    # 无法测到 update_page 内部的源码编辑保护语义。此处补一条 active SourceItem 使
+    # Page 在权限层有效，从而让测试聚焦「源码编辑保护」本身。
+    session.add(SourceConnection(id="conn-1", connector_key="dingtalk", name="钉钉"))
+    session.add(SourceItem(
+        id="si-1", connection_id="conn-1", external_id="node-1",
+        page_id="page-1", state="active",
+    ))
     session.commit()
     try:
         yield session
@@ -41,7 +49,7 @@ def db():
 @pytest.mark.asyncio
 async def test_dingtalk_page_rejects_implicit_content_update(db):
     with pytest.raises(HTTPException) as exc:
-        await update_page(
+        update_page(
             "page-1",
             PageUpdate(content="被隐式改写的正文"),
             BackgroundTasks(),
@@ -55,7 +63,7 @@ async def test_dingtalk_page_rejects_implicit_content_update(db):
 
 @pytest.mark.asyncio
 async def test_explicit_source_edit_marks_index_stale(db):
-    updated = await update_page(
+    updated = update_page(
         "page-1",
         PageUpdate(content="# 人工修改正文", allow_source_edit=True),
         BackgroundTasks(),
@@ -82,7 +90,7 @@ async def test_explicit_source_edit_marks_index_stale(db):
 )
 async def test_create_page_rejects_binary_content(db, content):
     with pytest.raises(HTTPException) as exc:
-        await create_page(
+        create_page(
             PageCreate(
                 title="错误文件.pdf",
                 content=content,
@@ -100,7 +108,7 @@ async def test_create_page_rejects_binary_content(db, content):
 @pytest.mark.asyncio
 async def test_update_page_rejects_binary_content_even_when_source_edit_allowed(db):
     with pytest.raises(HTTPException) as exc:
-        await update_page(
+        update_page(
             "page-1",
             PageUpdate(
                 content="%PDF-1.7\n3 0 obj\nstream\n错误正文",
@@ -117,7 +125,7 @@ async def test_update_page_rejects_binary_content_even_when_source_edit_allowed(
 
 @pytest.mark.asyncio
 async def test_create_page_allows_normal_markdown(db):
-    page = await create_page(
+    page = create_page(
         PageCreate(
             title="正常文档.pdf",
             content="# 正常文档\n\n这是转换后的Markdown正文。",
@@ -144,7 +152,7 @@ async def test_source_import_adopts_page_and_persists_protection_metadata(db):
     content = "# 收费标准\n\n这是最新版Markdown正文。"
     digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
 
-    imported = await import_source_page(
+    imported = import_source_page(
         SourcePageImport(
             page_id="ordinary-page",
             title="收费标准.pdf",
@@ -176,7 +184,7 @@ async def test_source_import_adopts_page_and_persists_protection_metadata(db):
 @pytest.mark.asyncio
 async def test_source_import_rejects_wrong_published_hash(db):
     with pytest.raises(HTTPException) as exc:
-        await import_source_page(
+        import_source_page(
             SourcePageImport(
                 title="收费标准.pdf",
                 content="# 正常Markdown",

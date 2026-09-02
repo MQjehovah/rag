@@ -1,16 +1,11 @@
-import base64
 import hashlib
 import io
-import json
 import logging
 import math
 import re
-import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
-
-import httpx
 
 from app.config import settings
 
@@ -263,14 +258,6 @@ class PDFVisionService:
             selected.extend(remaining[:limit - len(selected)])
         return sorted(selected[:limit], key=lambda page: int(page.get("page_number") or 0))
 
-    @staticmethod
-    def _api_config() -> Tuple[str, str, str]:
-        return (
-            settings.pdf_vision_api_url or settings.llm_api_url,
-            settings.pdf_vision_api_key or settings.llm_api_key,
-            settings.pdf_vision_model,
-        )
-
     @classmethod
     def _analyze_image(
         cls,
@@ -278,114 +265,10 @@ class PDFVisionService:
         page_number: int,
         source_text: str,
     ) -> Dict[str, Any] | None:
-        api_url, api_key, model = cls._api_config()
-        if not settings.pdf_vision_enabled or not api_url or not api_key or not model:
-            return None
+        """委托视觉 Provider：VLM 优先、不可用自动退化 OCR（P1-BE-06）。"""
+        from app.core.vision_provider import get_vision_provider
 
-        cache_path = image_path.with_suffix(".vision.json")
-        if cache_path.is_file():
-            try:
-                cached = json.loads(cache_path.read_text(encoding="utf-8"))
-                if isinstance(cached, dict):
-                    return cached
-            except Exception:
-                logger.warning(f"PDF 第 {page_number} 页视觉缓存损坏，将重新分析")
-
-        image_base64 = base64.b64encode(image_path.read_bytes()).decode("ascii")
-        prompt = f"""
-你正在分析设备部署手册第 {page_number} 页。请重点理解图片的功能，不要只做 OCR。
-
-请识别：
-1. 图片属于设备部件图、安装操作图、软件界面截图、地图区域示意图还是普通装饰图；
-2. 数字标号、箭头、框选区域分别指向什么；
-3. 多张截图之间的操作顺序；
-4. 图片对完成部署操作有什么实际作用；
-5. 哪些结论无法从图片中可靠确认。
-
-PDF 文本层内容如下，仅用于辅助，不得补造图片中看不到的信息：
-{source_text[:6000]}
-
-只返回 JSON 对象，格式为：
-{{
-  "important": true,
-  "image_type": "图片类型",
-  "summary": "图片功能摘要",
-  "steps": ["操作步骤"],
-  "callouts": [{{"label": "标号或箭头", "target": "指向对象", "function": "作用"}}],
-  "spatial_relations": ["区域或位置关系"],
-  "warnings": ["注意事项或不确定内容"],
-  "confidence": "high|medium|low"
-}}
-""".strip()
-        payload = {
-            "model": model,
-            "messages": [{
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"},
-                    },
-                    {"type": "text", "text": prompt},
-                ],
-            }],
-            "temperature": 0.1,
-            "max_tokens": 1000,
-            "response_format": {"type": "json_object"},
-        }
-        try:
-            response = None
-            last_request_error: Exception | None = None
-            for attempt, delay in enumerate((0, 3, 8, 15)):
-                if delay:
-                    time.sleep(delay)
-                try:
-                    response = httpx.post(
-                        api_url,
-                        headers={"Authorization": f"Bearer {api_key}"},
-                        json=payload,
-                        timeout=settings.pdf_vision_timeout_seconds,
-                    )
-                except httpx.HTTPError as exc:
-                    last_request_error = exc
-                    logger.info(
-                        f"PDF 第 {page_number} 页视觉接口连接异常，"
-                        f"第 {attempt + 1} 次请求失败: {exc}"
-                    )
-                    continue
-                if response.status_code != 429 and response.status_code < 500:
-                    break
-                logger.info(
-                    f"PDF 第 {page_number} 页视觉接口暂不可用，"
-                    f"第 {attempt + 1} 次请求状态码 {response.status_code}"
-                )
-            if response is None:
-                if last_request_error is not None:
-                    raise last_request_error
-                return None
-            response.raise_for_status()
-            value = response.json()["choices"][0]["message"]["content"]
-            if isinstance(value, list):
-                value = "".join(
-                    str(item.get("text") or "") if isinstance(item, dict) else str(item)
-                    for item in value
-                )
-            raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", str(value).strip())
-            json_start = raw.find("{")
-            json_end = raw.rfind("}")
-            if json_start >= 0 and json_end > json_start:
-                raw = raw[json_start:json_end + 1]
-            parsed = json.loads(raw)
-            if isinstance(parsed, dict):
-                cache_path.write_text(
-                    json.dumps(parsed, ensure_ascii=False, indent=2),
-                    encoding="utf-8",
-                )
-                return parsed
-            return None
-        except Exception as exc:
-            logger.warning(f"PDF 第 {page_number} 页视觉理解失败: {exc}")
-            return None
+        return get_vision_provider().analyze(image_path, page_number, source_text)
 
     @classmethod
     def analyze_important_pages(

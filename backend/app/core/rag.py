@@ -1,3 +1,4 @@
+import asyncio
 import httpx
 import json
 import numpy as np
@@ -11,6 +12,20 @@ import re
 from collections import Counter
 
 logger = logging.getLogger(__name__)
+
+
+def _is_memory_db(db: Session) -> bool:
+    """判断 Session 绑定的引擎是否为内存 SQLite（测试场景）。
+
+    文件型库（生产）to_thread 安全：get_engine 已设 check_same_thread=False；
+    内存库（SingletonThreadPool）连接绑定创建线程，跨线程使用会报错或拿到空库。
+    """
+    if db.bind is None:
+        return False
+    url = db.bind.url
+    if url.database in (None, "", ":memory:"):
+        return True
+    return "mode=memory" in str(url)
 
 try:
     import jieba
@@ -50,6 +65,65 @@ class EmbeddingService:
             response.raise_for_status()
             data = response.json()
             return data.get("data", [{}])[0].get("embedding", [])
+
+    async def encode_with_status(self, text: str) -> "EmbeddingBatchResult":
+        """带状态编码（P13-MODEL-02）：返回 EmbeddingBatchResult。
+
+        上层据此明确知道 Dense 路是否真正执行、是否降级、错误原因。
+        失败不抛异常，返回 used=False + error_code。
+        """
+        from app.core.embedding.results import EmbeddingBatchResult, classify_http_error
+
+        start = __import__("time").monotonic()
+        try:
+            if self._is_ollama:
+                payload = {"input": text, "model": self.model}
+                response = await self.client.post(self.api_url, json=payload)
+            else:
+                payload = {"input": text, "model": self.model}
+                response = await self.client.post(self.api_url, json=payload)
+            if response.status_code != 200:
+                error_code = classify_http_error(response.status_code, response.text)
+                return EmbeddingBatchResult(
+                    used=False, degraded=True, model_uid=self.model,
+                    error_code=error_code, error_message=response.text[:200],
+                    latency_ms=int((__import__("time").monotonic() - start) * 1000),
+                )
+            data = response.json()
+            embedding = (
+                data.get("embeddings", [[]])[0]
+                if self._is_ollama
+                else data.get("data", [{}])[0].get("embedding", [])
+            )
+            if not embedding:
+                return EmbeddingBatchResult(
+                    used=False, degraded=True, model_uid=self.model,
+                    error_code="INVALID_RESPONSE", error_message="空向量",
+                    latency_ms=int((__import__("time").monotonic() - start) * 1000),
+                )
+            return EmbeddingBatchResult(
+                embeddings=[embedding], used=True, degraded=False,
+                model_uid=self.model, dimensions=len(embedding),
+                latency_ms=int((__import__("time").monotonic() - start) * 1000),
+            )
+        except httpx.ConnectError:
+            return EmbeddingBatchResult(
+                used=False, degraded=True, model_uid=self.model,
+                error_code="NETWORK_UNREACHABLE", error_message="连接失败",
+                latency_ms=int((__import__("time").monotonic() - start) * 1000),
+            )
+        except httpx.TimeoutException:
+            return EmbeddingBatchResult(
+                used=False, degraded=True, model_uid=self.model,
+                error_code="TIMEOUT", error_message="超时",
+                latency_ms=int((__import__("time").monotonic() - start) * 1000),
+            )
+        except Exception as exc:
+            return EmbeddingBatchResult(
+                used=False, degraded=True, model_uid=self.model,
+                error_code="SERVER_ERROR", error_message=str(exc)[:200],
+                latency_ms=int((__import__("time").monotonic() - start) * 1000),
+            )
 
     async def encode_batch(self, texts: List[str], batch_size: int = 32) -> List[List[float]]:
         if self._is_ollama:
@@ -352,7 +426,8 @@ class VectorStore:
         )
         self.db.flush()
 
-    async def search(self, query_embedding: List[float], top_k: int = 50) -> List[Dict[str, Any]]:
+    def _search_sync(self, query_embedding: List[float], top_k: int = 50) -> List[Dict[str, Any]]:
+        """同步全表扫描实现（P0-BE-04 保留的原始实现，回滚 = 直接调用本函数）。"""
         emb_str = "[" + ",".join(str(v) for v in query_embedding) + "]"
 
         dialect = self.db.bind.dialect.name
@@ -421,7 +496,20 @@ class VectorStore:
         candidates.sort(key=lambda x: x["distance"])
         return candidates[:top_k]
 
-    async def get_chunk_count(self, page_id: str = None) -> int:
+    async def search(self, query_embedding: List[float], top_k: int = 50) -> List[Dict[str, Any]]:
+        """P0-BE-04：SQLite 全表扫描放入工作线程，避免阻塞事件循环。
+
+        内存库（测试）保持同步执行：SingletonThreadPool 连接绑定创建线程，
+        to_thread 会因 check_same_thread 报错或拿到空库。
+        回滚：settings.vector_search_threading_enabled=False 直接同步调用 _search_sync。
+        """
+        from app.config import settings as _settings
+        dialect = self.db.bind.dialect.name if self.db.bind is not None else "sqlite"
+        if dialect != "sqlite" or _is_memory_db(self.db) or not _settings.vector_search_threading_enabled:
+            return self._search_sync(query_embedding, top_k)
+        return await asyncio.to_thread(self._search_sync, query_embedding, top_k)
+
+    def _get_chunk_count_sync(self, page_id: str = None) -> int:
         if page_id:
             result = self.db.execute(
                 text("SELECT COUNT(*) FROM page_chunks WHERE page_id = :pid"),
@@ -430,6 +518,13 @@ class VectorStore:
         else:
             result = self.db.execute(text("SELECT COUNT(*) FROM page_chunks"))
         return result.scalar()
+
+    async def get_chunk_count(self, page_id: str = None) -> int:
+        """P0-BE-04：与 search 同策略（文件库放线程，内存库同步；开关可回滚）。"""
+        from app.config import settings as _settings
+        if not _settings.vector_search_threading_enabled or _is_memory_db(self.db):
+            return self._get_chunk_count_sync(page_id)
+        return await asyncio.to_thread(self._get_chunk_count_sync, page_id)
 
 
 class RerankerService:

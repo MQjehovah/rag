@@ -10,6 +10,9 @@ interface User {
   display_name: string
   is_local: boolean
   groups: string[]
+  is_admin?: boolean
+  is_wiki_editor?: boolean
+  roles?: string[]
 }
 
 export const useAuthStore = defineStore('auth', () => {

@@ -1,0 +1,98 @@
+{
+  "name": "P4 统一检索管线评测集",
+  "version": "1.0",
+  "description": "V3 计划 9.4 节 10 类用例。用于校准 Page Recall@10 / Card Recall@10 / 引用准确率 / 无权限泄漏。",
+  "created_at": "2026-08-19",
+  "cases": [
+    {
+      "id": "p4_001",
+      "category": "single_doc_fact",
+      "question": "Titan 810 如何给电池充电？",
+      "answerable": true,
+      "expected_keywords": ["充电", "电池"],
+      "expected_source_fragment": "Titan810 用户手册",
+      "notes": "单文档事实：充电步骤在用户手册「电池充电」章节"
+    },
+    {
+      "id": "p4_002",
+      "category": "procedure",
+      "question": "Titan 810 工作站如何安装固定？",
+      "answerable": true,
+      "expected_keywords": ["安装", "固定", "钻孔"],
+      "expected_source_fragment": "Titan810_Deployment_Manual",
+      "notes": "操作步骤：部署手册含钻孔定位板步骤"
+    },
+    {
+      "id": "p4_003",
+      "category": "diagnostic",
+      "question": "Titan 810 传感器出现故障如何维修？",
+      "answerable": true,
+      "expected_keywords": ["传感器", "维修"],
+      "expected_source_fragment": "TITAN810 repair manual",
+      "notes": "故障诊断：维修手册「Sensors」章节"
+    },
+    {
+      "id": "p4_004",
+      "category": "parameter_version",
+      "question": "室外场勘表的坡度要求是多少？",
+      "answerable": true,
+      "expected_keywords": ["坡度", "8度", "12度"],
+      "expected_source_fragment": "室外场勘表",
+      "notes": "参数和版本：场勘表含坡度区间 8-12 度"
+    },
+    {
+      "id": "p4_005",
+      "category": "cross_doc_relation",
+      "question": "Titan 810 的部件清单和维修工具是什么？",
+      "answerable": true,
+      "expected_keywords": ["部件", "工具"],
+      "expected_source_fragment": "TITAN810 Parts Manual",
+      "notes": "跨文档关系：部件在 Parts Manual，工具在 repair manual"
+    },
+    {
+      "id": "p4_006",
+      "category": "image_function",
+      "question": "部署手册中工作站安装的图片展示了什么？",
+      "answerable": true,
+      "expected_keywords": ["图片", "安装"],
+      "expected_source_fragment": "Titan810_Deployment_Manual",
+      "notes": "图片功能：部署手册含「本页重要业务图片」标记"
+    },
+    {
+      "id": "p4_007",
+      "category": "table_value",
+      "question": "中山深国际物流园的项目总面积是多少？",
+      "answerable": true,
+      "expected_keywords": ["45000", "面积"],
+      "expected_source_fragment": "室外场勘表",
+      "notes": "表格数值：场勘表含项目总面积 45000 平方"
+    },
+    {
+      "id": "p4_008",
+      "category": "conflict",
+      "question": "Skywalker 50 的部署步骤是什么？",
+      "answerable": true,
+      "expected_keywords": ["部署", "Skywalker"],
+      "expected_source_fragment": "Skywalker50 Deployment Manual",
+      "notes": "冲突知识：多个 Skywalker 部署手册（中英文版）可能内容不一致"
+    },
+    {
+      "id": "p4_009",
+      "category": "no_answer",
+      "question": "火星探测器着陆火星的着陆步骤是什么？",
+      "answerable": false,
+      "expected_keywords": [],
+      "expected_source_fragment": null,
+      "notes": "无答案问题：库里无航天知识，应判 no_answer"
+    },
+    {
+      "id": "p4_010",
+      "category": "permission_isolation",
+      "question": "Titan 810 电池容量是多少？",
+      "answerable": true,
+      "expected_keywords": ["电池", "容量"],
+      "expected_source_fragment": "Titan810 用户手册",
+      "notes": "权限隔离：需验证无权限用户不泄漏受限 page 的结果（需 ACL 数据支撑）"
+    }
+  ]
+}

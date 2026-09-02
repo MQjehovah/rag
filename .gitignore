@@ -5,6 +5,10 @@ docs/plans/
 
 __pycache__/
 .pytest_cache/
+.pytest_tmp/
+.pytest_tmp*/
+.pytest_tmp_work/
+backend/.coverage
 backend/data/
 backend/.venv/
 
@@ -13,10 +17,11 @@ node_modules/
 backend/server.*.log
 frontend/server.*.log
 runtime-logs/
-tmp/
+backend/tests/fixtures/p17_sample.jpg
 
 .env
 .env.local
+frontend/.env.acceptance
 
 # 仅供本地查看的开发文档
 TITAN810_RAG_优化清单.md

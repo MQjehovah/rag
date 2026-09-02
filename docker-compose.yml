@@ -30,6 +30,18 @@ services:
         condition: service_healthy
         required: false
 
+  source-worker:
+    build: ./backend
+    command: ["python", "scripts/source_worker.py"]
+    env_file:
+      - ./backend/.env
+    volumes:
+      - ./backend/data:/app/data
+    depends_on:
+      db:
+        condition: service_healthy
+        required: false
+
   frontend:
     build: ./frontend
     ports:

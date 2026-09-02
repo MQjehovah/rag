@@ -2,6 +2,7 @@ import httpx
 
 from app.config import settings
 from app.core.pdf_vision import PDFVisionService
+from app.core.vision_provider import VLMVisionProvider
 
 
 def test_vision_page_limit_uses_pdf_total_pages(monkeypatch):
@@ -107,7 +108,7 @@ def test_visual_analysis_retries_connection_errors(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "pdf_vision_api_url", "https://example.test/v1")
     monkeypatch.setattr(settings, "pdf_vision_api_key", "test-key")
     monkeypatch.setattr(settings, "pdf_vision_model", "test-model")
-    monkeypatch.setattr("app.core.pdf_vision.time.sleep", lambda _delay: None)
+    monkeypatch.setattr("app.core.vision_provider.time.sleep", lambda _delay: None)
 
     attempts = []
 
@@ -134,9 +135,9 @@ def test_visual_analysis_retries_connection_errors(tmp_path, monkeypatch):
             raise httpx.ConnectError("连接中断")
         return Response()
 
-    monkeypatch.setattr("app.core.pdf_vision.httpx.post", fake_post)
+    monkeypatch.setattr("app.core.vision_provider.httpx.post", fake_post)
 
-    result = PDFVisionService._analyze_image(image_path, 1, "页面正文")
+    result = VLMVisionProvider().analyze(image_path, 1, "页面正文")
 
     assert len(attempts) == 2
     assert result["summary"] == "已恢复"

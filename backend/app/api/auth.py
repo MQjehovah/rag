@@ -3,28 +3,17 @@ from sqlalchemy.orm import Session
 from passlib.context import CryptContext
 import uuid
 
-from app.models.database import User, UserGroup, get_session, get_engine, init_db
+from app.models.database import User, UserGroup, get_session
 from app.models.schema import LoginRequest, LoginResponse, UserResponse, GroupResponse
+from app.core import access_control
 from app.core.auth import ldap_auth
 from app.core.jwt_utils import create_access_token, get_current_user
+from app.api.deps import get_db, get_shared_engine
 from app.config import settings
 
 router = APIRouter(prefix="/api/auth", tags=["认证"])
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
-_engine = None
-_session = None
-
-
-def get_db():
-    global _engine, _session
-    if _engine is None:
-        _engine = get_engine(settings.database_url)
-        init_db(_engine)
-    if _session is None:
-        _session = get_session(_engine)
-    return _session
 
 
 def _sync_user_groups(db: Session, user_id: str, groups: list[str]):
@@ -65,12 +54,16 @@ def _create_local_admin(db: Session):
 
 @router.on_event("startup")
 def startup():
-    db = get_db()
-    _create_local_admin(db)
+    # P0-BE-07：原 get_db 单例模式改为每请求独立 Session，startup 用短生命周期会话
+    db = get_session(get_shared_engine())
+    try:
+        _create_local_admin(db)
+    finally:
+        db.close()
 
 
 @router.post("/login", response_model=LoginResponse)
-async def login(data: LoginRequest, db: Session = Depends(get_db)):
+def login(data: LoginRequest, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.username == data.username).first()
 
     if user and user.is_local:
@@ -86,6 +79,7 @@ async def login(data: LoginRequest, db: Session = Depends(get_db)):
             )
         groups = [ug.group_name for ug in db.query(UserGroup).filter(UserGroup.user_id == user.id).all()]
         token = create_access_token(user.id, groups)
+        abilities = access_control.role_abilities(groups)
         return LoginResponse(
             token=token,
             user=UserResponse(
@@ -95,6 +89,9 @@ async def login(data: LoginRequest, db: Session = Depends(get_db)):
                 display_name=user.display_name,
                 is_local=True,
                 groups=groups,
+                is_admin=abilities["is_admin"],
+                is_wiki_editor=abilities["is_wiki_editor"],
+                roles=abilities["roles"],
             ),
         )
 
@@ -131,6 +128,7 @@ async def login(data: LoginRequest, db: Session = Depends(get_db)):
     _sync_user_groups(db, user.id, groups)
 
     token = create_access_token(user.id, groups)
+    abilities = access_control.role_abilities(groups)
     return LoginResponse(
         token=token,
         user=UserResponse(
@@ -140,15 +138,29 @@ async def login(data: LoginRequest, db: Session = Depends(get_db)):
             display_name=user.display_name,
             is_local=False,
             groups=groups,
+            is_admin=abilities["is_admin"],
+            is_wiki_editor=abilities["is_wiki_editor"],
+            roles=abilities["roles"],
         ),
     )
 
 
 @router.get("/me", response_model=UserResponse)
-async def get_me(current_user=Depends(get_current_user), db: Session = Depends(get_db)):
-    return UserResponse(**current_user)
+def get_me(current_user=Depends(get_current_user), db: Session = Depends(get_db)):
+    abilities = access_control.role_abilities(current_user.get("groups") or [])
+    return UserResponse(
+        id=current_user["id"],
+        username=current_user["username"],
+        email=current_user.get("email", ""),
+        display_name=current_user.get("display_name", ""),
+        is_local=current_user.get("is_local", False),
+        groups=current_user.get("groups") or [],
+        is_admin=abilities["is_admin"],
+        is_wiki_editor=abilities["is_wiki_editor"],
+        roles=abilities["roles"],
+    )
 
 
 @router.get("/groups", response_model=list[GroupResponse])
-async def get_groups(current_user=Depends(get_current_user)):
+def get_groups(current_user=Depends(get_current_user)):
     return [GroupResponse(group_name=g) for g in current_user["groups"]]

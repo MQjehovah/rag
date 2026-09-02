@@ -1,0 +1,74 @@
+[
+  {
+    "id": "text_prompt",
+    "title": "纯文字提示",
+    "context": "请在断电后操作",
+    "payload": {"image_type": "text", "summary": "断电提示文字", "confidence": "high", "inferred": false},
+    "status": "done"
+  },
+  {
+    "id": "button_ui",
+    "title": "带按钮的操作页面",
+    "context": "点击启动",
+    "payload": {"image_type": "ui", "summary": "页面右下角有启动按钮", "confidence": "high", "steps": ["点击启动"]},
+    "status": "done"
+  },
+  {
+    "id": "flowchart",
+    "title": "多步骤流程图",
+    "context": "安装流程",
+    "payload": {"image_type": "flow", "summary": "三步安装流程", "confidence": "medium", "steps": ["准备", "安装", "确认"]},
+    "status": "done"
+  },
+  {
+    "id": "table_config",
+    "title": "表格配置页",
+    "context": "参数表",
+    "payload": {"image_type": "table", "summary": "驱动版本对照表", "confidence": "high"},
+    "status": "done"
+  },
+  {
+    "id": "error_dialog",
+    "title": "错误弹窗",
+    "context": "报错",
+    "payload": {"image_type": "dialog", "summary": "错误弹窗：驱动未安装", "confidence": "high"},
+    "status": "done"
+  },
+  {
+    "id": "blurry",
+    "title": "模糊低分辨率图片",
+    "context": "看不清",
+    "payload": {"image_type": "blurry", "summary": "", "confidence": "low"},
+    "status": "failed",
+    "error_category": "blur"
+  },
+  {
+    "id": "consistent",
+    "title": "图片与正文描述一致",
+    "context": "点击保存按钮",
+    "payload": {"image_type": "ui", "summary": "保存按钮位于右下角", "confidence": "high"},
+    "status": "done"
+  },
+  {
+    "id": "conflicting",
+    "title": "图片与正文描述冲突",
+    "context": "点击左侧取消",
+    "payload": {"image_type": "ui", "summary": "右侧是确认按钮", "confidence": "low", "inferred": true},
+    "status": "done",
+    "inferred": true
+  },
+  {
+    "id": "icon_only",
+    "title": "无文字的图标页面",
+    "context": "",
+    "payload": {"image_type": "icon", "summary": "可能是电源图标", "confidence": "low", "inferred": true},
+    "status": "done",
+    "inferred": true
+  },
+  {
+    "id": "sensitive",
+    "title": "包含敏感信息的截图",
+    "context": "身份证 110101199001011234",
+    "error_category": "sensitive_blocked"
+  }
+]

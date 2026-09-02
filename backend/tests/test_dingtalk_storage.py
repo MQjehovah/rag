@@ -509,3 +509,97 @@ async def test_download_selected_raw_files_does_not_convert_content(monkeypatch,
     assert downloaded[0]["source_file_size"] == len(b"%PDF-raw-only")
     raw_path = tmp_path / "dingtalk" / downloaded[0]["raw_path"]
     assert raw_path.read_bytes() == b"%PDF-raw-only"
+
+# ---------------------------------------------------------------------------
+# Manifest 原子写（Phase 4.1 封板：Windows 文件锁有限退避重试）
+# ---------------------------------------------------------------------------
+
+
+def test_manifest_replace_retries_bounded(tmp_path, monkeypatch):
+    """前几次 os.replace 抛 PermissionError 后能有限退避重试成功，原清单正确。"""
+    storage = DingTalkLocalStorage(tmp_path / "dingtalk")
+    storage.ensure_directories()
+    import app.core.dingtalk_storage as storage_mod
+
+    real_replace = storage_mod.os.replace
+    state = {"calls": 0}
+
+    def flaky_replace(src, dst):
+        state["calls"] += 1
+        if state["calls"] <= 2:
+            raise PermissionError(13, "Permission denied")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(storage_mod.os, "replace", flaky_replace)
+    storage.record_inventory([{
+        "id": "manifest-retry",
+        "title": "清单.md",
+        "extension": "md",
+        "node_type": "FILE",
+        "space_id": "space-001",
+        "space_name": "产品知识库",
+        "path": "资料/清单.md",
+    }])
+    assert state["calls"] == 3
+    manifest = json.loads(storage.manifest_path.read_text(encoding="utf-8"))
+    docs = manifest["documents"]
+    assert any(d["document_id"] == "manifest-retry" for d in docs)
+    # 无残留临时文件
+    leftovers = list(tmp_path.rglob("*.tmp"))
+    assert leftovers == []
+
+
+def test_manifest_replace_exhaustion_preserves_original(tmp_path, monkeypatch):
+    """os.replace 始终失败 → ManifestWriteError；原清单保持完整；临时文件清理。"""
+    storage = DingTalkLocalStorage(tmp_path / "dingtalk")
+    storage.ensure_directories()
+    original_text = storage.manifest_path.read_text(encoding="utf-8")
+    import app.core.dingtalk_storage as storage_mod
+
+    def always_fail(src, dst):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(storage_mod.os, "replace", always_fail)
+    with pytest.raises(storage_mod.ManifestWriteError):
+        storage.record_inventory([{
+            "id": "manifest-exhaust",
+            "title": "清单.md",
+            "extension": "md",
+            "node_type": "FILE",
+            "space_id": "space-001",
+            "space_name": "产品知识库",
+            "path": "资料/清单.md",
+        }])
+    # 原文件未被破坏
+    assert storage.manifest_path.read_text(encoding="utf-8") == original_text
+    leftovers = list(tmp_path.rglob("*.tmp"))
+    assert leftovers == []
+
+
+def test_manifest_concurrent_temp_files_are_unique(tmp_path, monkeypatch):
+    """连续两次写入使用不同 uuid 临时文件，不共享固定 .tmp 名。"""
+    import re as _re
+    import app.core.dingtalk_storage as storage_mod
+
+    storage = DingTalkLocalStorage(tmp_path / "dingtalk")
+    storage.ensure_directories()
+    real_replace = storage_mod.os.replace
+    temp_paths: list[str] = []
+
+    def collect_replace(src, dst):
+        temp_paths.append(str(src))
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(storage_mod.os, "replace", collect_replace)
+    for doc_id in ("a", "b"):
+        storage.record_inventory([{
+            "id": doc_id, "title": f"{doc_id}.md", "extension": "md",
+            "node_type": "FILE", "space_id": "s", "space_name": "n",
+            "path": f"p/{doc_id}.md",
+        }])
+    # 每次 replace 的临时文件都是 .manifest.json.<32hex>.tmp（唯一 uuid），
+    # 无固定共享名（.manifest.json.tmp），且两次 record_inventory 用的名字不同。
+    assert len(temp_paths) >= 2
+    for p in temp_paths:
+        assert _re.search(r"\.manifest\.json\.[0-9a-f]{32}\.tmp$", p), p
+    assert len(set(temp_paths)) == len(temp_paths)

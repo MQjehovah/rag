@@ -10,7 +10,16 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.core.dingtalk_storage import DingTalkLocalStorage
 from app.core.rag import EmbeddingService, VectorStore
-from app.models.database import GraphEdge, Notebook, Page, PageChunk
+from app.models.database import Notebook, Page, PageChunk
+
+
+def _schedule_graph_rebuild(page_id: str) -> None:
+    """V4 Phase J-3：PageChunk 写入完成后幂等调度图谱重建（失败不影响导入）。"""
+    try:
+        from app.core.knowledge_compiler_v3.graph_refresh_scheduler import schedule_page_graph_rebuild
+        schedule_page_graph_rebuild(page_id)
+    except Exception:
+        pass
 
 
 class DingTalkRAGImporter:
@@ -219,6 +228,8 @@ class DingTalkRAGImporter:
             self.db.flush()
             await self.vector_store.add_page_chunks(page.id, embedded_chunks)
             self.db.commit()
+            # V4 Phase J-3：PageChunk 写入完成后，幂等调度图谱重建（不阻塞导入）。
+            _schedule_graph_rebuild(page.id)
             return {
                 "status": "imported",
                 "page_id": page.id,
@@ -347,10 +358,6 @@ class DingTalkRAGImporter:
                 else:
                     self.db.query(PageChunk).filter(
                         PageChunk.page_id == page.id
-                    ).delete(synchronize_session=False)
-                    self.db.query(GraphEdge).filter(
-                        (GraphEdge.source_id == page.id)
-                        | (GraphEdge.target_id == page.id)
                     ).delete(synchronize_session=False)
                     self.db.delete(page)
                     self.db.commit()

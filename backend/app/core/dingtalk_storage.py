@@ -1,7 +1,9 @@
+import errno
 import hashlib
 import json
 import os
 import re
+import time
 import uuid
 from collections import Counter
 from dataclasses import dataclass
@@ -17,6 +19,39 @@ WINDOWS_RESERVED_NAMES = {
     *(f"COM{index}" for index in range(1, 10)),
     *(f"LPT{index}" for index in range(1, 10)),
 }
+
+# Windows 文件占用/权限瞬时错误（杀软、索引、编辑器、同步工具锁）——重试可恢复。
+_RETRYABLE_REPLACE_ERRNOS = frozenset({errno.EACCES, errno.EPERM, errno.ESHUTDOWN, 32})
+_REPLACE_RETRY_COUNT = 4
+_REPLACE_RETRY_DELAYS = (0.05, 0.1, 0.2, 0.4)
+
+
+class ManifestWriteError(RuntimeError):
+    """清单原子写最终失败（重试耗尽）；原清单保持完整，临时文件已清理。"""
+
+
+def _replace_with_bounded_retry(source: Path, target: Path) -> None:
+    """原子替换，对 Windows 瞬时文件锁做有限退避重试。
+
+    - 只重试 PermissionError / OSError 且 errno ∈ {EACCES, EPERM, 32, ESHUTDOWN}；
+    - 有限次数（_REPLACE_RETRY_COUNT）后抛出 ManifestWriteError；
+    - 原 target 文件不因失败被改动（os.replace 失败保持原文件）。
+    """
+    last_error: OSError | None = None
+    for delay in _REPLACE_RETRY_DELAYS:
+        try:
+            os.replace(source, target)
+            return
+        except PermissionError as exc:
+            last_error = exc
+        except OSError as exc:
+            if exc.errno not in _RETRYABLE_REPLACE_ERRNOS:
+                raise
+            last_error = exc
+        time.sleep(delay)
+    raise ManifestWriteError(
+        f"清单原子写入最终失败: {target} ({last_error})"
+    ) from last_error
 
 
 @dataclass(frozen=True)
@@ -61,10 +96,29 @@ class DingTalkLocalStorage:
                 "documents": [],
                 "summary": self._empty_summary(),
             }
-            self.manifest_path.write_text(
-                json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
-                encoding="utf-8",
-            )
+            self._write_manifest_direct(manifest)
+
+    def _write_manifest_direct(self, manifest: Dict[str, Any]) -> None:
+        """初始空清单原子写入（不经 _write_manifest 以免递归 ensure_directories）。"""
+        temporary = self.manifest_path.with_name(
+            f".{self.manifest_path.name}.{uuid.uuid4().hex}.tmp"
+        )
+        try:
+            with open(temporary, "w", encoding="utf-8") as handle:
+                handle.write(
+                    json.dumps(manifest, ensure_ascii=False, indent=2) + "\n"
+                )
+                handle.flush()
+                os.fsync(handle.fileno())
+            _replace_with_bounded_retry(temporary, self.manifest_path)
+        except ManifestWriteError:
+            raise
+        except OSError as exc:
+            raise ManifestWriteError(
+                f"清单初始写入失败: {self.manifest_path} ({exc})"
+            ) from exc
+        finally:
+            temporary.unlink(missing_ok=True)
 
     def read_manifest(self) -> Dict[str, Any]:
         """读取同步清单，并将旧版清单无损升级到当前结构。"""
@@ -81,6 +135,12 @@ class DingTalkLocalStorage:
         return data
 
     def _write_manifest(self, manifest: Dict[str, Any]) -> None:
+        """原子写清单：同目录唯一临时文件 → flush/fsync → 关闭句柄 → 有限退避 os.replace。
+
+        - 临时文件名含 uuid，多个写入者互不共享 .tmp；
+        - 对 Windows 瞬时文件锁（PermissionError/WinError 5/32）有限退避重试；
+        - 重试耗尽抛 ManifestWriteError：原清单保持完整、本次临时文件已清理。
+        """
         self.ensure_directories()
         now = self._timestamp()
         manifest["version"] = self.MANIFEST_VERSION
@@ -91,11 +151,20 @@ class DingTalkLocalStorage:
             f".{self.manifest_path.name}.{uuid.uuid4().hex}.tmp"
         )
         try:
-            temporary.write_text(
-                json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
-                encoding="utf-8",
-            )
-            os.replace(temporary, self.manifest_path)
+            with open(temporary, "w", encoding="utf-8") as handle:
+                handle.write(
+                    json.dumps(manifest, ensure_ascii=False, indent=2) + "\n"
+                )
+                handle.flush()
+                os.fsync(handle.fileno())
+            # 句柄已关闭后再替换，避免 Windows 句柄占用导致 replace 失败。
+            _replace_with_bounded_retry(temporary, self.manifest_path)
+        except ManifestWriteError:
+            raise
+        except OSError as exc:
+            raise ManifestWriteError(
+                f"清单临时文件写入失败: {self.manifest_path} ({exc})"
+            ) from exc
         finally:
             temporary.unlink(missing_ok=True)
 
@@ -269,6 +338,11 @@ class DingTalkLocalStorage:
                     else "failed" if legacy_status == "conversion_failed"
                     else "pending"
                 ),
+                # Phase 2.3：仅当 conversion_status 缺失（由旧 status 推断）时才标记 inferred
+                "conversion_status_inferred_from_legacy": (
+                    "conversion_status" not in entry
+                ),
+                "legacy_status": legacy_status,
                 "conversion_attempts": (
                     1 if legacy_status in {"converted", "conversion_failed"} else 0
                 ),
@@ -551,6 +625,8 @@ class DingTalkLocalStorage:
         force_reconvert = bool(metadata.pop("force_reconvert", False))
         manifest = self.read_manifest()
         entry = self._manifest_entry(document)
+        # Phase 2.4：当前管道明确写入状态 → 退出 legacy 推断（后续路由不得再用 legacy_status）
+        entry["conversion_status_inferred_from_legacy"] = False
         source_id = entry["document_id"]
         documents = [
             item for item in manifest["documents"]

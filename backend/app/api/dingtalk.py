@@ -33,6 +33,21 @@ class RetrySyncRequest(BaseModel):
     task_id: Optional[str] = None
 
 
+def _ensure_no_unified_sync() -> None:
+    """P10/P14 共享锁：旧入口不得和统一数据源任务并发。"""
+    from app.sources.dingtalk import is_new_sync_running
+
+    engine = get_engine(settings.database_url)
+    init_db(engine)
+    db = get_session(engine)
+    try:
+        if is_new_sync_running(db):
+            raise HTTPException(status_code=409, detail="统一数据源入口正在执行钉钉同步")
+    finally:
+        db.close()
+        engine.dispose()
+
+
 def _resolve_notebook_name(
     notebook_id: Optional[str],
     notebook_name: str,
@@ -109,11 +124,14 @@ async def list_docs(
 
 
 @router.post("/sync-selected")
-async def start_sync_selected(
+def start_sync_selected(
     req: SyncSelectedRequest,
     background_tasks: BackgroundTasks,
     current_user=Depends(get_current_user),
 ):
+    # P10/P14 切流：旧钉钉写入入口已退役，统一走数据源 Worker。
+    raise HTTPException(status_code=410, detail="旧钉钉同步入口已停用，请使用统一数据源页面")
+    _ensure_no_unified_sync()
     if not req.docs:
         raise HTTPException(status_code=400, detail="请选择要同步的文档")
 
@@ -157,11 +175,14 @@ async def start_sync_selected(
 
 
 @router.post("/sync")
-async def start_sync(
+def start_sync(
     req: SyncRequest,
     background_tasks: BackgroundTasks,
     current_user=Depends(get_current_user),
 ):
+    # P10/P14 切流：旧钉钉写入入口已退役，统一走数据源 Worker。
+    raise HTTPException(status_code=410, detail="旧钉钉同步入口已停用，请使用统一数据源页面")
+    _ensure_no_unified_sync()
     if not settings.dingtalk_app_key or not settings.dingtalk_app_secret:
         raise HTTPException(status_code=400, detail="请先配置 DINGTALK_APP_KEY 和 DINGTALK_APP_SECRET")
 
@@ -195,11 +216,14 @@ async def start_sync(
 
 
 @router.post("/retry")
-async def retry_sync(
+def retry_sync(
     req: RetrySyncRequest,
     background_tasks: BackgroundTasks,
     current_user=Depends(get_current_user),
 ):
+    # P10/P14 切流：旧钉钉重试入口已退役，统一走数据源 Worker 的失败重试。
+    raise HTTPException(status_code=410, detail="旧钉钉重试入口已停用，请使用统一数据源页面")
+    _ensure_no_unified_sync()
     previous = SYNC_STATE.snapshot()
     if req.task_id and req.task_id != previous.get("task_id"):
         raise HTTPException(status_code=404, detail="待重试任务不存在")
@@ -254,7 +278,7 @@ async def retry_sync(
 
 
 @router.get("/status")
-async def get_sync_status(
+def get_sync_status(
     task_id: Optional[str] = None,
     current_user=Depends(get_current_user),
 ):
