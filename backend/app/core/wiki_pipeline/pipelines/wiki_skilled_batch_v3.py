@@ -128,11 +128,21 @@ def _read_skill_decisions(db, run_id: str) -> list:
     return [d for d in decisions if d is not None]
 
 
-def _match_norm(decisions, norm_title: str):
+def _match_composite(decisions, key: str):
+    """按完整 composite key（scope\x1fnorm）精确匹配（新 Artifact）。"""
     for d in decisions:
-        if _normalize_title(d.target_key or "") == norm_title:
+        if (d.target_key or "") == key:
             return d
     return None
+
+
+def _legacy_norm_match(decisions, norm_counts: dict, norm: str):
+    """旧 Artifact（target_key=纯 norm）兼容匹配：仅当该 norm 全局唯一且无歧义。"""
+    if norm_counts.get(norm) != 1:
+        return None  # 同标题跨 scope → fail closed，不猜测
+    hits = [d for d in decisions
+            if _normalize_title(d.target_key or "") == norm]
+    return hits[0] if len(hits) == 1 else None
 
 
 def _resolve_target_decision(dec, target: dict, db, run) -> dict | None:
@@ -189,16 +199,21 @@ def _resolve_target_decision(dec, target: dict, db, run) -> dict | None:
 
 
 def _plan_batch_targets_v3(db, context: dict, batch_pages: list[dict],
-                           decisions: list) -> tuple[list[dict], str | None]:
+                           decisions: list,
+                           previous: dict[str, dict] | None = None) -> tuple[list[dict], str | None]:
     """从 topic 决策去重规划 batch targets（复用 wiki_default 低层 planning）。
 
-    返回 (targets 排序, fatal_code)。target 含稳定 target_key（scope+norm）、
+    返回 (targets 排序, fatal_code)。target 含稳定 target_key（scope\x1fnorm）、
     action/existing_wiki_id/title/category/source_page_ids/page_ids/决策/分支/input_hash。
     """
     create_pages = [d for d in batch_pages if d.get("status") == "create_update"]
     planned = _plan_batch_targets(db, context, create_pages)
     if not planned:
         return [], None
+
+    norm_counts: dict[str, int] = {}
+    for t in planned:
+        norm_counts[t["norm_title"]] = norm_counts.get(t["norm_title"], 0) + 1
 
     targets: list[dict] = []
     for t in planned:
@@ -216,7 +231,10 @@ def _plan_batch_targets_v3(db, context: dict, batch_pages: list[dict],
             "source_page_ids": sorted({p for p in t.get("source_page_ids") or []}),
             "page_ids": sorted({p for p in t.get("page_ids") or []}),
         }
-        dec = _match_norm(decisions, norm)
+        dec = _match_composite(decisions, key)
+        if dec is None:
+            # 兼容：纯 norm 旧 Artifact 且无跨 scope 歧义时才允许回退。
+            dec = _legacy_norm_match(decisions, norm_counts, norm)
         entry = _resolve_target_decision(dec, entry, db, None)
         if entry is None:
             entry = {
@@ -234,23 +252,77 @@ def _plan_batch_targets_v3(db, context: dict, batch_pages: list[dict],
             }
             targets.append(entry)
             continue
-        entry["input_hash"] = _target_input_hash(db, entry)
+        entry["input_hash"] = _target_input_hash(db, entry, previous)
         targets.append(entry)
     targets.sort(key=lambda t: t["key"])
     return targets, None
 
 
-def _target_input_hash(db, target: dict) -> str:
-    """target input_hash = 当前 DB 各 contributor Page full hash 的确定性指纹。
+def _logical_action_existing(target: dict, previous: dict[str, dict]) -> tuple[str, str | None]:
+    """本 Run 先 create 后 update 的再规划归一为逻辑 create（retry 稳定）。"""
+    key = target.get("key") or ""
+    rec = previous.get(key)
+    if rec and rec.get("action") == "create" and target.get("existing_wiki_id") and \
+            rec.get("wiki_page_id") == target.get("existing_wiki_id"):
+        return "create", None
+    return (target.get("action") or ""), target.get("existing_wiki_id")
 
-    逐 attempt 由当前内容计算：内容变化 → hash 变化（供 BATCH_STALE 判定）。
+
+def _target_input_hash(db, target: dict, previous: dict[str, dict] | None = None) -> str:
+    """target input_hash = 全部真实输入确定性指纹。
+
+    覆盖：target_key/branch/selected skill+version/proposed/migration/existing_wiki_id/
+    排序后全部 source_page_ids + 每个 source Page 当前 full hash。
+    历史来源变化（含非本批贡献的历史来源页）→ hash 变化（BATCH_STALE）。
     """
     from app.core.wiki_pipeline.pipelines.wiki_default import _page_full_hash
 
-    parts = []
-    for pid in sorted(set(target.get("page_ids") or [])):
+    previous = previous or {}
+    _action, logical_existing = _logical_action_existing(target, previous)
+    decision = _decode_decision(target.get("decision")) if target.get("decision") else None
+    parts = [
+        "key=" + (target.get("key") or ""),
+        "branch=" + str(target.get("branch") or ""),
+        "migration=" + ("1" if target.get("migration") else "0"),
+        "existing=" + str(logical_existing or ""),
+        "selected=" + ((decision.selected_skill or "") if decision else "")
+        + ":" + ((decision.selected_version or "") if decision else ""),
+        "proposed=" + str(target.get("proposed_skill") or "")
+        + ":" + str(target.get("proposed_version") or ""),
+    ]
+    for pid in sorted(set(target.get("source_page_ids") or [])):
         parts.append(f"{pid}:{_page_full_hash(db, pid)}")
     return _hash_text("|".join(parts))
+
+
+def _plan_entry_canonical(target: dict, previous: dict[str, dict] | None = None) -> dict:
+    previous = previous or {}
+    action, existing = _logical_action_existing(target, previous)
+    decision = _decode_decision(target.get("decision")) if target.get("decision") else None
+    return {
+        "target_key": target.get("key") or "",
+        "action": action,
+        "existing_wiki_id": existing or "",
+        "source_page_ids": sorted(set(target.get("source_page_ids") or [])),
+        "branch": target.get("branch") or "",
+        "selected_skill": (decision.selected_skill if decision else None),
+        "selected_version": (decision.selected_version if decision else None),
+        "proposed_skill": (decision.proposed_skill if decision else None),
+        "proposed_version": (decision.proposed_version if decision else None),
+        "migration": bool(target.get("migration")),
+    }
+
+
+def _compute_plan_hash(targets: list[dict],
+                       previous: dict[str, dict] | None = None) -> str:
+    """plan_hash：targets 排序后的规范 JSON SHA-256（不依赖 DB/注册顺序）。"""
+    canonical = [
+        _plan_entry_canonical(t, previous)
+        for t in sorted(targets, key=lambda x: x.get("key") or "")
+    ]
+    raw = json.dumps(canonical, ensure_ascii=False, sort_keys=True,
+                     separators=(",", ":"))
+    return _hash_text(raw)
 
 
 # ---------------------------------------------------------------------------
@@ -279,7 +351,11 @@ def _page_full_hash_ok(db, pid: str, expected: str) -> bool:
 
 
 def _synthesize_default_target(db, context, ctx, target: dict) -> dict:
-    """复用 wiki_default 低层 _synthesize_entry（不复制 LLM 算法）。"""
+    """复用 wiki_default 低层 _synthesize_entry（不复制 LLM 算法）。
+
+    update 目标以 adapter 提供 existing_id，使 content_sig 在 synthesize 期生成；
+    synthesize 后断言 update entry.content_sig 非空（否则 fail closed）。
+    """
     pages = []
     for pid in target.get("source_page_ids") or []:
         p = db.get(Page, pid)
@@ -289,24 +365,36 @@ def _synthesize_default_target(db, context, ctx, target: dict) -> dict:
         return {"ready": False, "code": "VALIDATION_FAILED"}
     from types import SimpleNamespace
 
+    existing_id = target.get("existing_wiki_id")
+    v1_target = {
+        "action": target.get("action") or "",
+        "norm_title": target.get("norm_title") or "",
+        "title": target.get("title") or "无标题",
+        "category": target.get("category"),
+        "existing_id": existing_id,
+        "source_page_ids": sorted(set(target.get("source_page_ids") or [])),
+    }
     standin = SimpleNamespace(
-        id=target.get("existing_wiki_id"),
+        id=existing_id,
         title=target.get("title") or "无标题",
         category=target.get("category"),
         current_revision_id=(
-            db.get(WikiPage, target["existing_wiki_id"]).current_revision_id
-            if target.get("existing_wiki_id") else None
+            db.get(WikiPage, existing_id).current_revision_id
+            if existing_id else None
         ),
         acl_scope=target.get("scope_acl_json"),
         workspace_id=target.get("workspace_id"),
     )
-    entry = _synthesize_entry(db, target, pages, standin, context, ctx)
+    entry = _synthesize_entry(db, v1_target, pages, standin, context, ctx)
     if entry is None:
         return {"ready": False, "code": "VALIDATION_FAILED", "entry": entry}
     if not entry.get("published_ready"):
         reason = entry.get("fail_reason") or "invalid_response"
         return {"ready": False, "code": _DEFAULT_FAIL_CODES.get(reason, "INVALID_RESPONSE"),
                 "entry": entry}
+    if (target.get("action") == "update" and existing_id) and not entry.get("content_sig"):
+        # update 目标 content guard 缺失 → 不得发布（fail closed）。
+        return {"ready": False, "code": "VALIDATION_FAILED", "entry": entry}
     return {"ready": True, "entry": entry}
 
 
@@ -351,7 +439,9 @@ def synthesize_batch_v3(db, run, ctx) -> dict:
                                         "batch": True, "fatal": True}}
 
     decisions = _read_skill_decisions(db, run.id)
-    targets, _fatal = _plan_batch_targets_v3(db, context, batch_pages, decisions)
+    previous = _previous_target_records(db, run.id)
+    targets, _fatal = _plan_batch_targets_v3(db, context, batch_pages, decisions,
+                                             previous=previous)
     results: dict[str, dict] = {}
     payloads: dict[str, dict] = {}
 
@@ -386,10 +476,23 @@ def synthesize_batch_v3(db, run, ctx) -> dict:
             results[key] = _target_result(key, target, "failed",
                                           code="SKILL_NOT_SUPPORTED")
 
-    meta = {"target_count": len(targets)}
+    meta = {"target_count": len(targets),
+            "plan_hash": _compute_plan_hash(targets, previous)}
+    # plan_hash 一致性门禁（retry 时）：历史 Manifest 缺失/形状非法/与本次计划不同 →
+    # BATCH_PLAN_CHANGED（不复用/不发布/不 reconcile）。
+    manifests = _read_all_manifests(db, run.id)
+    if manifests:
+        prev_manifest = manifests[-1]
+        prev_hash = prev_manifest.get("plan_hash")
+        prev_trs = prev_manifest.get("target_results")
+        if not isinstance(prev_hash, str) or not isinstance(prev_trs, list) or \
+                not all(isinstance(t, dict) and t.get("target_key")
+                        for t in prev_trs) or prev_hash != meta["plan_hash"]:
+            return _safe_error("BATCH_PLAN_CHANGED")
+
     state.setdefault("v3", {})["batch"] = {
         "fatal": None, "targets": targets, "results": results,
-        "payloads": payloads, "meta": meta,
+        "payloads": payloads, "meta": meta, "plan_hash": meta["plan_hash"],
     }
     ready = sum(1 for r in results.values() if r["status"] == "ready")
     return {
@@ -509,6 +612,12 @@ def _publish_default_target(db, ctx, target: dict, payload: dict) -> str | None:
             pages.append(p)
     rev_id = _publish_wiki_from_entry(db, wiki, pages, entry)
     if rev_id is None:
+        # 新建目标发布失败：删除刚创建但未发布的 Wiki（不留孤儿 draft）。
+        if created:
+            db.delete(wiki)
+            db.flush()
+            if target.get("existing_wiki_id") == wiki.id:
+                target["existing_wiki_id"] = None
         return None
     wiki.current_revision_id = rev_id
     wiki.status = "published"
@@ -559,7 +668,8 @@ def _publish_api_target(db, ctx, run, target: dict, payload: dict, migration: bo
         if skill_key != "api_reference" or not skill_version:
             return None, {}
 
-    plan = {"page_ids": sorted(target.get("page_ids") or [])}
+    # 发布前重验覆盖目标全部来源 Page（与 input_hash 覆盖集合一致）。
+    plan = {"page_ids": sorted(set(target.get("source_page_ids") or []))}
     rev = _reverify_api_publish(db, run, {"workspace_id": workspace_id}, plan, compiled)
     if rev is not None:
         return None, {"code": rev}
@@ -567,6 +677,7 @@ def _publish_api_target(db, ctx, run, target: dict, payload: dict, migration: bo
     wiki = None
     if target.get("existing_wiki_id"):
         wiki = db.get(WikiPage, target["existing_wiki_id"])
+    created = wiki is None
     if wiki is None:
         wiki = _create_wiki_row(db, target, workspace_id)
         target["existing_wiki_id"] = wiki.id
@@ -574,6 +685,10 @@ def _publish_api_target(db, ctx, run, target: dict, payload: dict, migration: bo
     if migration:
         mcode = _reverify_migration_state(db, wiki, decision)
         if mcode is not None:
+            if created:
+                db.delete(wiki)
+                db.flush()
+                target["existing_wiki_id"] = None
             return None, {"code": mcode}
 
     revision_id = str(uuid.uuid4())
@@ -629,6 +744,21 @@ def publish_batch_v3(db, run, ctx) -> dict:
                                                              "note": outcome["note"]}})
 
     previous = _previous_target_records(db, run.id)
+    # 0) plan_hash 一致性：历史 Manifest 缺失/形状非法 → fail closed；与本次 plan 不同
+    #    → BATCH_PLAN_CHANGED（不复用/不发布/不 reconcile）。
+    manifests = _read_all_manifests(db, run.id)
+    if manifests:
+        prev_manifest = manifests[-1]
+        prev_hash = prev_manifest.get("plan_hash")
+        prev_trs = prev_manifest.get("target_results")
+        if not isinstance(prev_hash, str) or not isinstance(prev_trs, list) or \
+                not all(isinstance(t, dict) and t.get("target_key")
+                        for t in prev_trs):
+            return _safe_error("BATCH_PLAN_CHANGED")
+        plan_hash = bstate.get("plan_hash")
+        if not plan_hash or prev_hash != plan_hash:
+            return _safe_error("BATCH_PLAN_CHANGED")
+
     # 1) stale 检查：已成功 target 输入变化 → 整批 fail closed（不得在旧 Run 覆盖）。
     for target in targets:
         key = target["key"]
@@ -654,6 +784,7 @@ def publish_batch_v3(db, run, ctx) -> dict:
                     "input_hash": target.get("input_hash") or rec.get("input_hash"),
                     "reused": True,
                     "migration_applied": bool(rec.get("migration_applied")),
+                    "source_page_ids": sorted(set(target.get("source_page_ids") or [])),
                 }
                 results[key] = _target_result(
                     key, target, "ready", input_hash=target.get("input_hash"),
@@ -679,6 +810,7 @@ def publish_batch_v3(db, run, ctx) -> dict:
                         "input_hash": target.get("input_hash") or "",
                         "reused": False,
                         "migration_applied": False,
+                        "source_page_ids": sorted(set(target.get("source_page_ids") or [])),
                     }
                 elif branch == "api_reference":
                     rev_id, extra = _publish_api_target(db, ctx, run, target,
@@ -697,6 +829,7 @@ def publish_batch_v3(db, run, ctx) -> dict:
                         "input_hash": target.get("input_hash") or "",
                         "reused": False,
                         "migration_applied": bool(extra.get("migration_applied")),
+                        "source_page_ids": sorted(set(target.get("source_page_ids") or [])),
                     }
                 else:
                     results[key] = _target_result(key, target, "failed",
@@ -715,7 +848,8 @@ def publish_batch_v3(db, run, ctx) -> dict:
         if partial:
             outcome.update({"applied": True, "kept_dirty": 1, "note": "batch_partial"})
             manifest = _build_batch_manifest(ctx, outcome, published, final_results,
-                                             partial=True)
+                                             partial=True,
+                                             plan_hash=bstate.get("plan_hash"))
         else:
             outcome["note"] = "published"
             outcome["applied"] = True
@@ -726,7 +860,8 @@ def publish_batch_v3(db, run, ctx) -> dict:
                                   if p.get("wiki_page_id")],
             })
             manifest = _build_batch_manifest(ctx, outcome, published, final_results,
-                                             partial=False)
+                                             partial=False,
+                                             plan_hash=bstate.get("plan_hash"))
 
         result = {"ok": True, "metrics": {
             "stage": "publish_by_skill", "batch": True,
@@ -745,15 +880,18 @@ def publish_batch_v3(db, run, ctx) -> dict:
 
 def _assemble_target_results(targets, results, published) -> list[dict]:
     """把 results（ready/failed/reused 语义）+ published 汇总为最终 TargetResult。"""
+    action_by_key = {t["key"]: t.get("action") or "" for t in targets}
     keys = sorted({t["key"] for t in targets} | set(results.keys()))
     out: list[dict] = []
     for key in keys:
         tr = dict(results.get(key) or {})
+        action = action_by_key.get(key) or ""
         if key in published:
             p = published[key]
             out.append({
                 "target_key": key,
                 "branch": tr.get("branch", ""),
+                "action": action,
                 "outcome": "reused" if p.get("reused") else "published",
                 "status": "ready",
                 "wiki_page_id": p.get("wiki_page_id"),
@@ -766,6 +904,7 @@ def _assemble_target_results(targets, results, published) -> list[dict]:
             out.append({
                 "target_key": key,
                 "branch": tr.get("branch", ""),
+                "action": action,
                 "outcome": "failed",
                 "status": "failed",
                 "wiki_page_id": None,
@@ -841,7 +980,8 @@ def _reconcile_batch_membership(db, state, batch_pages, targets, published, resu
             page.wiki_last_error = "batch_partial"
 
 
-def _build_batch_manifest(ctx, outcome, published, final_results, *, partial: bool) -> dict:
+def _build_batch_manifest(ctx, outcome, published, final_results, *, partial: bool,
+                          plan_hash: str | None) -> dict:
     state = ctx.get("state") or {}
     context = state.get("context") or {}
     page_id = context.get("page_id")
@@ -851,10 +991,26 @@ def _build_batch_manifest(ctx, outcome, published, final_results, *, partial: bo
         outcome_code, fail_code, retryable = ("published", None, True) if published \
             else ("not_worthy", None, True)
 
+    graph_targets = []
+    for p in published.values():
+        if p.get("wiki_page_id"):
+            graph_targets.append({"kind": "wiki", "wiki_page_id": p["wiki_page_id"]})
+        for spid in sorted(set(p.get("source_page_ids") or [])):
+            graph_targets.append({"kind": "page", "page_id": spid})
     graph_targets = sorted(
-        [{"kind": "wiki", "wiki_page_id": p["wiki_page_id"]}
-         for p in published.values() if p.get("wiki_page_id")],
-        key=lambda x: x["wiki_page_id"])
+        graph_targets,
+        key=lambda x: (x["kind"], x.get("wiki_page_id") or x.get("page_id") or ""),
+    )
+    # 去重（同 wiki 同 page 不重复）。
+    dedup: list[dict] = []
+    seen: set = set()
+    for g in graph_targets:
+        ident = (g["kind"], g.get("wiki_page_id") or g.get("page_id"))
+        if ident in seen:
+            continue
+        seen.add(ident)
+        dedup.append(g)
+    graph_targets = dedup
     wiki_ids = sorted({p["wiki_page_id"] for p in published.values()
                        if p.get("wiki_page_id")})
     revision_ids = sorted({p["revision_id"] for p in published.values()
@@ -870,6 +1026,7 @@ def _build_batch_manifest(ctx, outcome, published, final_results, *, partial: bo
         "dirty_wiki_ids": [],
         "graph_targets": graph_targets,
         "input_hash": context.get("input_hash") or "",
+        "plan_hash": plan_hash or "",
         "note": outcome.get("note") or "",
         "target_results": final_results,
     }

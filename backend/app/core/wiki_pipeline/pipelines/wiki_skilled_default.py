@@ -130,7 +130,8 @@ def _target_keys_from_batch_pages(state: dict) -> list[dict]:
             norm = normalize_wiki_title(title)
             key = f"{dec.get('scope_acl_json') or ''}\x1f{norm}"
             t = targets.setdefault(key, {
-                "key": norm,
+                "key": key,
+                "scope_acl_json": dec.get("scope_acl_json") or "",
                 "norm_title": norm,
                 "title": title,
                 "page_ids": [],
@@ -218,7 +219,8 @@ def _build_skill_contexts(
         ctxs = []
         for t in _target_keys_from_batch_pages(state):
             norm = t["norm_title"]
-            existing = _existing_wiki_by_norm(db, workspace_id, norm)
+            existing = _existing_wiki_for_scope(
+                db, workspace_id, t.get("scope_acl_json") or "", norm)
             summaries = []
             for pid in t["page_ids"]:
                 p = db.get(Page, pid)
@@ -230,7 +232,7 @@ def _build_skill_contexts(
             ctxs.append(SkillContext(
                 workspace_id=workspace_id,
                 wiki_page_id=(existing.id if existing else None),
-                target_key=norm,
+                target_key=t["key"],
                 title=t["title"],
                 content_kind="generic_text",
                 source_page_ids=tuple(t["page_ids"]),
@@ -242,6 +244,29 @@ def _build_skill_contexts(
         return ctxs
 
     return []
+
+
+def _existing_wiki_for_scope(db, workspace_id, scope_acl_json: str,
+                             norm_title: str):
+    """batch 既有 Wiki 精确查找：workspace_id + acl_scope + normalized title。"""
+    from app.core.knowledge_compiler_v3.wiki_page_builder import (
+        normalize_wiki_title,
+    )
+
+    if not workspace_id or not norm_title:
+        return None
+    rows = (
+        db.query(WikiPage)
+        .filter(
+            WikiPage.workspace_id == workspace_id,
+            WikiPage.acl_scope == (scope_acl_json or ""),
+        )
+        .all()
+    )
+    for w in rows:
+        if normalize_wiki_title(w.title or "") == norm_title:
+            return w
+    return None
 
 
 def _normalize_title(title: str) -> str:
