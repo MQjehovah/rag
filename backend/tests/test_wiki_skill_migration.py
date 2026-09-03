@@ -1,6 +1,8 @@
 """Phase 6 P43 migration 测试（20.6）。
 
-- 临时 SQLite：upgrade head → 列存在；downgrade -1 → 列移除；upgrade head → 列恢复；
+- 临时 SQLite：upgrade 到 P43 d3e4f5a6b7c8 → 列存在；downgrade 到 P42
+  c2d3e4f5a6b7 → 列移除；再 upgrade 到 P43 → 列恢复（显式版本往返，不使用
+  "head → -1" 推断，因为当前 head 已是 P44 a9b8c7d6e5f4）；
 - ORM create_all：字段 nullable + CHECK（confidence/selected_by）生效；
 - create_all 与 migration guard（check_managed_migrations）一致；
 - PostgreSQL 方言编译校验（如实声明：仅编译验证，未真实运行 PG 实例）。
@@ -25,6 +27,9 @@ from app.models.database import (
 )
 
 _BACKEND = Path(__file__).resolve().parent.parent
+# 迁移链版本（P43 上一步为 P42；当前 head 为 P44，不进 P43 往返范围）。
+_P43_REV = "d3e4f5a6b7c8"
+_P42_REV = "c2d3e4f5a6b7"
 _NEW_COLUMNS = [
     "content_skill", "skill_version", "skill_selected_by",
     "skill_confidence", "skill_locked", "skill_decision_json",
@@ -88,20 +93,20 @@ def cols(conn):
 
 import sqlite3
 dbfile = {url!r}[len("sqlite:///"):]
-# upgrade head：列全部存在
-command.upgrade(cfg, "head")
+# upgrade 到 P43：列存在
+command.upgrade(cfg, {_P43_REV!r})
 with sqlite3.connect(dbfile) as c:
     present = cols(c)
 for col in {_NEW_COLUMNS!r}:
-    assert col in present, f"missing after upgrade: {{col}}"
-# downgrade -1：列移除
-command.downgrade(cfg, "-1")
+    assert col in present, f"missing after P43 upgrade: {{col}}"
+# downgrade 到 P42：列移除
+command.downgrade(cfg, {_P42_REV!r})
 with sqlite3.connect(dbfile) as c:
     after_down = cols(c)
 for col in {_NEW_COLUMNS!r}:
     assert col not in after_down, f"still present after downgrade: {{col}}"
-# 再 upgrade head
-command.upgrade(cfg, "head")
+# 再 upgrade 到 P43：列恢复
+command.upgrade(cfg, {_P43_REV!r})
 with sqlite3.connect(dbfile) as c:
     present2 = cols(c)
 for col in {_NEW_COLUMNS!r}:
@@ -131,7 +136,7 @@ cfg = Config({str(_BACKEND / 'alembic.ini')!r})
 cfg.set_main_option("script_location", {str(_BACKEND / 'alembic')!r})
 heads = ScriptDirectory.from_config(cfg).get_heads()
 assert len(heads) == 1, heads
-assert heads[0] == "d3e4f5a6b7c8", heads
+assert heads[0] == "a9b8c7d6e5f4", heads
 print("SINGLE_HEAD_OK")
 """
     proc = subprocess.run(

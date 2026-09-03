@@ -21,6 +21,7 @@ from app.core.wiki_skills.api_reference.db_adapter import (
     ISSUE_EXCERPT_BUDGET_EXCEEDED,
     ISSUE_HASH_INVALID,
     ISSUE_LOCATOR_INVALID,
+    ISSUE_NO_ACTIVE_EVIDENCE,
     ISSUE_SOURCE_HASH_STALE,
     build_api_source_documents,
     build_api_source_documents_with_diagnostics,
@@ -116,6 +117,37 @@ def test_source_doc_hash_mismatch_stale(db):
     docs, issues = build_api_source_documents_with_diagnostics(db, _page_rows(db))
     assert docs == ()
     assert any(i.code == ISSUE_SOURCE_HASH_STALE for i in issues)
+
+
+def test_page_without_any_evidence_no_active_evidence(db):
+    _page(db, "p1", content="GET /api/x 返回 200 成功。")
+    docs, issues = build_api_source_documents_with_diagnostics(db, _page_rows(db))
+    assert docs == ()
+    assert any(i.code == ISSUE_NO_ACTIVE_EVIDENCE for i in issues)
+    # 固定结构化 message，不含 Evidence 原文/ID/路径/异常文本。
+    issue = next(i for i in issues if i.code == ISSUE_NO_ACTIVE_EVIDENCE)
+    assert issue.source_page_id == "p1"
+    assert issue.evidence_id == ""
+    assert "Traceback" not in issue.message and "ev-" not in issue.message
+
+
+def test_page_only_stale_rejected_evidence_no_active_evidence(db):
+    _page(db, "p1", content="GET /api/x 返回 200 成功。")
+    _evidence(db, "p1", "ev-stale", status="stale")
+    _evidence(db, "p1", "ev-rejected", status="rejected")
+    docs, issues = build_api_source_documents_with_diagnostics(db, _page_rows(db))
+    assert docs == ()
+    assert any(i.code == ISSUE_NO_ACTIVE_EVIDENCE for i in issues)
+
+
+def test_page_all_invalid_evidence_no_active_evidence(db):
+    _page(db, "p1")
+    _evidence(db, "p1", "ev-bad-hash", content_hash="not64")
+    _evidence(db, "p1", "ev-bad-loc", locator="[[", content_hash=H)
+    docs, issues = build_api_source_documents_with_diagnostics(db, _page_rows(db))
+    assert docs == ()
+    assert any(i.code == ISSUE_NO_ACTIVE_EVIDENCE for i in issues)
+    assert any(i.code == ISSUE_HASH_INVALID for i in issues)
 
 
 def test_page_hash_unavailable_stale(db):

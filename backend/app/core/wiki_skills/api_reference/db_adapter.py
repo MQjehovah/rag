@@ -31,6 +31,7 @@ ISSUE_LOCATOR_INVALID = "EVIDENCE_LOCATOR_INVALID"
 ISSUE_HASH_INVALID = "EVIDENCE_HASH_INVALID"
 ISSUE_SOURCE_HASH_STALE = "SOURCE_HASH_STALE"
 ISSUE_EXCERPT_BUDGET_EXCEEDED = "EXCERPT_BUDGET_EXCEEDED"
+ISSUE_NO_ACTIVE_EVIDENCE = "NO_ACTIVE_EVIDENCE"
 
 _HASH64_RE = re.compile(r"^[0-9a-f]{64}$")
 
@@ -222,6 +223,12 @@ def build_api_source_documents_with_diagnostics(
             excerpts.append((eid, excerpt))
 
         if not records:
+            # 本页没有任何可用 active Evidence（无 Evidence / 全部 stale-rejected /
+            # 全部非法）→ 结构化 NO_ACTIVE_EVIDENCE，绝不静默跳过。message 固定文案，
+            # 不写 Evidence 原文/ID/路径/异常文本。
+            issues.append(AdapterIssue(
+                code=ISSUE_NO_ACTIVE_EVIDENCE, source_page_id=pid,
+                message="page has no usable active evidence; cannot compile"))
             continue
         total = sum(len(t) for _e, t in excerpts)
         if total > max_total_excerpt_chars:

@@ -349,6 +349,19 @@ _STAGE_SAFE_MESSAGES = {
     "RETRY_EXHAUSTED": "重试次数已达上限",
     "WORKER_LOST": "执行租约丢失，任务将由系统恢复",
     "CANCELLED_BY_USER": "任务已取消",
+    # Phase 7C.3：wiki.default v3 单目标发布受控失败码（固定文案，不落内部细节）。
+    "TRIGGER_NOT_SUPPORTED": "知识编译失败：当前触发类型在本版本不受支持（不可回退）",
+    "MULTI_TARGET_NOT_SUPPORTED": "知识编译失败：本版本仅支持单目标发布",
+    "SKILL_DECISION_MISSING": "知识编译失败：缺少已持久化的 Skill 决策（禁止猜测分派）",
+    "SKILL_NOT_SUPPORTED": "知识编译失败：Skill 或其版本不受本版本支持",
+    "VALIDATION_FAILED": "知识编译失败：API Reference 发布前校验未通过",
+    "PAGE_STALE": "知识编译失败：来源页在编译期间发生变化（不可发布）",
+    "EVIDENCE_STALE": "知识编译失败：证据在编译期间发生变化或失效（不可发布）",
+    "WORKSPACE_MISMATCH": "知识编译失败：工作区归属缺失或不匹配（不可自动重试）",
+    "API_PROTECTED_SECTION_REQUIRES_MIGRATION": (
+        "知识编译失败：当前修订含人工保护 Section，需迁移后才能由 API Reference 覆盖"
+    ),
+    "API_PERSIST_FAILED": "知识编译失败：API Reference 发布写入失败（不可自动重试）",
 }
 
 
