@@ -365,6 +365,36 @@ def delete_page(page_id: str, db: Session = Depends(get_db), current_user=Depend
     _check_page_manage(current_user)
     _check_page_access(page, current_user, db)
 
+    # Phase 5.1：Page 物理删除前，先在同事务创建 page_deleted CompileRun（若编译启用、
+    # pipeline 已注册且可解析 workspace），把删除事件落为可追溯/可恢复任务。删除本身
+    # 仍同步移除 Wiki 来源（即时 draft/archived 失效）；run 由 worker 泵消费，重复移除
+    # 幂等（_safe_remove_source_page 二次移除 no-op），并负责图谱清理/审计。run 创建
+    # 失败不阻断删除（删除正确性不依赖编译开关）。
+    try:
+        from app.core.wiki_workspace.routing import page_workspace_id
+        from app.core.wiki_pipeline.executor import create_run as _pipeline_create_run
+        from app.core.wiki_pipeline.pipelines.wiki_default import PIPELINE_KEY as _PK
+        from app.config import settings as _settings
+        if getattr(_settings, "wiki_pipeline_default_enabled", False):
+            _ws = page_workspace_id(db, page)
+            if _ws:
+                import hashlib as _hl
+                _ih = _hl.sha256(
+                    f"page_deleted:{page_id}:{_ws}:{page.notebook_id or ''}".encode("utf-8")
+                ).hexdigest()
+                _pipeline_create_run(
+                    db,
+                    pipeline_key=_PK,
+                    trigger_type="page_deleted",
+                    trigger_object_id=page_id,
+                    workspace_id=_ws,
+                    input_hash=_ih,
+                    supersede_same_trigger=True,
+                )
+    except Exception:
+        import logging as _log
+        _log.getLogger(__name__).exception("page_deleted run enqueue skipped page=%s", page_id)
+
     # V4 Phase J-3：先移除图谱 provenance（在删 PageChunk 前收集受影响关系/实体/Community，
     # 避免 FK CASCADE 先删 provenance 导致无法收集），再删 Chunk/Page，最后统一 commit。
     from app.core.knowledge_compiler_v3.v4_graph_builder import remove_page_graph
@@ -373,9 +403,12 @@ def delete_page(page_id: str, db: Session = Depends(get_db), current_user=Depend
     db.delete(page)
     db.commit()
 
-    # V4 Phase C：删除来源 Page → 移除 Wiki 来源并标记 dirty（同步快操作，不调用 LLM）
-    from app.core.knowledge_compiler_v3.wiki_refresh_scheduler import schedule_page_deleted
-    schedule_page_deleted(page_id)
+    # V4 Phase C：删除来源 Page → 同步移除 Wiki 来源并标记 dirty（立即失效；不调用 LLM）。
+    # 该函数查 wiki.source_page_ids（JSON），不依赖 Page 行存在，故物理删除后仍可执行。
+    # 删除前已建 page_deleted CompileRun（若编译启用）由泵消费做审计/图谱清理（幂等）；
+    # 此处同步移除保证删除后旧 Revision 立即 draft/archived，不等待异步 run。
+    from app.core.knowledge_compiler_v3.wiki_page_builder import remove_source_page_from_wikis
+    remove_source_page_from_wikis(db, page_id, commit=True)
 
     return {"message": "删除成功"}
 

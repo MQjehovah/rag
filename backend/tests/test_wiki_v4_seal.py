@@ -50,47 +50,27 @@ def _run(coro):
     return asyncio.run(coro)
 
 
-# 一、并发时序：_pump_lock 保证 pump 串行，失败项放回后由后续 pump 继续
-def test_pump_lock_concurrent_timing(monkeypatch):
+# 一、Phase 5.1 单轨：kill switch 关闭（暂停编译）→ 不触发旧 worker 执行。
+# 旧 _pump_recovery_backlog 进程内续泵机制已随单轨化退役；队列满不丢语义现由
+# CompileRun DB queued 行 + worker 泵承载（见 test_wiki_pipeline_core /
+# test_phase51_scheduler 对应用例）。
+def test_pump_legacy_not_triggered_when_kill_off(monkeypatch):
+    import threading
     import app.core.knowledge_compiler_v3.wiki_refresh_scheduler as sch
-    monkeypatch.setattr(settings, "wiki_refresh_queue_size", 1)
-    monkeypatch.setattr(settings, "wiki_refresh_workers", 1)
+    monkeypatch.setattr(settings, "wiki_pipeline_default_enabled", False)
+    sch.clear_kill_switch_cache()
+
+    submitted = threading.Event()
+
+    def _legacy_worker(page_id):
+        submitted.set()
+
+    monkeypatch.setattr(sch, "_run_page_refresh", _legacy_worker)
     sch.shutdown()
     sch._semaphore = None
-    sch._shutdown_requested = False
-
-    executed = set()
-
-    def _fake_worker(page_id):
-        executed.add(page_id)
-        # 模拟真实 worker finally：清 pending → release → pump
-        with sch._lock:
-            sch._pending_pages.discard(page_id)
-        sch._get_semaphore().release()
-        sch._pump_recovery_backlog()
-
-    monkeypatch.setattr(sch, "_run_page_refresh", _fake_worker)
-
-    # 预置 3 个 page 任务
-    with sch._lock:
-        sch._recovery_page_backlog = ["p1", "p2", "p3"]
-        sch._recovery_wiki_backlog = []
-
-    sch._pump_recovery_backlog()
-    import time
-    deadline = time.time() + 3
-    while time.time() < deadline:
-        with sch._lock:
-            remaining = len(sch._recovery_page_backlog) + len(sch._recovery_wiki_backlog)
-            pending = len(sch._pending_pages) + len(sch._pending_wikis)
-        if remaining == 0 and pending == 0:
-            break
-        time.sleep(0.01)
-
-    assert executed == {"p1", "p2", "p3"}
-    with sch._lock:
-        assert len(sch._recovery_page_backlog) == 0
-        assert len(sch._pending_pages) == 0
+    ok = sch.schedule_page_refresh("p1", changed=True)
+    assert ok is False, "kill switch 关闭 → 未调度（任务保留 dirty，不丢）"
+    assert not submitted.is_set(), "kill off 不得触发旧 worker 执行"
     sch.shutdown()
 
 

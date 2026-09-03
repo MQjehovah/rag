@@ -147,41 +147,54 @@ def test_http_200_illegal_json_maps_invalid_response(db, monkeypatch):
     assert p.wiki_last_error == "invalid_response"
 
 
-# backlog 续泵：queue_size=1，3 dirty page + 2 dirty wiki，一次 recover，最终全部执行
-def test_backlog_pump_executes_all(monkeypatch):
-    import threading
-    import time
+# backlog 续泵（legacy）在 Phase 5.1 不再生产触发：旧 worker/pump 仅保留定义。
+# 本测试更新为新语义：schedule_* 单轨 —— kill switch on → enqueue run；off →
+# 返回未调度且保持 dirty；两者都不再 submit 旧 worker。
+def test_schedule_entries_single_track_no_legacy_worker(monkeypatch):
     import app.core.knowledge_compiler_v3.wiki_refresh_scheduler as sch
-    monkeypatch.setattr(settings, "wiki_refresh_queue_size", 1)
-    monkeypatch.setattr(settings, "wiki_refresh_workers", 1)
     sch.shutdown()
     sch._semaphore = None
 
-    executed = {"pages": set(), "wikis": set()}
+    submitted = {"pages": [], "wikis": []}
 
     def _fake_page_worker(page_id):
-        executed["pages"].add(page_id)
-        # 模拟真实 worker 的 finally：release 信号量 + 续泵
-        sch._get_semaphore().release()
-        sch._pump_recovery_backlog()
+        submitted["pages"].append(page_id)
 
     def _fake_wiki_worker(wiki_id):
-        executed["wikis"].add(wiki_id)
-        sch._get_semaphore().release()
-        sch._pump_recovery_backlog()
+        submitted["wikis"].append(wiki_id)
 
     monkeypatch.setattr(sch, "_run_page_refresh", _fake_page_worker)
     monkeypatch.setattr(sch, "_run_wiki_rebuild", _fake_wiki_worker)
+    # kill switch 门控打桩（DB-first 细节由 test_phase51 覆盖）。
+    monkeypatch.setattr(sch, "_pipeline_kill_switch_enabled", lambda: True)
 
-    sch._recovery_page_backlog = ["p1", "p2", "p3"]
-    sch._recovery_wiki_backlog = ["w1", "w2"]
-    sch._attempted_page_ids.clear()
-    sch._attempted_wiki_ids.clear()
+    # kill switch on：调度入口走 enqueue（捕获入队调用，不再触达旧 worker）。
+    enqueued = {"page_changed": [], "manual_rebuild": []}
 
-    sch._pump_recovery_backlog()
-    # 等待异步 worker 完成
-    time.sleep(0.5)
+    def _fake_enqueue_page(page_id):
+        enqueued["page_changed"].append(page_id)
+        return True
 
-    assert executed["pages"] == {"p1", "p2", "p3"}
-    assert executed["wikis"] == {"w1", "w2"}
+    def _fake_enqueue_wiki(wiki_id):
+        enqueued["manual_rebuild"].append(wiki_id)
+        return True
+
+    monkeypatch.setattr(sch, "_enqueue_page_changed", _fake_enqueue_page)
+    monkeypatch.setattr(sch, "_enqueue_manual_rebuild", _fake_enqueue_wiki)
+
+    ok_page = sch.schedule_page_refresh("p1", changed=True)
+    ok_wiki = sch.schedule_wiki_rebuild("w1")
+    assert ok_page is True
+    assert ok_wiki is True
+    assert enqueued["page_changed"] == ["p1"]
+    assert enqueued["manual_rebuild"] == ["w1"]
+    assert submitted == {"pages": [], "wikis": []}, "不再 submit 旧 worker"
+
+    # kill switch off：不建 run、不 submit worker、未调度（dirty 由 recover 兜底）。
+    monkeypatch.setattr(sch, "_pipeline_kill_switch_enabled", lambda: False)
+    assert sch.schedule_page_refresh("p2", changed=True) is False
+    assert sch.schedule_wiki_rebuild("w2") is False
+    assert enqueued["page_changed"] == ["p1"], "kill off 不得 enqueue"
+    assert enqueued["manual_rebuild"] == ["w1"]
+    assert submitted == {"pages": [], "wikis": []}
     sch.shutdown()

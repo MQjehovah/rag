@@ -60,6 +60,26 @@ from app.core.wiki_pipeline.state_machine import (
 
 logger = logging.getLogger(__name__)
 
+# Phase 5：可注入的外部 runner（LLM / 图谱）。stage 不直接 await LLM / 不自行开独立事务，
+# 通过 ctx["llm_runner"] / ctx["graph_runner"] 调用；默认走真实实现，测试可替换。
+_LLM_RUNNER = None
+_GRAPH_RUNNER = None
+
+
+def configure_external_runners(*, llm_runner=None, graph_runner=None) -> None:
+    global _LLM_RUNNER, _GRAPH_RUNNER
+    if llm_runner is not None:
+        _LLM_RUNNER = llm_runner
+    if graph_runner is not None:
+        _GRAPH_RUNNER = graph_runner
+
+
+def reset_external_runners() -> None:
+    global _LLM_RUNNER, _GRAPH_RUNNER
+    _LLM_RUNNER = None
+    _GRAPH_RUNNER = None
+
+
 ERROR_SUMMARY_TRUNCATE = 300
 SAFE_ERROR_TRUNCATE = 200
 STAGE_ERROR_CODE_TRUNCATE = 64
@@ -1288,6 +1308,8 @@ def execute_run(db: Session, run_id: str) -> CompileRun:
             "pipeline_key": run.pipeline_key,
             "pipeline_version": run.pipeline_version,
         }
+        ctx["llm_runner"] = _LLM_RUNNER
+        ctx["graph_runner"] = _GRAPH_RUNNER
         # 本 attempt 已成功 stage 的 (stage_key, 产物 content_hash) 链（按顺序）。
         succeeded_chain: list[tuple[str, str | None]] = []
         for sdef, row in zip(pipeline.stages, stage_rows):

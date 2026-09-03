@@ -135,25 +135,24 @@ def test_only_explicit_false_is_not_worthy():
 
 
 # 12 + 13. queue_size 是真实上限；队列满时返回 False（Page 保持 dirty）
-def test_queue_size_real_limit(monkeypatch):
+def test_queue_paused_does_not_submit_legacy_worker(monkeypatch):
+    """Phase 5.1 单轨：kill switch 关闭（暂停编译）→ schedule 返回 False 且不触发
+    旧 worker（任务由 Page.wiki_dirty 保留，不丢；不误清、不回退旧 Builder）。"""
     import threading
-    monkeypatch.setattr(settings, "wiki_refresh_queue_size", 1)
-    entered = threading.Event()
-    release = threading.Event()
+    monkeypatch.setattr(settings, "wiki_pipeline_default_enabled", False)
+    scheduler.clear_kill_switch_cache()
 
-    def _blocking_worker(page_id):
-        entered.set()
-        release.wait(timeout=5)
+    submitted = threading.Event()
 
-    monkeypatch.setattr(scheduler, "_run_page_refresh", _blocking_worker)
+    def _legacy_worker(page_id):
+        submitted.set()
+
+    monkeypatch.setattr(scheduler, "_run_page_refresh", _legacy_worker)
     scheduler.shutdown()
     scheduler._semaphore = None
     ok = scheduler.schedule_page_refresh("p1", changed=True)
-    assert ok is True
-    entered.wait(timeout=5)
-    ok2 = scheduler.schedule_page_refresh("p2", changed=True)
-    assert ok2 is False  # 信号量=1 已被占用 → 队列满，Page 保持 dirty
-    release.set()
+    assert ok is False, "kill switch 关闭 → 未调度（任务保留 dirty）"
+    assert not submitted.is_set(), "kill off 不得触发旧 worker 执行"
     scheduler.shutdown()
 
 

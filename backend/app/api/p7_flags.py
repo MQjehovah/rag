@@ -17,6 +17,7 @@ router = APIRouter(prefix="/api/p7", tags=["P7 灰度"])
 # 已知 Feature Flag（V4 Phase H 清理后仅保留仍在使用的开关）
 _FLAGS = [
     "wiki_topic_enabled",
+    "wiki_pipeline_default_enabled",
     "source_hub_enabled",
     "dingtalk_connector_enabled",
     "gitlab_connector_enabled",

@@ -51,6 +51,18 @@ def _start_scheduler():
     from app.sources.bootstrap import ensure_builtin_connections
 
     DingTalkLocalStorage().ensure_directories()
+
+    # Phase 5：注册 wiki.default pipeline。必须早于 recover_dirty_pages / worker
+    # pump：flag on 时 recover 建 run 需 pipeline 已注册，pump 消费前注册可避免
+    # queued run 被标 PIPELINE_NOT_REGISTERED。幂等：重复注册 registry 抛
+    # PipelineError → 记录跳过，不影响启动。
+    try:
+        from app.core.wiki_pipeline.pipelines.wiki_default import register_default_pipeline
+        register_default_pipeline()
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception("register wiki.default pipeline skipped")
+
     try:
         engine = get_engine(settings.database_url)
         init_db(engine)

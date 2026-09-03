@@ -144,4 +144,8 @@ class Settings(BaseSettings):
     wiki_refresh_workers: int = 1        # 后台刷新线程数（建议 1，最大 2）
     wiki_refresh_queue_size: int = 500   # 队列上限（配合 Page.wiki_dirty 持久恢复）
 
+    # Phase 5.1：wiki.default 为生产唯一自动链路（kill switch）。
+    # 默认 True（单轨启用）；DB RuntimeFeatureFlag 同名行可关闭（kill switch = 暂停编译）。
+    wiki_pipeline_default_enabled: bool = True
+
 settings = Settings()

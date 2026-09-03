@@ -9,6 +9,8 @@ from app.models.database import RuntimeFeatureFlag
 
 KNOWN_FLAGS = {
     "wiki_topic_enabled",
+    # Phase 5：调度入口切 wiki.default pipeline（默认关闭）
+    "wiki_pipeline_default_enabled",
     # 数据源平台
     "source_hub_enabled",
     "dingtalk_connector_enabled",
