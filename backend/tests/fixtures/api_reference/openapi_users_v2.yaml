@@ -1,0 +1,82 @@
+openapi: 3.1.0
+info:
+  title: 用户管理 API（v2）
+  description: 用户管理 API v2 接口说明。访问需使用新的 scoped token。
+paths:
+  /users:
+    get:
+      summary: 列出全部用户（v2）
+      description: v2 使用基于游标的分页，返回字段与 v1 不同。
+      parameters:
+        - name: cursor
+          in: query
+          required: false
+          description: 游标分页标记
+          schema:
+            type: string
+      responses:
+        "200":
+          description: v2 用户列表
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/UserV2"
+                  next_cursor:
+                    type: string
+        "401":
+          description: scoped token 无效
+  /users/{userId}:
+    patch:
+      summary: 部分更新用户（v2）
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          description: 用户唯一标识
+          schema:
+            type: string
+        - name: X-V2-Trace
+          in: header
+          required: false
+          description: v2 追踪头
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UserPatchV2"
+      responses:
+        "200":
+          description: 更新后的用户
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserV2"
+        "404":
+          description: 用户不存在
+        "429":
+          description: 触发限流
+components:
+  schemas:
+    UserV2:
+      type: object
+      description: v2 用户对象
+      required: [id, display_name]
+      properties:
+        id:
+          type: string
+        display_name:
+          type: string
+    UserPatchV2:
+      type: object
+      description: v2 用户部分更新载荷
+      properties:
+        display_name:
+          type: string
