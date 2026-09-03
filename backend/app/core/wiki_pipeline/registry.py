@@ -372,6 +372,10 @@ _STAGE_SAFE_MESSAGES = {
     "BATCH_STALE": "知识编译失败：批量输入已变化，无法复用旧成功记录（请重新创建编译）",
     "BATCH_PUBLISH_FAILED": "知识编译失败：批量发布写入失败（不可自动重试）",
     "BATCH_PLAN_CHANGED": "知识编译失败：批量计划与历史不一致，无法复用（请创建新编译）",
+    # Phase 7D：v2 回滚安全边界（api_reference/迁移只允许 v3）。
+    "SKILL_NOT_SUPPORTED_BY_PIPELINE_VERSION": (
+        "知识编译失败：当前 Pipeline 版本不支持该 Skill（请使用 v3）"
+    ),
 }
 
 

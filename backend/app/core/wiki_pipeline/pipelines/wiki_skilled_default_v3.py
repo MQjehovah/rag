@@ -44,6 +44,7 @@ from app.core.wiki_pipeline.pipelines.wiki_default import (
     PIPELINE_KEY,
     _finish_publish,
     _stage_finalize_compile_outcome,
+    _stage_publish_default as _V1_STAGE_PUBLISH_DEFAULT,
     _stage_resolve_context,
     _stage_schedule_graph,
     _stage_synthesize_default,
@@ -493,7 +494,36 @@ def _derive_persist_sections(result: ApiCompileResult) -> list[dict]:
     return out
 
 
-def _compile_api_from_pages(db, requested_page_ids: list[str]) -> dict:
+def _pipeline_api_llm_adapter(ctx: dict | None):
+    """Pipeline LLM runner → api_reference.compiler 所需 Callable[[str], str]。
+
+    - 输入只允许 compiler 已构造的有界 Prompt；
+    - 复用 Pipeline 既有 llm_runner（ctx['llm_runner']），不新增模型客户端；
+    - str → 原样；list/dict → 确定性 JSON 序列化；其它类型抛受控异常
+      （compiler 侧收敛为 LLM_RUNNER_FAILED，fail-closed）；
+    - 无 runner（ctx 未注入/降级）→ 返回 None：Markdown 无受控提取，OpenAPI 不受影响。
+    """
+    runner = (ctx or {}).get("llm_runner")
+    if runner is None:
+        return None
+
+    def _api_llm(prompt: str) -> str:
+        out = runner(
+            [{"role": "user", "content": prompt}],
+            context="api-reference-compile",
+            timeout=120.0,
+        )
+        if isinstance(out, str):
+            return out
+        if isinstance(out, (dict, list)):
+            return json.dumps(out, ensure_ascii=False, sort_keys=True)
+        raise RuntimeError("api_reference llm output invalid type")
+
+    return _api_llm
+
+
+def _compile_api_from_pages(db, requested_page_ids: list[str],
+                            llm_runner: "Callable | None" = None) -> dict:
     """Page 集 → ApiSourceDocument（db_adapter）→ 内存编译。
 
     返回 JSON-safe 摘要 + 编译期 Evidence 快照（供 publish 前重验）。返回
@@ -529,7 +559,7 @@ def _compile_api_from_pages(db, requested_page_ids: list[str]) -> dict:
                     "content_hash": content_hash,
                 }
 
-    result = api_compiler_mod.compile_api_reference(docs)
+    result = api_compiler_mod.compile_api_reference(docs, llm_runner=llm_runner)
     sections = _derive_persist_sections(result)
     publishable = bool(
         result.is_publishable and docs and not issue_codes and source_set_complete
@@ -556,7 +586,12 @@ def _compile_api_from_pages(db, requested_page_ids: list[str]) -> dict:
 
 
 def _stage_synthesize_v3(db, run, stage_row, ctx) -> dict:
-    """synthesize_by_skill：default 复用 v1；api_reference 内存编译（无产品写）。"""
+    """synthesize_by_skill：default 复用 v1；api_reference 内存编译（无产品写）。
+
+    page_deleted：不经 API Skill/migration/正文 Skill 分派，直接复用 v1 删除语义。
+    """
+    if run.trigger_type == "page_deleted":
+        return _stage_synthesize_default(db, run, stage_row, ctx)
     if run.trigger_type == "batch_rebuild":
         from app.core.wiki_pipeline.pipelines import wiki_skilled_batch_v3 as batch_mod
 
@@ -570,7 +605,8 @@ def _stage_synthesize_v3(db, run, stage_row, ctx) -> dict:
 
     if plan["branch"] == "api_reference":
         try:
-            compiled = _compile_api_from_pages(db, plan.get("page_ids") or [])
+            compiled = _compile_api_from_pages(
+                db, plan.get("page_ids") or [], llm_runner=_pipeline_api_llm_adapter(ctx))
         except Exception:  # noqa: BLE001
             logger.exception("api_reference compile failed run=%s", run.id)
             return _safe_error("VALIDATION_FAILED", retryable=True)
@@ -604,6 +640,8 @@ def _stage_validate_v3(db, run, stage_row, ctx) -> dict:
     - 迁移（plan.migration=True）→ MIGRATION_VALIDATION_FAILED；
     - 普通 api 更新/重建 → VALIDATION_FAILED。
     """
+    if run.trigger_type == "page_deleted":
+        return _stage_validate_default(db, run, stage_row, ctx)
     if run.trigger_type == "batch_rebuild":
         from app.core.wiki_pipeline.pipelines import wiki_skilled_batch_v3 as batch_mod
 
@@ -984,6 +1022,9 @@ def _stage_publish_v3(db, run, stage_row, ctx) -> dict:
     api_reference 分支 → 发布前重验 + 原子持久化（SAVEPOINT/lease/统一提交
     边界内，不自行 commit/rollback）。
     """
+    if run.trigger_type == "page_deleted":
+        # v3 page_deleted：复用 v1 确定性删除 Stage（不经过 v2 Skill 字段写入）。
+        return _V1_STAGE_PUBLISH_DEFAULT(db, run, stage_row, ctx)
     if run.trigger_type == "batch_rebuild":
         from app.core.wiki_pipeline.pipelines import wiki_skilled_batch_v3 as batch_mod
 

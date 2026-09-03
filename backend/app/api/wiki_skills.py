@@ -10,7 +10,8 @@
   runtime_key / Python 路径 / Loader 内部错误 / Prompt / Secret；
 - unknown Skill / 内部 Registry 异常一律收敛为受控 400/404（不返回内部异常文本）；
 - override/unlock 不修改 Workspace/ACL/Topic，不调用 legacy builder；
-- override 会创建持久化 manual_rebuild CompileRun（默认 v2），仅入队不阻塞 LLM。
+- override 会创建持久化 manual_rebuild CompileRun（pipeline 使用 Registry active
+  version，默认 v3），仅入队不阻塞 LLM。
 """
 from __future__ import annotations
 
@@ -128,21 +129,39 @@ class SkillUnlockPayload(BaseModel):
     recompile: bool = False
 
 
+def _active_pipeline_version() -> str:
+    """Pipeline Registry 当前 active version（显式固化到新 Run）。"""
+    from app.core.wiki_pipeline import registry as pregs
+    from app.core.wiki_pipeline.pipelines.wiki_skilled_default import PIPELINE_KEY
+
+    pipeline = pregs.get_pipeline(PIPELINE_KEY)
+    if pipeline is None:
+        return "2"
+    return pipeline.version
+
+
 def _create_skill_rebuild_run(db: Session, wiki: WikiPage, current_user: dict) -> dict | None:
     """recompile=true：创建持久化 manual_rebuild CompileRun（仅入队，不阻塞 LLM）。
 
-    必须使用 v2（skill-aware）。失败（workspace 缺失/注册缺失等）返回 None，
-    由调用方收敛为受控错误；不调用 legacy builder。
+    - pipeline_version 取 Pipeline Registry 当前 active version 并显式固化；
+    - active=v2（紧急回滚）且目标 wiki 为 api_reference → 受控拒绝（返回 None，
+      调用方回滚 → 409），绝不创建必然错误的 Run；
+    - 失败（workspace 缺失/注册缺失等）返回 None，由调用方收敛为受控错误；
+      不调用 legacy builder。
     """
     if not wiki.workspace_id:
         return None
     from app.core.wiki_pipeline import executor
     from app.core.wiki_pipeline.pipelines.wiki_skilled_default import PIPELINE_KEY
 
+    active = _active_pipeline_version()
+    if active == "2" and (wiki.content_skill or None) == "api_reference":
+        return None
+
     run = executor.create_run(
         db,
         pipeline_key=PIPELINE_KEY,
-        pipeline_version="2",
+        pipeline_version=active,
         trigger_type="manual_rebuild",
         trigger_object_id=wiki.id,
         workspace_id=wiki.workspace_id,
@@ -180,7 +199,8 @@ def skill_override(
     - 更新 WikiPage skill 字段 + skill_decision_json 安全审计摘要；
     - 不修改 Workspace/ACL/Topic；
     - recompile=false：只更新选择与锁定，不重写 Revision、不调 legacy builder；
-    - recompile=true：创建持久化 manual_rebuild CompileRun（默认 v2），仅入队。
+    - recompile=true：创建持久化 manual_rebuild CompileRun（active pipeline
+      version），仅入队。
     """
     wiki = _require_skill_editor(db, current_user, wiki_id)
     try:

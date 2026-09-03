@@ -155,4 +155,7 @@ class Settings(BaseSettings):
     wiki_skill_router_max_candidates: int = 5   # 候选上限
     wiki_skill_router_summary_chars: int = 4000 # LLM 请求摘要长度上限
 
+    # Phase 7D：wiki.default 生产 active pipeline version（只允许 "2"/"3"；未知值启动失败）。
+    wiki_pipeline_active_version: str = "3"
+
 settings = Settings()

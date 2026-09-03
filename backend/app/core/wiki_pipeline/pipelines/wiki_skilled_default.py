@@ -443,19 +443,50 @@ def _apply_skill_to_wiki(db, wiki: WikiPage, decision: SkillDecision) -> None:
     )
 
 
+def _v2_unsupported_decision(state: dict) -> bool:
+    """v2 回滚安全：本 pipeline 只能发布 default；api_reference / 迁移 → fail closed。
+
+    忽略 not_applicable（无 selected skill）；任何 selected 非 default 或
+    migration_proposed（选中 default 但 propose 其它）→ True。
+    """
+    from app.core.wiki_skills.schemas import SkillDecision
+
+    for raw in (state.get("skill") or {}).get("decisions") or []:
+        try:
+            d = SkillDecision.from_dict(raw)
+        except ValueError:
+            continue
+        if d.selected_skill is None:
+            continue
+        if d.selected_skill != "default" or d.status == "migration_proposed":
+            return True
+    return False
+
+
 def _stage_publish_skilled(db, run, stage_row, ctx) -> dict:
     """v2 publish：先完整复用 v1 publish_default，再对成功发布的 Wiki 原子写 Skill。
+
+    Phase 7D 回滚安全：v2 遇到 api_reference/迁移决策 → fail closed
+    （SKILL_NOT_SUPPORTED_BY_PIPELINE_VERSION，零 Revision、零 Skill 写）。
 
     成功发布（Revision 已写入且状态 published）→ 同一事务内为该 Wiki 写对应
     decision 的 Skill 字段。validation/stale/publish 失败分支不发布 Revision →
     不触碰原 Skill/Revision。任何 Skill 字段写入异常 → stage 失败（savepoint 回滚
     包括本次 publish 全部写入，保持原子；不覆盖原值）。
     """
+    state = ctx.get("state") or {}
+    if _v2_unsupported_decision(state):
+        return {
+            "ok": False,
+            "error_code": "SKILL_NOT_SUPPORTED_BY_PIPELINE_VERSION",
+            "error_message": pipe_registry.stage_error_message(
+                "SKILL_NOT_SUPPORTED_BY_PIPELINE_VERSION"),
+            "retryable": False,
+        }
     result = _V1_STAGE_PUBLISH_DEFAULT(db, run, stage_row, ctx)
     if not result.get("ok"):
         return result
 
-    state = ctx.get("state") or {}
     publish = state.get("publish") or {}
     wiki_ids = list(publish.get("wiki_page_ids") or [])
     note = publish.get("note") or ""

@@ -401,7 +401,7 @@ def test_api_publish_reverify_all_source_pages(db):
             selected_version="1", selected_by="locked", status="locked",
             reason_code="SKILL_LOCKED", locked=True).to_dict(),
     }
-    compiled = bmod._synthesize_api_target(db, target, False)
+    compiled = bmod._synthesize_api_target(db, {}, target, False)
     assert compiled.get("ready"), compiled
     # 发布前把非本批"来源页"之一（p2，历史成员）evidence 置 stale → 不得发布。
     db.refresh(p2)

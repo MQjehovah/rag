@@ -398,13 +398,18 @@ def _synthesize_default_target(db, context, ctx, target: dict) -> dict:
     return {"ready": True, "entry": entry}
 
 
-def _synthesize_api_target(db, target: dict, migration: bool) -> dict:
-    """api_reference/migration 目标：来源集合完整性 + Evidence coverage（shadow）。"""
+def _synthesize_api_target(db, ctx, target: dict, migration: bool) -> dict:
+    """api_reference/migration 目标：来源集合完整性 + Evidence coverage（shadow）。
+
+    Markdown 来源通过 Pipeline llm_runner adapter（与单目标同一实现）。
+    """
     from app.core.wiki_pipeline.pipelines.wiki_skilled_default_v3 import (
         _compile_api_from_pages,
+        _pipeline_api_llm_adapter,
     )
 
-    compiled = _compile_api_from_pages(db, target.get("source_page_ids") or [])
+    compiled = _compile_api_from_pages(
+        db, target.get("source_page_ids") or [], llm_runner=_pipeline_api_llm_adapter(ctx))
     if not compiled.get("publishable"):
         code = _MIG_FAIL if migration else _API_FAIL
         return {"ready": False, "code": code, "compiled": compiled}
@@ -463,7 +468,7 @@ def synthesize_batch_v3(db, run, ctx) -> dict:
                 results[key] = _target_result(key, target, "failed",
                                               code=out.get("code", "VALIDATION_FAILED"))
         elif branch == "api_reference":
-            out = _synthesize_api_target(db, target, migration)
+            out = _synthesize_api_target(db, ctx, target, migration)
             payloads[key] = out
             if out.get("ready"):
                 results[key] = _target_result(key, target, "ready",

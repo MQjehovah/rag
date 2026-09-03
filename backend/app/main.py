@@ -54,22 +54,11 @@ def _start_scheduler():
 
     DingTalkLocalStorage().ensure_directories()
 
-    # Phase 6：先注册 builtin default Skill（default 加载失败必须中止启动），
-    # 再注册 wiki.default v1 与 v2（skill-aware）。v2 为显式 active，Phase 6 以后
-    # 新建 Run 默认 v2；已排队 v1 Run 仍精确执行 v1（exact-version 固化，注册新版本
-    # 不影响旧 Run）。必须早于 recover_dirty_pages / worker pump：flag on 时 recover
-    # 建 run 需 pipeline 已注册，pump 消费前注册可避免 queued run 被标
-    # PIPELINE_NOT_REGISTERED。注册幂等（契约十二）：同 key+version 同定义重复注册
-    # no-op；真实错误（default 加载失败/定义冲突/registry 异常）→ raise 中止启动。
-    from app.core.wiki_skills import service as skill_service
-    skill_service.register_default_skill()
-
-    from app.core.wiki_pipeline.pipelines.wiki_default import register_default_pipeline
-    register_default_pipeline()
-    from app.core.wiki_pipeline.pipelines.wiki_skilled_default import (
-        register_default_pipeline_v2,
-    )
-    register_default_pipeline_v2()
+    # Phase 7D：统一生产 bootstrap（builtin Skills + wiki.default v1/v2/v3 注册 +
+    # 显式 active version 校验）。必须早于 recover_dirty_pages / worker pump；
+    # bootstrap 异常不吞，直接中止启动。
+    from app.core.wiki_pipeline.bootstrap import bootstrap_wiki_pipeline
+    bootstrap_wiki_pipeline()
 
     try:
         engine = get_engine(settings.database_url)
