@@ -150,7 +150,7 @@ def _build_skill_contexts(
     workspace_id = context.get("workspace_id")
     status = topic.get("status") or "not_applicable"
 
-    if status != "create_update" and trigger != "manual_rebuild":
+    if status != "create_update" and trigger not in ("manual_rebuild", "batch_rebuild"):
         return []
 
     if trigger == "manual_rebuild":

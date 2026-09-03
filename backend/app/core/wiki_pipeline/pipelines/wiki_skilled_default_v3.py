@@ -557,6 +557,11 @@ def _compile_api_from_pages(db, requested_page_ids: list[str]) -> dict:
 
 def _stage_synthesize_v3(db, run, stage_row, ctx) -> dict:
     """synthesize_by_skill：default 复用 v1；api_reference 内存编译（无产品写）。"""
+    if run.trigger_type == "batch_rebuild":
+        from app.core.wiki_pipeline.pipelines import wiki_skilled_batch_v3 as batch_mod
+
+        return batch_mod.synthesize_batch_v3(db, run, ctx)
+
     state = ctx.setdefault("state", {})
     plan, error = _build_v3_plan(db, run, ctx)
     if error is not None:
@@ -599,6 +604,11 @@ def _stage_validate_v3(db, run, stage_row, ctx) -> dict:
     - 迁移（plan.migration=True）→ MIGRATION_VALIDATION_FAILED；
     - 普通 api 更新/重建 → VALIDATION_FAILED。
     """
+    if run.trigger_type == "batch_rebuild":
+        from app.core.wiki_pipeline.pipelines import wiki_skilled_batch_v3 as batch_mod
+
+        return batch_mod.validate_batch_v3(db, run, ctx)
+
     state = ctx.setdefault("state", {})
     plan, error = _load_or_build_plan(db, run, ctx)
     if error is not None:
@@ -974,6 +984,11 @@ def _stage_publish_v3(db, run, stage_row, ctx) -> dict:
     api_reference 分支 → 发布前重验 + 原子持久化（SAVEPOINT/lease/统一提交
     边界内，不自行 commit/rollback）。
     """
+    if run.trigger_type == "batch_rebuild":
+        from app.core.wiki_pipeline.pipelines import wiki_skilled_batch_v3 as batch_mod
+
+        return batch_mod.publish_batch_v3(db, run, ctx)
+
     state = ctx.setdefault("state", {})
     plan, error = _load_or_build_plan(db, run, ctx)
     if error is not None:

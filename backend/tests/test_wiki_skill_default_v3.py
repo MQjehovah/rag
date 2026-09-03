@@ -827,7 +827,8 @@ def test_no_excerpt_prompt_token_path_leak(db):
 # ---------------------------------------------------------------------------
 
 
-def test_batch_rebuild_not_supported_zero_publish(db):
+def test_batch_without_input_artifact_global_fatal_zero_publish(db):
+    """batch run 无 wiki_batch_input Artifact → 全局 fatal：整批零发布、Run failed。"""
     _bootstrap_builtin()
     ws = _mk_ws(db)
     page = _mk_page(db, ws, "p1")
@@ -843,7 +844,7 @@ def test_batch_rebuild_not_supported_zero_publish(db):
     executed = executor.execute_run(db, run.id)
     db.refresh(executed)
     assert executed.status == "failed"
-    assert executed.safe_error_code == "TRIGGER_NOT_SUPPORTED"
+    assert executed.safe_error_code == "VALIDATION_FAILED"
     assert db.query(WikiRevision).count() == 0
     assert db.query(WikiSection).count() == 0
     db.refresh(page)

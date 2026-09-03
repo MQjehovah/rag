@@ -367,6 +367,10 @@ _STAGE_SAFE_MESSAGES = {
     "MIGRATION_TARGET_INVALID": "知识编译失败：迁移目标与当前 Skill 不一致或目标无效",
     "MIGRATION_DIRECTION_NOT_SUPPORTED": "知识编译失败：当前迁移方向不受支持",
     "MIGRATION_VALIDATION_FAILED": "知识编译失败：迁移 shadow compile 未通过校验",
+    # Phase 7C.3-C：混合 Skill 批处理受控失败码（固定文案，不落内部细节）。
+    "BATCH_PARTIAL": "知识编译失败：批量编译存在未成功目标（可重试）",
+    "BATCH_STALE": "知识编译失败：批量输入已变化，无法复用旧成功记录（请重新创建编译）",
+    "BATCH_PUBLISH_FAILED": "知识编译失败：批量发布写入失败（不可自动重试）",
 }
 
 
