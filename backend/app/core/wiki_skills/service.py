@@ -12,6 +12,7 @@ from __future__ import annotations
 from typing import Callable
 
 from app.core.wiki_skills import loader, registry, router
+from app.core.wiki_skills.api_reference.runtime import ApiReferenceRuntime
 from app.core.wiki_skills.base import SkillRuntime
 from app.core.wiki_skills.builtin.default.runtime import DefaultSkillRuntime
 from app.core.wiki_skills.registry import (
@@ -22,7 +23,7 @@ from app.core.wiki_skills.registry import (
 from app.core.wiki_skills.schemas import SkillContext, SkillDecision
 
 # 显式 active 版本（不猜测最大字符串版本）。
-_DEFAULT_ACTIVE_VERSION = {"default": "1"}
+_DEFAULT_ACTIVE_VERSION = {"default": "1", "api_reference": "1"}
 
 
 class SkillServiceError(SkillError):
@@ -30,34 +31,24 @@ class SkillServiceError(SkillError):
 
 
 def register_builtin_skills() -> list[str]:
-    """加载并注册 builtin Skills。
+    """注册全部 builtin Skills（default + api_reference 等；default 必需）。
 
-    - 先登记 allowlist（受控代码工厂：default → DefaultSkillRuntime）；
+    - 先登记 allowlist（default → DefaultSkillRuntime；api_reference →
+      ApiReferenceRuntime）；
     - loader.load_all()：default 失败 → 抛错中止；非 default 失败隔离；
     - 注册 descriptor + 实例化 allowlisted Runtime；
     - 显式设置每个 key 的 active version（_DEFAULT_ACTIVE_VERSION 优先；
       未声明且仅一个版本 → 取该版本）。
     返回成功注册的 skill key 列表。
     """
-    registry.register_runtime_allowlist("default", DefaultSkillRuntime)
+    _register_allowlist()
     descriptors = loader.load_all()  # default 缺失/损坏 → SkillDefaultError
     registered: list[str] = []
     for key in sorted(descriptors.keys()):
         versions = descriptors[key]
         for version in sorted(versions.keys()):
             desc = versions[version]
-            registry.register_descriptor(desc)
-            factory = registry.get_runtime_factory(desc.runtime_key)
-            if factory is None:
-                raise SkillRuntimeError(
-                    f"runtime_key_not_allowed={desc.runtime_key}"
-                )
-            runtime = factory()
-            if not isinstance(runtime, SkillRuntime):
-                raise SkillRuntimeError(
-                    f"runtime_factory_invalid={desc.runtime_key}"
-                )
-            registry.register_runtime(runtime)
+            _register_descriptor_runtime(desc)
         registered.append(key)
     # 显式 active version（active 不依赖注册顺序）。
     for key, descs in descriptors.items():
@@ -70,11 +61,37 @@ def register_builtin_skills() -> list[str]:
     return registered
 
 
+def _register_allowlist() -> None:
+    registry.register_runtime_allowlist("default", DefaultSkillRuntime)
+    registry.register_runtime_allowlist("api_reference", ApiReferenceRuntime)
+
+
+def _register_descriptor_runtime(desc: SkillDescriptor) -> None:
+    registry.register_descriptor(desc)
+    factory = registry.get_runtime_factory(desc.runtime_key)
+    if factory is None:
+        raise SkillRuntimeError(
+            f"runtime_key_not_allowed={desc.runtime_key}"
+        )
+    runtime = factory()
+    if not isinstance(runtime, SkillRuntime):
+        raise SkillRuntimeError(
+            f"runtime_factory_invalid={desc.runtime_key}"
+        )
+    registry.register_runtime(runtime)
+
+
 def register_default_skill() -> str:
-    """注册 default Skill（startup 顺序：先 default，再注册 v1/v2 pipeline）。"""
-    keys = register_builtin_skills()
-    if "default" not in keys:
-        raise SkillServiceError("default skill not registered")
+    """只注册 default Skill（startup 顺序：先 default，再注册 v1/v2 pipeline）。
+
+    Phase 6 语义：default 是必需 Skill；其它 builtin（如 api_reference）由
+    register_builtin_skills / register_all_skills 显式注册，不在此隐式带上，
+    保证依赖 register_default_skill 的旧测试/启动顺序行为不变。
+    """
+    _register_allowlist()
+    desc = loader.load_builtin_default()  # default 损坏 → SkillDefaultError
+    _register_descriptor_runtime(desc)
+    registry.set_active_version("default", "1")
     return "default"
 
 

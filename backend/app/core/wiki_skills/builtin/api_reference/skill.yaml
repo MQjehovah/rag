@@ -1,0 +1,16 @@
+key: api_reference
+version: "1"
+label: API Reference 结构化知识
+description: 面向接口/API 文档的结构化内容 Skill（OpenAPI/Markdown 确定性解析 + Evidence 约束 + 原子发布）
+runtime_key: api_reference
+extraction_schema_id: api-reference-extraction/v1
+blueprint_schema_id: api-reference-blueprint/v1
+instruction_resource: instructions.md
+applicability_signals:
+  - http_method
+  - api_path
+  - status_code
+  - error_code
+  - request_json
+  - response_json
+  - parameter_table

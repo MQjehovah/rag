@@ -1,0 +1,26 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "api-reference-extraction/v1",
+  "title": "api-reference-extraction/v1",
+  "type": "object",
+  "description": "api_reference Skill 提取产物声明（ApiDocumentIR 结构摘要；实际提取由确定性编译器产生，不依赖 LLM 自由结构）。",
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "api-document-ir/v1"
+    },
+    "endpoints": {
+      "type": "array"
+    },
+    "data_models": {
+      "type": "array"
+    },
+    "knowledge_gaps": {
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version"
+  ],
+  "additionalProperties": false
+}

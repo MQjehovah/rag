@@ -1,0 +1,23 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "api-reference-blueprint/v1",
+  "title": "api-reference-blueprint/v1",
+  "type": "object",
+  "description": "api_reference Skill 蓝图声明（Section 规划由确定性 plan_document 生成，schema_version=api-blueprint/v1）。",
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "api-blueprint/v1"
+    },
+    "sections": {
+      "type": "array"
+    },
+    "sources": {
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version"
+  ],
+  "additionalProperties": false
+}

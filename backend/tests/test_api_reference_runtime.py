@@ -40,7 +40,8 @@ def _md_source(page, content, prefix="ev-md"):
         label=f"Markdown-{page}",
         evidence=tuple([{"evidence_id": prefix, "source_page_id": page,
                          "status": "active",
-                         "locator": {"section": "endpoints"}}]))
+                         "locator": {"section": "endpoints"}}]),
+        excerpts=((prefix, content),))
 
 
 def _fake_llm_factory(payload: str):
@@ -200,11 +201,13 @@ def test_model_usage_counts_llm_calls():
     s1 = ApiSourceDocument(source_page_id="m1", format="markdown", content=md1,
                            evidence=tuple([{"evidence_id": "e1",
                                             "source_page_id": "m1",
-                                            "status": "active"}]))
+                                            "status": "active"}]),
+                           excerpts=(("e1", md1),))
     s2 = ApiSourceDocument(source_page_id="m2", format="markdown", content=md2,
                            evidence=tuple([{"evidence_id": "e2",
                                             "source_page_id": "m2",
-                                            "status": "active"}]))
+                                            "status": "active"}]),
+                           excerpts=(("e2", md2),))
 
     class CountingRunner:
         def __init__(self, payloads):
@@ -281,10 +284,7 @@ def test_valid_fake_llm_result_is_publishable():
                            "version_scope": "unversioned",
                            "status_codes": ["200"],
                            "error_codes": ["MISSING"]}])
-    src = _md_ev_source()
-    src = ApiSourceDocument(source_page_id="p-md", format="markdown",
-                            content=md, label="md",
-                            evidence=src.evidence)
+    src = _md_source("p-md", md)
     res = compile_api_reference([src], llm_runner=_fake_llm_factory(payload))
     assert res.validation_report.status == "pass"
     assert res.is_publishable is True
@@ -297,9 +297,7 @@ def test_successful_llm_summary_is_non_blocking():
                            "version_scope": "unversioned",
                            "status_codes": ["200"],
                            "error_codes": []}])
-    src = ApiSourceDocument(source_page_id="p-md", format="markdown",
-                            content=md, label="md",
-                            evidence=_md_ev_source().evidence)
+    src = _md_source("p-md", md)
     res = compile_api_reference([src], llm_runner=_fake_llm_factory(payload))
     assert res.notes and any("LLM_EXTRACTED_CANDIDATES:1" in n for n in res.notes)
     assert res.diagnostics == ()
@@ -313,9 +311,7 @@ def test_missing_version_scope_rejects_whole_candidate():
                            "evidence_id": "ev-md",
                            "status_codes": ["200"],
                            "error_codes": []}])
-    src = ApiSourceDocument(source_page_id="p-md", format="markdown",
-                            content=md, label="md",
-                            evidence=_md_ev_source().evidence)
+    src = _md_source("p-md", md)
     res = compile_api_reference([src], llm_runner=_fake_llm_factory(payload))
     assert res.ir.endpoints == ()
     assert any("field set mismatch" in g.description or
@@ -330,9 +326,7 @@ def test_status_codes_int_rejects_candidate_without_crashing_source():
                            "version_scope": "unversioned",
                            "status_codes": [200],
                            "error_codes": []}])
-    src = ApiSourceDocument(source_page_id="p-md", format="markdown",
-                            content=md, label="md",
-                            evidence=_md_ev_source().evidence)
+    src = _md_source("p-md", md)
     res = compile_api_reference([src], llm_runner=_fake_llm_factory(payload))
     assert res.ir is not None  # Source 未因 TypeError 返回 None
     assert res.ir.endpoints == ()
@@ -349,9 +343,7 @@ def test_mixed_valid_invalid_candidates_preserve_valid():
          "version_scope": "unversioned", "status_codes": [201],
          "error_codes": []},
     ])
-    src = ApiSourceDocument(source_page_id="p-md", format="markdown",
-                            content=md, label="md",
-                            evidence=_md_ev_source().evidence)
+    src = _md_source("p-md", md)
     res = compile_api_reference([src], llm_runner=_fake_llm_factory(payload))
     assert [e.path for e in res.ir.endpoints] == ["/a"]
 
@@ -363,9 +355,7 @@ def test_symbolic_error_code_in_text_accepted():
                            "version_scope": "unversioned",
                            "status_codes": ["404"],
                            "error_codes": ["USER_NOT_FOUND"]}])
-    src = ApiSourceDocument(source_page_id="p-md", format="markdown",
-                            content=md, label="md",
-                            evidence=_md_ev_source().evidence)
+    src = _md_source("p-md", md)
     res = compile_api_reference([src], llm_runner=_fake_llm_factory(payload))
     ep = res.ir.endpoints[0]
     codes = {e.code for e in ep.error_codes}
@@ -381,9 +371,7 @@ def test_fabricated_symbolic_error_code_rejected():
                            "version_scope": "unversioned",
                            "status_codes": ["200"],
                            "error_codes": ["MADE_UP_ERROR"]}])
-    src = ApiSourceDocument(source_page_id="p-md", format="markdown",
-                            content=md, label="md",
-                            evidence=_md_ev_source().evidence)
+    src = _md_source("p-md", md)
     res = compile_api_reference([src], llm_runner=_fake_llm_factory(payload))
     assert res.ir.endpoints == ()
 
@@ -395,9 +383,7 @@ def test_error_code_without_explicit_http_does_not_guess():
                            "version_scope": "unversioned",
                            "status_codes": ["200"],
                            "error_codes": ["GONE"]}])
-    src = ApiSourceDocument(source_page_id="p-md", format="markdown",
-                            content=md, label="md",
-                            evidence=_md_ev_source().evidence)
+    src = _md_source("p-md", md)
     res = compile_api_reference([src], llm_runner=_fake_llm_factory(payload))
     ep = res.ir.endpoints[0]
     code = next(e for e in ep.error_codes if e.code == "GONE")
@@ -412,9 +398,7 @@ def test_raw_exception_path_token_does_not_enter_result():
     def bad_runner(prompt):
         raise RuntimeError(f"{secret} crashed at {path_leak} {marker}")
 
-    src = ApiSourceDocument(source_page_id="p-md", format="markdown",
-                            content="只有叙述，无接口。", label="md",
-                            evidence=_md_ev_source().evidence)
+    src = _md_source("p-md", "只有叙述，无接口。")
     res = compile_api_reference([src], llm_runner=bad_runner)
     blob = json.dumps(res.to_dict(), ensure_ascii=False)
     assert secret not in blob
@@ -511,9 +495,7 @@ def test_compile_result_model_usage_deep_immutable():
 def test_valid_openapi_with_invalid_markdown_json_not_publishable():
     md = "# 接口\n\nGET /a 返回。\nHTTP 200 成功。\n"
     src_openapi = _openapi_source("p1", V1_SPEC, prefix="e1")
-    src_md = ApiSourceDocument(source_page_id="p-md", format="markdown",
-                               content=md, label="md",
-                               evidence=_md_ev_source().evidence)
+    src_md = _md_source("p-md", md)
     res = compile_api_reference([src_openapi, src_md],
                                 llm_runner=lambda prompt: "{bad json")
     # 有效 OpenAPI IR 保留。
@@ -526,9 +508,7 @@ def test_valid_openapi_with_invalid_markdown_json_not_publishable():
 
 def test_valid_openapi_with_llm_runner_exception_not_publishable():
     src_openapi = _openapi_source("p1", V1_SPEC, prefix="e1")
-    src_md = ApiSourceDocument(source_page_id="p-md", format="markdown",
-                               content="只有叙述。", label="md",
-                               evidence=_md_ev_source().evidence)
+    src_md = _md_source("p-md", "只有叙述。")
 
     def boom(prompt):
         raise RuntimeError("boom secret")
@@ -551,7 +531,8 @@ def test_successful_markdown_without_label_serialization_has_no_page_id():
         source_page_id="p-page-xyz", format="markdown", content=md,
         evidence=tuple([{"evidence_id": "ev-md", "source_page_id": "p-page-xyz",
                          "status": "active",
-                         "locator": {"section": "endpoints"}}]))
+                         "locator": {"section": "endpoints"}}]),
+        excerpts=(("ev-md", md),))
     res = compile_api_reference([src_md],
                                 llm_runner=_fake_llm_factory(payload))
     assert res.validation_report.status == "pass"
@@ -570,9 +551,7 @@ def test_candidate_invalid_plus_valid_preserves_valid_without_source_diag():
          "version_scope": "unversioned", "status_codes": ["200"],
          "error_codes": ["MADE_UP"]},
     ])
-    src_md = ApiSourceDocument(source_page_id="p-md", format="markdown",
-                               content=md, label="md",
-                               evidence=_md_ev_source().evidence)
+    src_md = _md_source("p-md", md)
     res = compile_api_reference([src_md],
                                 llm_runner=_fake_llm_factory(payload))
     # 合法候选保留；非法候选只作为 knowledge gap。

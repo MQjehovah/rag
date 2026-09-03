@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, Column, String, Text, DateTime, ForeignKey, Boolean, Integer, Float, Index, CheckConstraint, inspect, text as sqlalchemy_text
+from sqlalchemy import create_engine, Column, String, Text, DateTime, ForeignKey, Boolean, Integer, Float, Index, CheckConstraint, UniqueConstraint, inspect, text as sqlalchemy_text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from datetime import datetime
@@ -61,6 +61,12 @@ MANAGED_MIGRATION_COLUMNS: set[tuple[str, str]] = {
     ("wiki_pages", "skill_confidence"),
     ("wiki_pages", "skill_locked"),
     ("wiki_pages", "skill_decision_json"),
+    ("wiki_sections", "section_key"),
+    ("wiki_sections", "skill_key"),
+    ("wiki_sections", "skill_version"),
+    ("wiki_sections", "content_hash"),
+    ("wiki_sections", "validation_status"),
+    ("wiki_sections", "structure_json"),
 }
 
 # ---------------------------------------------------------------------------
@@ -120,6 +126,15 @@ MANAGED_COMPILE_TABLES: set[str] = {
     "knowledge_compile_runs",
     "knowledge_compile_stage_runs",
     "knowledge_compile_artifacts",
+}
+
+# ---------------------------------------------------------------------------
+# Phase 7C（P44）：WikiSection Evidence Binding 表（api_reference 持久化）。
+# 真实库停在 P43 时必须 fail closed，不允许 init_db 的 create_all 在已有核心
+# 表的库上静默新建（绕过 Alembic）。
+# ---------------------------------------------------------------------------
+MANAGED_P44_TABLES: set[str] = {
+    "wiki_section_evidence_bindings",
 }
 
 
@@ -605,9 +620,82 @@ class WikiSection(Base):
     version_confidence = Column(Float, nullable=True, default=1.0)
     version_status = Column(String(32), nullable=True, default='unversioned')  # confirmed/unversioned/ambiguous
     diff_notice = Column(Text, nullable=True)                       # 同版本差异提示（不泄露来源）
+    # ---- Phase 7C（P44）：API Reference Section 结构字段（全部 nullable，
+    #      历史 Section 保持 NULL，不做虚假回填）----
+    section_key = Column(String(255), nullable=True)   # API Reference section 稳定 key
+    skill_key = Column(String(64), nullable=True)      # 生成本 Section 的 Skill key
+    skill_version = Column(String(64), nullable=True)  # 生成本 Section 的 Skill 版本
+    content_hash = Column(String(64), nullable=True)   # Section 内容 hash
+    validation_status = Column(String(32), nullable=True)  # NULL/pass/fail
+    structure_json = Column(Text, nullable=True)       # 只保存 JSON-safe 结构，不存 Prompt/ACL/Secret/正文
 
     __table_args__ = (
         Index('ix_wiki_sections_revision_version', 'revision_id', 'version_label'),
+        # validation_status 只能为 NULL/pass/fail。
+        CheckConstraint(
+            "validation_status IS NULL OR validation_status IN ('pass','fail')",
+            name='ck_wiki_sections_validation_status',
+        ),
+        # nullable section_key 若非空必须 trim 后非空。
+        CheckConstraint(
+            "section_key IS NULL OR length(trim(section_key)) > 0",
+            name='ck_wiki_sections_section_key_nonempty',
+        ),
+        # (revision_id, section_key) 在 section_key 非空时唯一（部分唯一索引）。
+        Index(
+            'ux_wiki_sections_revision_section_key',
+            'revision_id', 'section_key',
+            unique=True,
+            sqlite_where=sqlalchemy_text("section_key IS NOT NULL"),
+            postgresql_where=sqlalchemy_text("section_key IS NOT NULL"),
+        ),
+    )
+
+
+class WikiSectionEvidenceBinding(Base):
+    """Wiki Section ↔ Evidence 绑定（Phase 7C，P44）。
+
+    只表达「已发布 Section 的哪个 field 由哪条 Evidence 支撑」，为 7C.2 的
+    Evidence Binding 表（持久化读取/展示层）。不重复 WikiRevision→CompileRun
+    关系（由 KnowledgeCompileRun.output_revision_id 与 Artifact 链表达）。
+
+    - field_path 非空（IR field_path，如 responses.200）；
+    - usage_type：support/conflict（CHECK 约束）；
+    - evidence_content_hash：Evidence 快照 hash（发布时确定性记录）；
+    - (section_id, field_path, evidence_id, usage_type) 唯一。
+    """
+    __tablename__ = 'wiki_section_evidence_bindings'
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    section_id = Column(String(36), ForeignKey('wiki_sections.id', ondelete='CASCADE'), nullable=False, index=True)
+    evidence_id = Column(String(36), ForeignKey('evidence_items.id', ondelete='CASCADE'), nullable=False, index=True)
+    field_path = Column(String(255), nullable=False)
+    usage_type = Column(String(32), nullable=False, default='support')
+    evidence_content_hash = Column(String(64), nullable=False)
+    created_at = Column(DateTime, default=datetime.now)
+
+    __table_args__ = (
+        # (section_id, field_path, evidence_id, usage_type) 唯一（命名 unique Index，
+        # 与 P36/P41 模式一致，SQLite 反射仍保留索引名）。
+        Index(
+            'ux_wiki_section_evidence_section_field_evidence_usage',
+            'section_id', 'field_path', 'evidence_id', 'usage_type',
+            unique=True,
+        ),
+        CheckConstraint(
+            "usage_type IN ('support','conflict')",
+            name='ck_wiki_section_evidence_bindings_usage_type',
+        ),
+        # field_path trim 后非空；evidence_content_hash 必须 64 字符（写入层再验
+        # 小写 SHA-256）。
+        CheckConstraint(
+            "length(trim(field_path)) > 0",
+            name='ck_wiki_section_evidence_bindings_field_path_nonempty',
+        ),
+        CheckConstraint(
+            "length(evidence_content_hash) = 64",
+            name='ck_wiki_section_evidence_bindings_evidence_hash_len',
+        ),
     )
 
 
@@ -1289,6 +1377,11 @@ def check_managed_migrations(engine) -> list[str]:
         for table in sorted(MANAGED_COMPILE_TABLES):
             if not inspector.has_table(table):
                 missing.append(table)
+        # Phase 7C（P44）：WikiSection Evidence Binding 表与结构。
+        for table in sorted(MANAGED_P44_TABLES):
+            if not inspector.has_table(table):
+                missing.append(table)
+        missing.extend(_check_p44_schema(inspector))
     return missing
 
 
@@ -1946,9 +2039,208 @@ def _check_workspace_schema(inspector) -> list[str]:
     return problems
 
 
+# ---------------------------------------------------------------------------
+# P44 WikiSection Evidence Binding schema 精确校验（表/列/类型/nullable/主键/
+# 索引/唯一约束/部分唯一索引/FK/ON DELETE）
+# ---------------------------------------------------------------------------
+
+_P44_COLUMNS: dict[str, dict[str, tuple[str, bool]]] = {
+    "wiki_section_evidence_bindings": {
+        "id": ("VARCHAR(36)", False),
+        "section_id": ("VARCHAR(36)", False),
+        "evidence_id": ("VARCHAR(36)", False),
+        "field_path": ("VARCHAR(255)", False),
+        "usage_type": ("VARCHAR(32)", False),
+        "evidence_content_hash": ("VARCHAR(64)", False),
+        "created_at": ("DATETIME", True),
+    },
+}
+
+_P44_PKS: dict[str, str] = {
+    "wiki_section_evidence_bindings": "id",
+}
+
+_P44_INDEXES: dict[str, list[str]] = {
+    "wiki_section_evidence_bindings": ["section_id", "evidence_id"],
+}
+
+_P44_UNIQUE: dict[str, tuple[str, list[str]]] = {
+    "wiki_section_evidence_bindings": (
+        "ux_wiki_section_evidence_section_field_evidence_usage",
+        ["section_id", "field_path", "evidence_id", "usage_type"],
+    ),
+}
+
+_P44_FKS: dict[tuple[str, str], tuple[str, str]] = {
+    ("wiki_section_evidence_bindings", "section_id"): ("wiki_sections", "CASCADE"),
+    ("wiki_section_evidence_bindings", "evidence_id"): ("evidence_items", "CASCADE"),
+}
+
+# wiki_sections 的部分唯一索引（P44）。
+_P44_SECTION_PARTIAL_UNIQUE = (
+    "ux_wiki_sections_revision_section_key",
+    ["revision_id", "section_key"],
+)
+
+# P44 wiki_sections 新字段类型/nullable 精确校验（列存在性由
+# MANAGED_MIGRATION_COLUMNS 负责）。
+_P44_SECTION_COLUMNS: dict[str, tuple[str, bool]] = {
+    "section_key": ("VARCHAR(255)", True),
+    "skill_key": ("VARCHAR(64)", True),
+    "skill_version": ("VARCHAR(64)", True),
+    "content_hash": ("VARCHAR(64)", True),
+    "validation_status": ("VARCHAR(32)", True),
+    "structure_json": ("TEXT", True),
+}
+
+# 必须存在的 CHECK 约束名（结构与 ORM/migration 一致）。
+_P44_SECTION_CHECKS = (
+    "ck_wiki_sections_validation_status",
+    "ck_wiki_sections_section_key_nonempty",
+)
+_P44_BINDING_CHECKS = (
+    "ck_wiki_section_evidence_bindings_usage_type",
+    "ck_wiki_section_evidence_bindings_field_path_nonempty",
+    "ck_wiki_section_evidence_bindings_evidence_hash_len",
+)
+
+
+def _check_p44_schema(inspector) -> list[str]:
+    """精确校验 P44 WikiSection Evidence Binding 结构 + wiki_sections 部分唯一索引。
+
+    列/类型/nullable/额外列、主键、普通索引、唯一约束、FK（目标/ON DELETE）、
+    部分唯一索引（名称/列顺序/谓词存在性）、以及 P44 各 CHECK 约束存在性全部
+    fail closed。仅报告，不改库。
+    """
+    problems: list[str] = []
+
+    # wiki_sections：六个 P44 新字段的类型/nullable 精确校验（防“列存在但类型错”）。
+    if inspector.has_table("wiki_sections"):
+        existing_cols = {c["name"]: c for c in inspector.get_columns("wiki_sections")}
+        for col, (type_str, nullable) in _P44_SECTION_COLUMNS.items():
+            if col not in existing_cols:
+                continue  # 缺失由 MANAGED_MIGRATION_COLUMNS 报告
+            colinfo = existing_cols[col]
+            actual_type = str(colinfo["type"]).upper()
+            if not actual_type.startswith(type_str):
+                problems.append(f"wiki_sections.{col}:type={actual_type}")
+            if bool(colinfo["nullable"]) != nullable:
+                problems.append(
+                    f"wiki_sections.{col}:nullable={colinfo['nullable']}")
+        # CHECK 存在性（结构看似存在但 CHECK 缺失 → fail closed）。
+        checks = {c.get("name") for c in inspector.get_check_constraints(
+            "wiki_sections")}
+        for name in _P44_SECTION_CHECKS:
+            if name not in checks:
+                problems.append(f"wiki_sections:check_missing={name}")
+
+    for table in sorted(MANAGED_P44_TABLES):
+        if not inspector.has_table(table):
+            continue  # 缺失由 check_managed_migrations 的 membership 报告
+
+        existing_cols = {c["name"]: c for c in inspector.get_columns(table)}
+        expected_col_names = set(_P44_COLUMNS[table].keys())
+        extra_cols = set(existing_cols.keys()) - expected_col_names
+        if extra_cols:
+            problems.append(f"{table}:extra_cols={sorted(extra_cols)}")
+        for col, (type_str, nullable) in _P44_COLUMNS[table].items():
+            if col not in existing_cols:
+                problems.append(f"{table}.{col}")
+                continue
+            colinfo = existing_cols[col]
+            actual_type = str(colinfo["type"]).upper()
+            if not actual_type.startswith(type_str):
+                problems.append(f"{table}.{col}:type={actual_type}")
+            if bool(colinfo["nullable"]) != nullable:
+                problems.append(f"{table}.{col}:nullable={colinfo['nullable']}")
+
+        pk = inspector.get_pk_constraint(table)
+        pk_cols = list(pk.get("constrained_columns") or [])
+        if pk_cols != [_P44_PKS[table]]:
+            problems.append(f"{table}:pk={pk_cols}")
+
+        existing_indexes = {ix["name"]: ix for ix in inspector.get_indexes(table)}
+        for col in _P44_INDEXES.get(table, []):
+            idx_name = f"ix_{table}_{col}"
+            ix = existing_indexes.get(idx_name)
+            if ix is None:
+                problems.append(f"{table}:index={col}")
+                continue
+            if list(ix.get("column_names") or []) != [col]:
+                problems.append(f"{table}:index_cols={col}:{ix.get('column_names')}")
+            if bool(ix.get("unique")):
+                problems.append(f"{table}:index_unique={col}")
+
+        if table in _P44_UNIQUE:
+            expected_uniq_name, expected_uniq_cols = _P44_UNIQUE[table]
+            uniq_indexes = [ix for ix in inspector.get_indexes(table)
+                            if ix.get("unique")]
+            matched_uniq = next(
+                (ix for ix in uniq_indexes if ix.get("name") == expected_uniq_name),
+                None,
+            )
+            if matched_uniq is None:
+                problems.append(f"{table}:unique_name={expected_uniq_name}")
+            elif list(matched_uniq.get("column_names") or []) != expected_uniq_cols:
+                problems.append(
+                    f"{table}:unique_cols={expected_uniq_name}:"
+                    f"{matched_uniq.get('column_names')}")
+
+        fks = inspector.get_foreign_keys(table)
+        for (tbl, col), (target, ondelete) in _P44_FKS.items():
+            if tbl != table:
+                continue
+            matched = next(
+                (fk for fk in fks
+                 if list(fk.get("constrained_columns") or []) == [col]),
+                None,
+            )
+            if matched is None:
+                problems.append(f"{table}.{col}:fk_missing")
+                continue
+            if matched.get("referred_table") != target:
+                problems.append(f"{table}.{col}:fk_target={matched.get('referred_table')}")
+            referred_cols = list(matched.get("referred_columns") or [])
+            if referred_cols != ["id"]:
+                problems.append(f"{table}.{col}:fk_referred={referred_cols}")
+            actual_ondelete = (matched.get("options") or {}).get("ondelete")
+            if actual_ondelete != ondelete:
+                problems.append(f"{table}.{col}:ondelete={actual_ondelete}")
+
+        # Binding CHECK 存在性（结构看似存在但 CHECK 缺失 → fail closed）。
+        checks = {c.get("name") for c in inspector.get_check_constraints(table)}
+        for name in _P44_BINDING_CHECKS:
+            if name not in checks:
+                problems.append(f"{table}:check_missing={name}")
+
+    # wiki_sections 部分唯一索引（列存在性由 MANAGED_MIGRATION_COLUMNS 负责）。
+    if inspector.has_table("wiki_sections"):
+        p_name, p_cols = _P44_SECTION_PARTIAL_UNIQUE
+        partial = [
+            ix for ix in inspector.get_indexes("wiki_sections")
+            if ix.get("unique") and ix.get("name") == p_name
+        ]
+        if not partial:
+            problems.append(f"wiki_sections:partial_unique_name={p_name}")
+        else:
+            p_ix = partial[0]
+            if list(p_ix.get("column_names") or []) != p_cols:
+                problems.append(
+                    f"wiki_sections:partial_unique_cols={p_name}:"
+                    f"{p_ix.get('column_names')}")
+            dialect_opts = p_ix.get("dialect_options") or {}
+            has_predicate = any(
+                "where" in str(k).lower() or "where" in str(v).lower()
+                for k, v in dialect_opts.items()
+            )
+            if not has_predicate:
+                problems.append(f"wiki_sections:partial_unique_predicate={p_name}")
+
+    return problems
+
+
 def _check_compile_schema(inspector) -> list[str]:
     """Phase 4 KnowledgeCompile 表精确校验（表/列/类型/nullable/主键/索引/唯一约束/FK/ON DELETE）。
-
     核心表已存在（已有库）时校验；同名但错误定义必须 fail closed。仅报告问题，
     不修改数据库。校验集与 ORM 定义严格一致（含 wiki_pages 等目标表引用）。
     """
