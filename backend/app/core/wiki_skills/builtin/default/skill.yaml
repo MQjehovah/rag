@@ -1,0 +1,10 @@
+key: default
+version: "1"
+label: 默认知识结构
+description: 通用主题 Wiki 的默认内容结构
+runtime_key: default
+extraction_schema_id: default-extraction/v1
+blueprint_schema_id: default-blueprint/v1
+instruction_resource: instructions.md
+applicability_signals:
+  - generic_text

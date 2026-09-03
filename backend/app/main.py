@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
-from app.api import pages, search, search_v2, upload, notebooks, auth, dingtalk, chat, organize, evidence, wiki, wiki_workspaces, wiki_compile, p7_flags, sources, model_health, rag_chat, debts_v4, v4_graph, dingtalk_folder_mappings, source_path_mappings, feedback_v4
+from app.api import pages, search, search_v2, upload, notebooks, auth, dingtalk, chat, organize, evidence, wiki, wiki_workspaces, wiki_compile, p7_flags, sources, model_health, rag_chat, debts_v4, v4_graph, dingtalk_folder_mappings, source_path_mappings, feedback_v4, wiki_skills
 
 app = FastAPI(
     title="Notes RAG System",
@@ -40,6 +40,8 @@ app.include_router(v4_graph.router)
 app.include_router(dingtalk_folder_mappings.router)
 app.include_router(source_path_mappings.router)
 app.include_router(feedback_v4.router)
+app.include_router(wiki_skills.router)
+app.include_router(wiki_skills.wiki_skill_router)
 
 
 @app.on_event("startup")
@@ -52,13 +54,22 @@ def _start_scheduler():
 
     DingTalkLocalStorage().ensure_directories()
 
-    # Phase 5：注册 wiki.default pipeline。必须早于 recover_dirty_pages / worker
-    # pump：flag on 时 recover 建 run 需 pipeline 已注册，pump 消费前注册可避免
-    # queued run 被标 PIPELINE_NOT_REGISTERED。注册幂等（契约十二）：同 key+version
-    # 同定义重复注册 no-op；真实错误（定义冲突/registry 异常）→ raise 中止启动，
-    # 不再吞错继续。
+    # Phase 6：先注册 builtin default Skill（default 加载失败必须中止启动），
+    # 再注册 wiki.default v1 与 v2（skill-aware）。v2 为显式 active，Phase 6 以后
+    # 新建 Run 默认 v2；已排队 v1 Run 仍精确执行 v1（exact-version 固化，注册新版本
+    # 不影响旧 Run）。必须早于 recover_dirty_pages / worker pump：flag on 时 recover
+    # 建 run 需 pipeline 已注册，pump 消费前注册可避免 queued run 被标
+    # PIPELINE_NOT_REGISTERED。注册幂等（契约十二）：同 key+version 同定义重复注册
+    # no-op；真实错误（default 加载失败/定义冲突/registry 异常）→ raise 中止启动。
+    from app.core.wiki_skills import service as skill_service
+    skill_service.register_default_skill()
+
     from app.core.wiki_pipeline.pipelines.wiki_default import register_default_pipeline
     register_default_pipeline()
+    from app.core.wiki_pipeline.pipelines.wiki_skilled_default import (
+        register_default_pipeline_v2,
+    )
+    register_default_pipeline_v2()
 
     try:
         engine = get_engine(settings.database_url)

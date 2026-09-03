@@ -192,6 +192,10 @@ class PipelineDef:
 # pipeline_key → {version: PipelineDef}。dict 保持注册顺序：最后插入 = 最新注册。
 REGISTRY: dict[str, dict[str, PipelineDef]] = {}
 
+# Phase 6：显式 active version（pipeline_key → version）。active 不依赖注册顺序；
+# get_pipeline(key) 优先解析显式 active；未设置时才回退「最新注册」（向后兼容）。
+_ACTIVE_VERSIONS: dict[str, str] = {}
+
 
 def _version_map(key: str) -> dict[str, PipelineDef]:
     return REGISTRY.setdefault(key, {})
@@ -228,13 +232,41 @@ def replace_for_test(pipeline: PipelineDef) -> None:
     versions[pipeline.version] = pipeline
 
 
+def set_active_version(key: str, version: str) -> None:
+    """显式设置该 key 的 active version（Phase 6）。
+
+    - 必须指向已注册版本，否则 PipelineError（fail closed，绝不静默指向未知）；
+    - active 不依赖注册顺序：后续再注册新 version 不会自动改写 active。
+    """
+    versions = REGISTRY.get(key)
+    if not versions or version not in versions:
+        raise PipelineError(
+            f"active_version_not_registered={key}:{version}"
+        )
+    _ACTIVE_VERSIONS[key] = version
+
+
+def get_active_version(key: str) -> str | None:
+    """返回显式 active version；未设置或已删除（孤悬）→ None。"""
+    versions = REGISTRY.get(key)
+    if not versions:
+        return None
+    active = _ACTIVE_VERSIONS.get(key)
+    if active is not None and active in versions:
+        return active
+    return None
+
+
 def get_pipeline(key: str, version: str | None = None) -> PipelineDef | None:
-    """精确/active 查询。version=None → 返回该 key 的 active（最新注册）版本。"""
+    """精确/active 查询。version=None → 显式 active；未设置 → 最新注册（兼容）。"""
     versions = REGISTRY.get(key)
     if not versions:
         return None
     if version is None:
-        # dict 插入有序：最后插入的 key 即「最新注册」active 版本。
+        active = get_active_version(key)
+        if active is not None:
+            return versions[active]
+        # dict 插入有序：最后插入的 key 即「最新注册」版本（向后兼容）。
         return next(reversed(versions.values()))
     return versions.get(version)
 
@@ -255,8 +287,16 @@ def registered_versions(key: str) -> list[str]:
 
 
 def unregister_pipeline(key: str) -> bool:
-    """移除注册（测试隔离用）；返回是否确实移除。"""
-    return REGISTRY.pop(key, None) is not None
+    """移除注册（测试隔离用）；返回是否确实移除。同时清理显式 active。"""
+    removed = REGISTRY.pop(key, None) is not None
+    _ACTIVE_VERSIONS.pop(key, None)
+    return removed
+
+
+def clear_for_tests() -> None:
+    """清理全部注册与显式 active（测试隔离用）。"""
+    REGISTRY.clear()
+    _ACTIVE_VERSIONS.clear()
 
 
 def registered_pipelines() -> list[str]:

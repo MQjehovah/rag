@@ -148,4 +148,11 @@ class Settings(BaseSettings):
     # 默认 True（单轨启用）；DB RuntimeFeatureFlag 同名行可关闭（kill switch = 暂停编译）。
     wiki_pipeline_default_enabled: bool = True
 
+    # Phase 6：Auto Skill Router 参数（不得写死在 Prompt）。
+    wiki_skill_auto_threshold: float = 0.80     # LLM/确定性高置信阈值
+    wiki_skill_switch_margin: float = 0.15      # 迁移判定优势阈值（migration_proposed）
+    wiki_skill_default_key: str = "default"     # 兜底 Skill key
+    wiki_skill_router_max_candidates: int = 5   # 候选上限
+    wiki_skill_router_summary_chars: int = 4000 # LLM 请求摘要长度上限
+
 settings = Settings()

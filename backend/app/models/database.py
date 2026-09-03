@@ -54,6 +54,13 @@ MANAGED_MIGRATION_COLUMNS: set[tuple[str, str]] = {
     ("wiki_sections", "diff_notice"),
     # Phase 3：独立 WikiWorkspace（P41 迁移托管，不得由 init_db 静默补列）。
     ("wiki_pages", "workspace_id"),
+    # Phase 6：Content Skill 持久化字段（P43 迁移托管，不得由 init_db 静默补列）。
+    ("wiki_pages", "content_skill"),
+    ("wiki_pages", "skill_version"),
+    ("wiki_pages", "skill_selected_by"),
+    ("wiki_pages", "skill_confidence"),
+    ("wiki_pages", "skill_locked"),
+    ("wiki_pages", "skill_decision_json"),
 }
 
 # ---------------------------------------------------------------------------
@@ -525,8 +532,29 @@ class WikiPage(Base):
     # Phase 3：所属 WikiWorkspace（ondelete=SET NULL：workspace 删除后 wiki 保留但
     # 失去归属，fail closed 由 ACL 层兜底）。自动编译产生的 Wiki 必须非空（写入端强制）。
     workspace_id = Column(String(36), ForeignKey('wiki_workspaces.id', ondelete='SET NULL'), nullable=True, index=True)
+    # Phase 6（P43）：Content Skill 持久化字段。历史 Wiki 保持 nullable，不自动回填；
+    # 缺字段语义按 legacy/default 兼容读取。只在 publish 成功时原子更新，失败保留原值。
+    content_skill = Column(String(64), nullable=True)          # 当前内容结构 Skill key
+    skill_version = Column(String(64), nullable=True)          # 当前 Skill 精确版本
+    skill_selected_by = Column(String(32), nullable=True)      # auto/manual/migration/default_fallback/locked/sticky
+    skill_confidence = Column(Float, nullable=True)            # NULL 或 0<=v<=1
+    skill_locked = Column(Boolean, nullable=True, default=False)  # 人工锁定 Skill（自动路由不可覆盖）
+    skill_decision_json = Column(Text, nullable=True)          # 安全结构化 SkillDecision 摘要
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+    __table_args__ = (
+        # Phase 6：skill 字段 CHECK（与 P43 migration 一致）。
+        CheckConstraint(
+            "skill_confidence IS NULL OR (skill_confidence >= 0.0 AND skill_confidence <= 1.0)",
+            name='ck_wiki_pages_skill_confidence',
+        ),
+        CheckConstraint(
+            "skill_selected_by IS NULL OR skill_selected_by IN "
+            "('auto','manual','migration','default_fallback','locked','sticky')",
+            name='ck_wiki_pages_skill_selected_by',
+        ),
+    )
 
 
 class WikiRevision(Base):
