@@ -497,15 +497,17 @@ def _derive_persist_sections(result: ApiCompileResult) -> list[dict]:
 def _pipeline_api_llm_adapter(ctx: dict | None):
     """Pipeline LLM runner → api_reference.compiler 所需 Callable[[str], str]。
 
+    - 复用 wiki_default._llm_runner(ctx)：ctx 注入 runner → 用它；ctx runner=None →
+      _default_llm_runner（生产默认真实 runner / 测试可 monkeypatch Fake）；
+    - 不新增模型客户端、不直接读 settings；
     - 输入只允许 compiler 已构造的有界 Prompt；
-    - 复用 Pipeline 既有 llm_runner（ctx['llm_runner']），不新增模型客户端；
     - str → 原样；list/dict → 确定性 JSON 序列化；其它类型抛受控异常
       （compiler 侧收敛为 LLM_RUNNER_FAILED，fail-closed）；
-    - 无 runner（ctx 未注入/降级）→ 返回 None：Markdown 无受控提取，OpenAPI 不受影响。
+    - adapter 恒返回 Callable（OpenAPI-only / 无 active Evidence 时 compiler 不会调用它）。
     """
-    runner = (ctx or {}).get("llm_runner")
-    if runner is None:
-        return None
+    from app.core.wiki_pipeline.pipelines import wiki_default as wd
+
+    runner = wd._llm_runner(ctx or {})
 
     def _api_llm(prompt: str) -> str:
         out = runner(

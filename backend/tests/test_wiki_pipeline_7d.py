@@ -360,7 +360,9 @@ def test_adapter_handles_list_and_json_str_and_invalid():
     adapter_bad = _pipeline_api_llm_adapter({"llm_runner": _mk(42)})
     with pytest.raises(RuntimeError):
         adapter_bad("p")
-    assert _pipeline_api_llm_adapter({}) is None
+    # ctx 无 runner → adapter 仍返回 Callable（生产默认 runner 在调用时解析）。
+    default_adapter = _pipeline_api_llm_adapter({})
+    assert callable(default_adapter)
 
 
 def test_markdown_source_without_evidence_does_not_call_runner(db):
@@ -606,3 +608,191 @@ def test_production_create_run_no_hardcoded_v2():
             for kw in node.keywords:
                 if kw.arg == "pipeline_version" and isinstance(kw.value, ast.Constant):
                     assert kw.value.value != "2", "production create_run must not hardcode v2"
+
+
+# ---------------------------------------------------------------------------
+# A.1：默认生产 LLM runner（无 ctx 注入时复用 wiki_default 默认 runner）
+# ---------------------------------------------------------------------------
+
+
+def _mk_md_wiki(db, ws, pid="p1", wid="w1"):
+    md = _md_source_text()
+    p = _page(db, ws, pid, md)
+    _evidence(db, p, "ev-md", content=md)
+    w = _wiki(db, ws, wid, "主题B", skill="api_reference", locked=True, source=[pid])
+    db.commit()
+    return w
+
+
+def _manual_api_run(db, ws, w):
+    run = executor.create_run(
+        db, pipeline_key="wiki.default", pipeline_version="3",
+        trigger_type="manual_rebuild", trigger_object_id=w.id,
+        workspace_id=ws.id, wiki_page_id=w.id)
+    db.commit()
+    return executor.execute_run(db, run.id)
+
+
+def test_default_llm_runner_used_when_ctx_none(db, monkeypatch):
+    """reset_external_runners 后 ctx runner=None；monkeypatch 默认真实 runner → Markdown 可发布。"""
+    from app.core.wiki_pipeline.pipelines import wiki_default as wd
+
+    _boot(active="3")
+    ws = _mk_ws(db)
+    w = _mk_md_wiki(db, ws)
+    calls = []
+
+    def _fake_default(messages, context="", timeout=120.0):
+        if context == "api-reference-compile":
+            calls.append(1)
+            return _md_fake_payload()
+        return {"worthy": True, "ops": []}
+
+    monkeypatch.setattr(wd, "_default_llm_runner", _fake_default)
+    executor.reset_external_runners()  # 确保 ctx llm_runner=None
+    executor.configure_external_runners(graph_runner=_graph_noop)
+    executed = _manual_api_run(db, ws, w)
+    db.refresh(executed)
+    assert executed.status == "succeeded", (executed.safe_error_code,
+                                            executed.safe_error_message)
+    assert calls, "default runner must be used when ctx runner is None"
+    db.refresh(w)
+    secs = db.query(WikiSection).filter(
+        WikiSection.revision_id == w.current_revision_id).all()
+    assert any("api_endpoint" in (s.section_key or "") for s in secs)
+
+
+def test_openapi_only_no_default_runner_call(db, monkeypatch):
+    from app.core.wiki_pipeline.pipelines import wiki_default as wd
+
+    _boot(active="3")
+    ws = _mk_ws(db)
+    spec = json.dumps({
+        "openapi": "3.0.1",
+        "info": {"title": "u", "version": "1.0", "description": "GET /api/x 返回 200。"},
+        "paths": {"/api/x": {"get": {"description": "返回 200 成功。",
+                                     "responses": {"200": {"description": "ok"}}}}},
+    }, ensure_ascii=False)
+    p = _page(db, ws, "p1", spec)
+    _evidence(db, p, "ev1")
+    w = _wiki(db, ws, "w1", "主题B", skill="api_reference", locked=True, source=["p1"])
+    db.commit()
+    calls = []
+
+    def _fake_default(messages, context="", timeout=120.0):
+        calls.append(1)
+        raise AssertionError("default runner must not be called for openapi-only")
+
+    monkeypatch.setattr(wd, "_default_llm_runner", _fake_default)
+    executor.reset_external_runners()
+    executor.configure_external_runners(graph_runner=_graph_noop)
+    executed = _manual_api_run(db, ws, w)
+    db.refresh(executed)
+    assert executed.status == "succeeded", (executed.safe_error_code,
+                                            executed.safe_error_message)
+    assert calls == []
+
+
+def test_markdown_no_evidence_no_default_runner_call(db, monkeypatch):
+    from app.core.wiki_pipeline.pipelines import wiki_default as wd
+
+    _boot(active="3")
+    ws = _mk_ws(db)
+    p = _page(db, ws, "p1", _md_source_text())
+    _evidence(db, p, "ev-stale", content=_md_source_text(), status="stale")
+    w = _wiki(db, ws, "w1", "主题B", skill="api_reference", locked=True, source=["p1"])
+    db.commit()
+    calls = []
+
+    def _fake_default(messages, context="", timeout=120.0):
+        calls.append(1)
+        raise AssertionError("must not call runner without usable evidence")
+
+    monkeypatch.setattr(wd, "_default_llm_runner", _fake_default)
+    executor.reset_external_runners()
+    executor.configure_external_runners(graph_runner=_graph_noop)
+    executed = _manual_api_run(db, ws, w)
+    db.refresh(executed)
+    assert executed.status == "failed"
+    assert calls == []
+
+
+# ---------------------------------------------------------------------------
+# A.1：active Registry 缺失 / bootstrap 原子 / v2 损坏决策
+# ---------------------------------------------------------------------------
+
+
+def test_api_recompile_no_active_pipeline_rejected(db):
+    """Registry 无 wiki.default active → 受控失败：不建 Run、不猜 v2、Wiki 原值不变。"""
+    from app.api import wiki_skills as api_mod
+
+    _boot(active="3")
+    ws = _mk_ws(db)
+    _page(db, ws, "p1", "内容" + "x" * 60)
+    w = _wiki(db, ws, "w1", "主题A", source=["p1"])
+    db.commit()
+    pregs.clear_for_tests()  # 清空 registry（含 active）
+    sreg.clear_for_tests()
+    original = (w.content_skill, w.skill_version, w.skill_decision_json)
+    assert api_mod._create_skill_rebuild_run(db, w, {"id": "u1"}) is None
+    db.flush()
+    assert db.query(CompileRun).count() == 0
+    db.expire_all()
+    w2 = db.get(WikiPage, "w1")
+    assert (w2.content_skill, w2.skill_version, w2.skill_decision_json) == original
+
+
+def test_bootstrap_invalid_config_leaves_registry_untouched(monkeypatch):
+    from app.core.wiki_pipeline import bootstrap
+
+    pregs.clear_for_tests()
+    sreg.clear_for_tests()
+    monkeypatch.setattr(settings, "wiki_pipeline_active_version", "9")
+    with pytest.raises(RuntimeError):
+        bootstrap.bootstrap_wiki_pipeline()
+    assert pregs.registered_versions("wiki.default") == []
+    assert pregs.get_active_version("wiki.default") is None
+    assert sreg.list_skills() == []
+
+
+def test_v2_corrupt_decisions_fail_closed(db):
+    _boot(active="2")
+    ws = _mk_ws(db)
+    _page(db, ws, "p1", "内容" + "x" * 60)
+    w = _wiki(db, ws, "w1", "主题A", source=["p1"])
+    db.commit()
+    cases = [
+        {"skill": {"decisions": "not-a-list"}},
+        {"skill": {"decisions": ["not-a-mapping"]}},
+        {"skill": {"decisions": [{"schema_version": "bad", "selected_skill": "default",
+                                  "selected_version": 999, "status": "selected"}]}},
+    ]
+    for state in cases:
+        res = _stage_publish_skilled(db, None, None, {"state": state})
+        assert res.get("ok") is False
+        assert res["error_code"] == "SKILL_NOT_SUPPORTED_BY_PIPELINE_VERSION"
+        assert "Traceback" not in (res.get("error_message") or "")
+    assert db.query(WikiRevision).count() == 0
+    db.refresh(w)
+    assert w.current_revision_id is None
+
+
+def test_v2_legal_default_decision_not_blocked(db):
+    from app.core.wiki_skills.schemas import SkillDecision
+
+    _boot(active="2")
+    ws = _mk_ws(db)
+    _page(db, ws, "p1", "内容" + "x" * 60)
+    w = _wiki(db, ws, "w1", "主题A", source=["p1"])
+    db.commit()
+    d = SkillDecision(target_key="w1", wiki_page_id="w1", selected_skill="default",
+                      selected_version="1", status="selected").to_dict()
+    state = {"skill": {"decisions": [d]}}
+    from app.core.wiki_pipeline.pipelines.wiki_skilled_default import (
+        _v2_unsupported_decision,
+    )
+
+    assert _v2_unsupported_decision(state) is False
+    na = SkillDecision(target_key="w1", wiki_page_id="w1", selected_skill=None,
+                       selected_version=None, status="not_applicable").to_dict()
+    assert _v2_unsupported_decision({"skill": {"decisions": [na]}}) is False

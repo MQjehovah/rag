@@ -129,14 +129,14 @@ class SkillUnlockPayload(BaseModel):
     recompile: bool = False
 
 
-def _active_pipeline_version() -> str:
-    """Pipeline Registry 当前 active version（显式固化到新 Run）。"""
+def _active_pipeline_version() -> str | None:
+    """Pipeline Registry 当前 active version；无 active pipeline → None（不猜测 v2）。"""
     from app.core.wiki_pipeline import registry as pregs
     from app.core.wiki_pipeline.pipelines.wiki_skilled_default import PIPELINE_KEY
 
     pipeline = pregs.get_pipeline(PIPELINE_KEY)
     if pipeline is None:
-        return "2"
+        return None
     return pipeline.version
 
 
@@ -144,6 +144,7 @@ def _create_skill_rebuild_run(db: Session, wiki: WikiPage, current_user: dict) -
     """recompile=true：创建持久化 manual_rebuild CompileRun（仅入队，不阻塞 LLM）。
 
     - pipeline_version 取 Pipeline Registry 当前 active version 并显式固化；
+    - Registry 无 active pipeline → 返回 None（调用方回滚 → 受控 409），不猜测 v2；
     - active=v2（紧急回滚）且目标 wiki 为 api_reference → 受控拒绝（返回 None，
       调用方回滚 → 409），绝不创建必然错误的 Run；
     - 失败（workspace 缺失/注册缺失等）返回 None，由调用方收敛为受控错误；
@@ -155,6 +156,8 @@ def _create_skill_rebuild_run(db: Session, wiki: WikiPage, current_user: dict) -
     from app.core.wiki_pipeline.pipelines.wiki_skilled_default import PIPELINE_KEY
 
     active = _active_pipeline_version()
+    if active is None:
+        return None
     if active == "2" and (wiki.content_skill or None) == "api_reference":
         return None
 

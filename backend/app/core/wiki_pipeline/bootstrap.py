@@ -70,13 +70,15 @@ def _validate_registered() -> None:
 def bootstrap_wiki_pipeline() -> str:
     """生产 wiki pipeline bootstrap：返回实际 active version。
 
-    顺序：builtin Skills → v1/v2/v3 注册 → 必需版本校验 → 显式 active。
+    顺序：先校验配置（_resolve_active_version）→ builtin Skills → v1/v2/v3 注册 →
+    必需版本校验 → 显式 active。
+    非法配置在修改任何 Registry 前即失败：不留下部分注册状态、不暂改 active。
     幂等；任何失败 raise（fail closed，阻止启动）。
     """
+    active = _resolve_active_version()  # 先校验，非法值不触碰 Registry
     _register_builtin_skills()
     _register_pipelines()
     _validate_registered()
-    active = _resolve_active_version()
     from app.core.wiki_pipeline import registry as pipeline_registry
 
     pipeline_registry.set_active_version(PIPELINE_KEY, active)

@@ -444,20 +444,32 @@ def _apply_skill_to_wiki(db, wiki: WikiPage, decision: SkillDecision) -> None:
 
 
 def _v2_unsupported_decision(state: dict) -> bool:
-    """v2 回滚安全：本 pipeline 只能发布 default；api_reference / 迁移 → fail closed。
+    """v2 回滚安全：本 pipeline 只能发布 default；其余一律 fail closed。
 
-    忽略 not_applicable（无 selected skill）；任何 selected 非 default 或
-    migration_proposed（选中 default 但 propose 其它）→ True。
+    判定（任一命中 → 不受 v2 支持）：
+    - decisions 不是合法序列；
+    - decision 不是 Mapping；
+    - SkillDecision.from_dict 失败（损坏 payload）；
+    - selected skill 非 default；
+    - migration_proposed（选中 default 但 propose 其它）。
+    不泄露损坏 payload 到错误信息。
     """
+    from collections.abc import Mapping
+
     from app.core.wiki_skills.schemas import SkillDecision
 
-    for raw in (state.get("skill") or {}).get("decisions") or []:
+    raw_decisions = ((state.get("skill") or {}).get("decisions"))
+    if not isinstance(raw_decisions, (list, tuple)):
+        return True
+    for raw in raw_decisions:
+        if not isinstance(raw, Mapping):
+            return True
         try:
-            d = SkillDecision.from_dict(raw)
-        except ValueError:
-            continue
+            d = SkillDecision.from_dict(dict(raw))
+        except (ValueError, TypeError):
+            return True
         if d.selected_skill is None:
-            continue
+            continue  # not_applicable 无 selected skill，允许
         if d.selected_skill != "default" or d.status == "migration_proposed":
             return True
     return False
