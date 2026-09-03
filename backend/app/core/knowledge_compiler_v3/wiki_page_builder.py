@@ -17,6 +17,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -893,7 +894,7 @@ def _identify_topics(
     return created, updated, target_ids
 
 
-async def rebuild_wiki_from_sources(
+async def _legacy_rebuild_wiki_from_sources(
     db: Session,
     wiki_page_id: str,
     llm: Callable,
@@ -1465,7 +1466,7 @@ def _valid_op(op) -> bool:
 # 单 Page 处理（快照 → 结束事务 → LLM → 重查对比 → 应用）
 # ---------------------------------------------------------------------------
 
-async def process_page_wiki(
+async def _legacy_process_page_wiki(
     db: Session,
     page_id: str,
     llm: Callable,
@@ -1608,7 +1609,7 @@ async def process_page_wiki(
         synthesis_results: dict[str, str] = {}
         for wiki_id in to_synthesize:
             try:
-                r = await rebuild_wiki_from_sources(db, wiki_id, llm, commit=commit)
+                r = await _legacy_rebuild_wiki_from_sources(db, wiki_id, llm, commit=commit)
                 synthesis_results[wiki_id] = r.get("status", "failed")
             except Exception as exc:  # noqa: BLE001
                 logger.exception("wiki synthesis failed for %s: %s", wiki_id, exc)
@@ -1722,7 +1723,7 @@ def _mark_page_error(db: Session, page_id: str, error: str) -> None:
 # 构建 / 刷新入口
 # ---------------------------------------------------------------------------
 
-async def build_wiki_from_pages(
+async def _legacy_build_wiki_from_pages(
     db: Session,
     pages: list[Page],
     *,
@@ -1742,7 +1743,7 @@ async def build_wiki_from_pages(
              "service_unavailable": 0, "not_worthy": 0, "invalid_response": 0}
 
     if not dedupe_synthesis or len(pages) <= 1:
-        return await _build_pages_incremental(db, pages, llm, commit, stats)
+        return await _legacy_build_pages_incremental(db, pages, llm, commit, stats)
 
     # ---- 两阶段：先识别，后去重聚合 ----
     page_to_synthesize: dict[str, set[str]] = {}
@@ -1750,7 +1751,7 @@ async def build_wiki_from_pages(
     affected_wiki_ids: set[str] = set()
     for page in pages:
         try:
-            outcome = await process_page_wiki(db, page.id, llm, commit=commit, synthesize=False)
+            outcome = await _legacy_process_page_wiki(db, page.id, llm, commit=commit, synthesize=False)
             s = outcome.get("status")
             if s == "identified":
                 stats["created"] += outcome.get("created", 0)
@@ -1787,7 +1788,7 @@ async def build_wiki_from_pages(
     wiki_results: dict[str, str] = {}
     for wiki_id in sorted(affected_wiki_ids):
         try:
-            r = await rebuild_wiki_from_sources(db, wiki_id, llm, commit=commit)
+            r = await _legacy_rebuild_wiki_from_sources(db, wiki_id, llm, commit=commit)
             wiki_results[wiki_id] = r.get("status", "failed")
         except Exception as exc:  # noqa: BLE001
             db.rollback()
@@ -1825,11 +1826,11 @@ async def build_wiki_from_pages(
     return stats
 
 
-async def _build_pages_incremental(db, pages, llm, commit, stats) -> dict:
+async def _legacy_build_pages_incremental(db, pages, llm, commit, stats) -> dict:
     """单 Page / 增量路径：逐 Page 识别+合成。"""
     for page in pages:
         try:
-            outcome = await process_page_wiki(db, page.id, llm, commit=commit, synthesize=True)
+            outcome = await _legacy_process_page_wiki(db, page.id, llm, commit=commit, synthesize=True)
             s = outcome.get("status")
             if s == "success":
                 stats["created"] += outcome.get("created", 0)
@@ -1859,7 +1860,7 @@ async def _build_pages_incremental(db, pages, llm, commit, stats) -> dict:
     return stats
 
 
-async def refresh_wiki_for_page(
+async def _legacy_refresh_wiki_for_page(
     db: Session,
     page: Page,
     *,
@@ -1868,14 +1869,14 @@ async def refresh_wiki_for_page(
 ) -> dict:
     """单 Page 增量刷新（数据源同步 / Page 更新后调用）。"""
     llm = llm_json or call_wiki_llm_json
-    return await build_wiki_from_pages(db, [page], llm_json=llm, commit=commit)
+    return await _legacy_build_wiki_from_pages(db, [page], llm_json=llm, commit=commit)
 
 
 # ---------------------------------------------------------------------------
 # dirty 刷新（Wiki 级，每 Wiki 独立事务 + scope 校验）
 # ---------------------------------------------------------------------------
 
-async def refresh_dirty_wikis(
+async def _legacy_refresh_dirty_wikis(
     db: Session,
     *,
     llm_json: Callable = None,
@@ -1947,7 +1948,7 @@ async def refresh_dirty_wikis(
                 continue
 
             # 主题级聚合：读全部 source 合成正文
-            outcome = await rebuild_wiki_from_sources(db, wp.id, llm, commit=commit)
+            outcome = await _legacy_rebuild_wiki_from_sources(db, wp.id, llm, commit=commit)
             if outcome.get("status") == "success":
                 refreshed += 1
             else:
@@ -1958,3 +1959,418 @@ async def refresh_dirty_wikis(
             failed += 1
             logger.exception("refresh dirty wiki failed for %s: %s", wp.id, exc)
     return {"refreshed": refreshed, "failed": failed, "archived": archived}
+
+
+# ---------------------------------------------------------------------------
+# 公开 CompileRun wrapper（Phase 5.2.1）
+#
+# 旧公开入口 `build_wiki_from_pages` / `process_page_wiki` /
+# `rebuild_wiki_from_sources` / `refresh_wiki_for_page` / `refresh_dirty_wikis`
+# 不再指向 `_legacy_*`（等价实现仅供旧测试**显式调用** `_legacy_*` 名）。
+# 同名公开函数现在是真正的 wiki.default CompileRun wrapper：
+#   - build_wiki_from_pages     → 按 Workspace 建 batch_rebuild CompileRun；
+#   - refresh_wiki_for_page     → page_changed CompileRun；
+#   - rebuild_wiki_from_sources → manual_rebuild CompileRun；
+#   - refresh_dirty_wikis       → 逐 dirty Wiki manual_rebuild CompileRun；
+#   - process_page_wiki         → 无安全公开兼容语义，已私有化（_legacy_process_page_wiki）。
+# wrapper 保持原 async 签名与返回结构，内部把 Publish Manifest 转换为兼容结果。
+# 生产代码不得通过这些公开名称进入 _legacy_*；wrapper 一律执行真实 pipeline run。
+# ---------------------------------------------------------------------------
+
+_ZERO_COMPILE_STATS = {
+    "created": 0, "updated": 0, "skipped": 0, "failed": 0,
+    "service_unavailable": 0, "not_worthy": 0, "invalid_response": 0,
+}
+
+
+def _compile_page_input_hash(db, page_id: str) -> str:
+    """Page 当前内容/范围确定性 input_hash（与 scheduler 口径一致，供 run 幂等）。"""
+    page = db.get(Page, page_id)
+    if page is None:
+        return ""
+    scope = _page_scope(db, page)
+    acl = _scope_to_acl_json(scope) if scope else None
+    return _page_input_hash(
+        page.title or "", _page_text(db, page), page.notebook_id or "", acl or ""
+    )
+
+
+def _compile_wiki_input_hash(db, wiki) -> str:
+    """Wiki 重建确定性 input_hash（标题 + 归属 + 来源 Page，供 manual_rebuild 幂等）。"""
+    parts = [wiki.title or "", wiki.acl_scope or "", wiki.workspace_id or ""]
+    for pid in sorted(_parse_source_pages(wiki.source_page_ids)):
+        parts.append(pid)
+        page = db.get(Page, pid)
+        if page is None:
+            parts.append("")
+            continue
+        scope = _page_scope(db, page)
+        acl = _scope_to_acl_json(scope) if scope else None
+        parts.append(_page_input_hash(
+            page.title or "", _page_text(db, page), page.notebook_id or "", acl or ""
+        ))
+    raw = json.dumps(parts, ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _read_publish_manifest(db, run_id: str) -> dict | None:
+    """读本 run 最新 wiki_publish_manifest Artifact payload（wrapper 结果归一用）。"""
+    from app.models.database import KnowledgeCompileArtifact as _Artifact
+
+    row = (
+        db.query(_Artifact)
+        .filter(
+            _Artifact.run_id == run_id,
+            _Artifact.artifact_type == "wiki_publish_manifest",
+        )
+        .order_by(_Artifact.created_at.desc())
+        .first()
+    )
+    if row is None or not row.payload_json:
+        return None
+    try:
+        payload = json.loads(row.payload_json)
+    except (TypeError, ValueError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _compile_run_and_execute(db, *, trigger_type, trigger_object_id, workspace_id,
+                             wiki_page_id=None, input_hash="", idempotency_key=None):
+    """建 wiki.default queued run 并同步执行（公共 wrapper 内部）。
+
+    要求 wiki.default pipeline 已注册；LLM/graph runner 按 executor 契约配置（缺省走
+    真实 LLM / 真实图谱）。idempotency_key 命中既有 run：queued → 执行；已终态 →
+    直接返回既有 run（不重复执行/发布）。与 scheduler 同口径（supersede 旧非终态）。
+    """
+    from app.core.wiki_pipeline import executor as _exec
+    from app.core.wiki_pipeline.pipelines.wiki_default import PIPELINE_KEY as _PK
+
+    run = _exec.create_run(
+        db,
+        pipeline_key=_PK,
+        trigger_type=trigger_type,
+        trigger_object_id=trigger_object_id,
+        workspace_id=workspace_id,
+        wiki_page_id=wiki_page_id,
+        input_hash=input_hash or None,
+        idempotency_key=idempotency_key,
+        supersede_same_trigger=True,
+    )
+    db.commit()
+    if run.status in ("queued", "running", "failed"):
+        executed = _exec.execute_run(db, run.id)
+        db.expire_all()
+        return executed
+    db.expire_all()
+    return run
+
+
+def _maybe_configure_llm_runner(llm_json) -> None:
+    """llm_json（async）未注入 runner 时包装为同步 runner 兜底（同 multi_page）。"""
+    from app.core.wiki_pipeline import executor as _exec
+
+    if llm_json is None or _exec._LLM_RUNNER is not None:  # noqa: SLF001
+        return
+
+    def _sync_wrap(messages, context: str = "", timeout: float = 120.0) -> dict:
+        return asyncio.run(llm_json(messages, context=context, timeout=timeout))
+
+    _exec.configure_external_runners(llm_runner=_sync_wrap)
+
+
+def _build_wiki_from_pages_sync(
+    db: Session,
+    pages: list[Page],
+    *,
+    llm_json: Callable = None,
+    commit: bool = True,
+    dedupe_synthesis: bool = True,
+) -> dict:
+    """（同步核心，线程内执行）公开 wrapper 的 batch_rebuild CompileRun 逻辑。
+
+    返回结构与旧版本兼容：{created, updated, skipped, failed, service_unavailable,
+    not_worthy, invalid_response}（由各 workspace batch run 的 Publish Manifest 归一）。
+    无 workspace 归属的 Page 不进入 batch（保持 dirty、计入 failed），绝不回退 legacy。
+    """
+    from app.core.wiki_pipeline.pipelines.multi_page import batch_build
+
+    if not pages:
+        return dict(_ZERO_COMPILE_STATS)
+    groups: dict[str, list[str]] = {}
+    unbound: list[str] = []
+    for p in pages:
+        ws = page_workspace_id(db, p) or _page_workspace_id_with_ensure(db, p)
+        if ws:
+            groups.setdefault(ws, []).append(p.id)
+        else:
+            unbound.append(p.id)
+    stats = dict(_ZERO_COMPILE_STATS)
+    for ws_id in sorted(groups):
+        part = batch_build(db, ws_id, groups[ws_id], llm_json=llm_json, commit=commit)
+        for k in stats:
+            stats[k] += int(part.get(k) or 0)
+    if unbound:
+        stats["failed"] += len(unbound)
+        if commit:
+            for pid in unbound:
+                fresh = db.get(Page, pid)
+                if fresh is not None:
+                    fresh.wiki_dirty = True
+                    fresh.wiki_last_error = "no_workspace_binding"
+            db.commit()
+    return stats
+
+
+async def build_wiki_from_pages(
+    db: Session,
+    pages: list[Page],
+    *,
+    llm_json: Callable = None,
+    commit: bool = True,
+    dedupe_synthesis: bool = True,
+) -> dict:
+    """公开 CompileRun wrapper：按 Workspace 建 batch_rebuild run 并同步执行。
+
+    保持旧 async 签名与返回结构。pipeline stage 内部使用 asyncio.run 执行真实 LLM/
+    图谱（需非事件循环线程），故通过 asyncio.to_thread 在独立工作线程执行同步核心。
+    """
+    return await asyncio.to_thread(
+        _build_wiki_from_pages_sync, db, list(pages),
+        llm_json=llm_json, commit=commit, dedupe_synthesis=dedupe_synthesis,
+    )
+
+
+def _single_page_changed_stats(db, run, pre_wiki_ids: set[str]) -> dict:
+    """page_changed run 结果 → 旧单 Page 返回键 stats（created/updated 由 Manifest 判定）。"""
+    stats = dict(_ZERO_COMPILE_STATS)
+    if run.status != "succeeded":
+        code = run.safe_error_code or ""
+        if code == "SERVICE_UNAVAILABLE":
+            stats["service_unavailable"] = 1
+            stats["skipped"] = 1
+            return stats
+        if code == "INVALID_RESPONSE":
+            stats["invalid_response"] = 1
+            stats["failed"] = 1
+            return stats
+        if code == "STALE_INPUT":
+            stats["skipped"] = 1
+            return stats
+        stats["failed"] = 1
+        return stats
+    manifest = _read_publish_manifest(db, run.id) or {}
+    note = manifest.get("note") or ""
+    if manifest.get("outcome") == "not_worthy" or note.startswith("not_worthy"):
+        stats["not_worthy"] = 1
+        return stats
+    for wid in manifest.get("wiki_page_ids") or []:
+        if wid in pre_wiki_ids:
+            stats["updated"] += 1
+        else:
+            stats["created"] += 1
+    return stats
+
+
+def _refresh_wiki_for_page_sync(
+    db: Session,
+    page: Page,
+    *,
+    llm_json: Callable = None,
+    commit: bool = True,
+) -> dict:
+    """（同步核心，线程内执行）单 Page 刷新 → page_changed CompileRun。
+
+    返回结构与旧 refresh_wiki_for_page 兼容（单 Page 构建 stats）。无 workspace 归属 →
+    保持 dirty + failed（fail closed），不回退 legacy。
+    """
+    from app.core.wiki_pipeline.pipelines.wiki_default import make_default_idempotency_key
+
+    if page is None or not getattr(page, "id", None):
+        return dict(_ZERO_COMPILE_STATS)
+    page_id = page.id
+    ws = page_workspace_id(db, page) or _page_workspace_id_with_ensure(db, page)
+    scope = _page_scope(db, page)
+    acl = _scope_to_acl_json(scope) if scope else None
+    if not ws or scope is None or acl is None:
+        fresh = db.get(Page, page_id)
+        if fresh is not None:
+            fresh.wiki_dirty = True
+            fresh.wiki_last_error = "no_workspace_binding" if not ws else "no_scope"
+            if commit:
+                db.commit()
+        stats = dict(_ZERO_COMPILE_STATS)
+        stats["failed"] = 1
+        return stats
+    pre_wiki_ids = {
+        w[0] for w in db.query(WikiPage.id).filter(
+            WikiPage.acl_scope == acl, WikiPage.workspace_id == ws
+        ).all()
+    }
+    input_hash = _compile_page_input_hash(db, page_id)
+    key = make_default_idempotency_key(
+        workspace_id=ws, trigger_type="page_changed",
+        trigger_object_id=page_id, wiki_page_id="", full_input_hash=input_hash,
+    )
+    _maybe_configure_llm_runner(llm_json)
+    run = _compile_run_and_execute(
+        db, trigger_type="page_changed", trigger_object_id=page_id,
+        workspace_id=ws, input_hash=input_hash, idempotency_key=key,
+    )
+    return _single_page_changed_stats(db, run, pre_wiki_ids)
+
+
+async def refresh_wiki_for_page(
+    db: Session,
+    page: Page,
+    *,
+    llm_json: Callable = None,
+    commit: bool = True,
+) -> dict:
+    """公开 CompileRun wrapper：单 Page 刷新 → page_changed CompileRun 并同步执行。
+
+    保持旧 async 签名与返回结构；经 asyncio.to_thread 在线程内执行（pipeline stage
+    内部 asyncio.run 需非事件循环线程）。
+    """
+    return await asyncio.to_thread(
+        _refresh_wiki_for_page_sync, db, page,
+        llm_json=llm_json, commit=commit,
+    )
+
+
+def _manual_rebuild_status(db, run, wiki_page_id: str) -> str:
+    """manual_rebuild run → 旧 rebuild_wiki_from_sources 的 status 语义。"""
+    if run.status != "succeeded":
+        code = run.safe_error_code or ""
+        if code == "SERVICE_UNAVAILABLE":
+            return "service_unavailable"
+        if code == "INVALID_RESPONSE":
+            return "invalid_response"
+        if code == "STALE_INPUT":
+            return "stale_input"
+        if db.get(WikiPage, wiki_page_id) is None:
+            return "deleted"
+        return "failed"
+    manifest = _read_publish_manifest(db, run.id) or {}
+    outcome = manifest.get("outcome")
+    if outcome == "published":
+        return "success"
+    if outcome == "archived":
+        return "archived"
+    if db.get(WikiPage, wiki_page_id) is None:
+        return "deleted"
+    return "success"
+
+
+def _rebuild_wiki_from_sources_sync(
+    db: Session,
+    wiki_page_id: str,
+    llm: Callable,
+    *,
+    commit: bool = True,
+) -> dict:
+    """（同步核心，线程内执行）dirty/目标 Wiki 重合成 → manual_rebuild CompileRun。
+
+    返回结构与旧版兼容：{"wiki_id": ..., "status": success|archived|deleted|...}。
+    llm 参数为签名兼容保留（真实编译走 executor 注入的 runner），不进入 _legacy_*。
+    """
+    from app.core.wiki_pipeline.pipelines.wiki_default import make_default_idempotency_key
+
+    wiki = db.get(WikiPage, wiki_page_id)
+    if wiki is None:
+        return {"wiki_id": wiki_page_id, "status": "deleted"}
+    if not wiki.workspace_id:
+        wiki.status = "archived"
+        wiki.dirty = False
+        if commit:
+            db.commit()
+        return {"wiki_id": wiki_page_id, "status": "archived"}
+    input_hash = _compile_wiki_input_hash(db, wiki)
+    key = make_default_idempotency_key(
+        workspace_id=wiki.workspace_id, trigger_type="manual_rebuild",
+        trigger_object_id="", wiki_page_id=wiki_page_id, full_input_hash=input_hash,
+    )
+    _maybe_configure_llm_runner(llm)
+    run = _compile_run_and_execute(
+        db, trigger_type="manual_rebuild", trigger_object_id=wiki_page_id,
+        workspace_id=wiki.workspace_id, wiki_page_id=wiki_page_id,
+        input_hash=input_hash, idempotency_key=key,
+    )
+    return {"wiki_id": wiki_page_id, "status": _manual_rebuild_status(db, run, wiki_page_id)}
+
+
+async def rebuild_wiki_from_sources(
+    db: Session,
+    wiki_page_id: str,
+    llm: Callable,
+    *,
+    commit: bool = True,
+) -> dict:
+    """公开 CompileRun wrapper：dirty/目标 Wiki 重合成 → manual_rebuild CompileRun。
+
+    保持旧 async 签名与返回结构；经 asyncio.to_thread 在线程内执行（pipeline stage
+    内部 asyncio.run 需非事件循环线程）。
+    """
+    return await asyncio.to_thread(
+        _rebuild_wiki_from_sources_sync, db, wiki_page_id, llm, commit=commit,
+    )
+
+
+def _refresh_dirty_wikis_sync(
+    db: Session,
+    *,
+    llm_json: Callable = None,
+    commit: bool = True,
+) -> dict:
+    """（同步核心，线程内执行）刷新全部 dirty Wiki → 逐 Wiki manual_rebuild CompileRun。
+
+    返回结构与旧版兼容：{"refreshed": n, "failed": n, "archived": n}。无 workspace 归属
+    的 dirty wiki 直接 archived（镜像旧 fail-closed），不回退 legacy。
+    """
+    from app.core.wiki_pipeline.pipelines.wiki_default import make_default_idempotency_key
+
+    dirty_wikis = db.query(WikiPage).filter(WikiPage.dirty.is_(True)).all()
+    refreshed = failed = archived = 0
+    for wp in dirty_wikis:
+        if wp.workspace_id is None:
+            wp.status = "archived"
+            wp.dirty = False
+            archived += 1
+            if commit:
+                db.commit()
+            continue
+        input_hash = _compile_wiki_input_hash(db, wp)
+        key = make_default_idempotency_key(
+            workspace_id=wp.workspace_id, trigger_type="manual_rebuild",
+            trigger_object_id="", wiki_page_id=wp.id, full_input_hash=input_hash,
+        )
+        _maybe_configure_llm_runner(llm_json)
+        run = _compile_run_and_execute(
+            db, trigger_type="manual_rebuild", trigger_object_id=wp.id,
+            workspace_id=wp.workspace_id, wiki_page_id=wp.id,
+            input_hash=input_hash, idempotency_key=key,
+        )
+        status = _manual_rebuild_status(db, run, wp.id)
+        if status == "success":
+            refreshed += 1
+        elif status == "archived":
+            archived += 1
+        else:
+            failed += 1
+    return {"refreshed": refreshed, "failed": failed, "archived": archived}
+
+
+async def refresh_dirty_wikis(
+    db: Session,
+    *,
+    llm_json: Callable = None,
+    commit: bool = True,
+) -> dict:
+    """公开 CompileRun wrapper：刷新全部 dirty Wiki → 逐 Wiki manual_rebuild CompileRun。
+
+    保持旧 async 签名与返回结构；经 asyncio.to_thread 在线程内执行（pipeline stage
+    内部 asyncio.run 需非事件循环线程）。
+    """
+    return await asyncio.to_thread(
+        _refresh_dirty_wikis_sync, db, llm_json=llm_json, commit=commit,
+    )

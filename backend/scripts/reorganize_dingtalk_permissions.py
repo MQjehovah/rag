@@ -301,12 +301,13 @@ def _stage_wiki(db, *, apply: bool) -> dict:
 
     import asyncio
     from app.core.knowledge_compiler_v3.wiki_page_builder import (
-        build_wiki_from_pages,
         call_wiki_llm_json,
+        _legacy_build_wiki_from_pages,
     )
 
     stats = asyncio.run(
-        build_wiki_from_pages(db, pages, llm_json=call_wiki_llm_json, dedupe_synthesis=True)
+        _legacy_build_wiki_from_pages(
+            db, pages, llm_json=call_wiki_llm_json, dedupe_synthesis=True)
     )
     result["stats"] = stats
 

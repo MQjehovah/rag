@@ -110,7 +110,7 @@ def test_page_changed_during_synthesis_not_written(db):
         db.commit()
         return {"summary": "s", "content": "旧结果"}
 
-    _run(builder.build_wiki_from_pages(db, [p], llm_json=_llm))
+    _run(builder._legacy_build_wiki_from_pages(db, [p], llm_json=_llm))
     db.expire_all()
     wp = db.query(WikiPage).filter(WikiPage.title == "主题").first()
     # 旧结果未写入：无 published Revision
@@ -132,7 +132,7 @@ def test_source_ids_changed_during_synthesis_not_written(db):
             db.commit()
         return {"summary": "s", "content": "旧结果"}
 
-    _run(builder.build_wiki_from_pages(db, [p], llm_json=_llm))
+    _run(builder._legacy_build_wiki_from_pages(db, [p], llm_json=_llm))
     db.expire_all()
     wp = db.query(WikiPage).filter(WikiPage.title == "主题").first()
     assert wp.current_revision_id is None or wp.status == "draft"
@@ -152,7 +152,7 @@ def test_acl_changed_during_synthesis_not_published(db):
         db.commit()
         return {"summary": "s", "content": "旧结果"}
 
-    _run(builder.build_wiki_from_pages(db, [p], llm_json=_llm))
+    _run(builder._legacy_build_wiki_from_pages(db, [p], llm_json=_llm))
     db.expire_all()
     # 旧权限域无 published Wiki
     old = db.query(WikiPage).filter(WikiPage.title == "主题", WikiPage.acl_scope == '{"groups": ["engineering"]}').first()
@@ -164,8 +164,8 @@ def test_acl_migration_old_wiki_hidden_before_rebuild(db):
     p1 = _page(db, "p1", "水箱", "水箱内容足够长", "engineering")
     p2 = _page(db, "p2", "水箱二", "水箱内容二足够长", "engineering")
     db.commit()
-    _run(builder.build_wiki_from_pages(db, [p1], llm_json=_mk_llm([{"action": "create", "title": "主题", "content": "A", "summary": "s"}])))
-    _run(builder.build_wiki_from_pages(db, [p2], llm_json=_mk_llm([{"action": "update", "title": "主题", "content": "B", "summary": "s"}])))
+    _run(builder._legacy_build_wiki_from_pages(db, [p1], llm_json=_mk_llm([{"action": "create", "title": "主题", "content": "A", "summary": "s"}])))
+    _run(builder._legacy_build_wiki_from_pages(db, [p2], llm_json=_mk_llm([{"action": "update", "title": "主题", "content": "B", "summary": "s"}])))
     # p1 迁移到 sales
     nb = db.get(Notebook, "nb-p1")
     nb.group_id = "sales"
@@ -176,7 +176,7 @@ def test_acl_migration_old_wiki_hidden_before_rebuild(db):
         if context in ("wiki-synthesis", "wiki-mapreduce", "wiki-batch-summary"):
             raise RuntimeError("synthesis down")  # 模拟重建尚未完成
         return {"worthy": True, "ops": [{"action": "create", "title": "主题", "category": "x"}]}
-    _run(builder.build_wiki_from_pages(db, [p1], llm_json=_llm))
+    _run(builder._legacy_build_wiki_from_pages(db, [p1], llm_json=_llm))
     db.expire_all()
     old = db.query(WikiPage).filter(WikiPage.title == "主题", WikiPage.acl_scope == '{"groups": ["engineering"]}').first()
     # 旧域 Wiki 已从正式展示排除（draft，重建未完成前不可见）
@@ -188,8 +188,8 @@ def test_deleted_source_not_returned_as_official(db):
     p1 = _page(db, "p1", "水箱", "水箱内容足够长", "engineering")
     p2 = _page(db, "p2", "水箱二", "水箱内容二足够长", "engineering")
     db.commit()
-    _run(builder.build_wiki_from_pages(db, [p1], llm_json=_mk_llm([{"action": "create", "title": "主题", "content": "A", "summary": "s"}])))
-    _run(builder.build_wiki_from_pages(db, [p2], llm_json=_mk_llm([{"action": "update", "title": "主题", "content": "B", "summary": "s"}])))
+    _run(builder._legacy_build_wiki_from_pages(db, [p1], llm_json=_mk_llm([{"action": "create", "title": "主题", "content": "A", "summary": "s"}])))
+    _run(builder._legacy_build_wiki_from_pages(db, [p2], llm_json=_mk_llm([{"action": "update", "title": "主题", "content": "B", "summary": "s"}])))
     builder.remove_source_page_from_wikis(db, "p1")
     db.expire_all()
     wp = db.query(WikiPage).filter(WikiPage.title == "主题").first()
@@ -218,7 +218,7 @@ def test_hundred_sources_all_in_mapreduce(db):
         if context == "wiki-mapreduce":
             return {"summary": "s", "content": "最终正文"}
         return {"worthy": True, "ops": []}
-    _run(builder.rebuild_wiki_from_sources(db, "w1", _llm))
+    _run(builder._legacy_rebuild_wiki_from_sources(db, "w1", _llm))
     # 100 个来源分多个批次，每个来源标题至少出现在某个批次
     assert len(batch_prompts) > 1  # 确实走了 Map-Reduce 分批
     all_prompts = "\n".join(batch_prompts)

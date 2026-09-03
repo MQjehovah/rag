@@ -75,7 +75,7 @@ def _run(coro):
 def _build_wiki(db, title, content):
     p = _page(db, "p1", "水箱", "水箱固定内容足够长", "engineering")
     db.commit()
-    _run(builder.build_wiki_from_pages(db, [p], llm_json=_mk_llm([{"action": "create", "title": title, "content": content, "summary": "摘要"}])))
+    _run(builder._legacy_build_wiki_from_pages(db, [p], llm_json=_mk_llm([{"action": "create", "title": title, "content": content, "summary": "摘要"}])))
     return db.query(WikiPage).filter(WikiPage.title == title).first()
 
 
@@ -84,7 +84,7 @@ def test_successful_refresh_clears_dirty(db):
     wp = _build_wiki(db, "水箱", "旧正文")
     wp.dirty = True
     db.commit()
-    result = _run(builder.refresh_dirty_wikis(db, llm_json=_mk_llm([{"action": "update", "title": "水箱", "content": "新正文", "summary": "摘要"}])))
+    result = _run(builder._legacy_refresh_dirty_wikis(db, llm_json=_mk_llm([{"action": "update", "title": "水箱", "content": "新正文", "summary": "摘要"}])))
     assert result["refreshed"] == 1
     db.expire_all()
     wp = db.query(WikiPage).filter(WikiPage.title == "水箱").first()
@@ -96,7 +96,7 @@ def test_failed_refresh_keeps_dirty(db):
     wp = _build_wiki(db, "水箱", "旧正文")
     wp.dirty = True
     db.commit()
-    result = _run(builder.refresh_dirty_wikis(db, llm_json=_mk_llm(exc=RuntimeError("down"))))
+    result = _run(builder._legacy_refresh_dirty_wikis(db, llm_json=_mk_llm(exc=RuntimeError("down"))))
     assert result["failed"] == 1
     db.expire_all()
     wp = db.query(WikiPage).filter(WikiPage.title == "水箱").first()
@@ -117,7 +117,7 @@ def test_remove_source_page_marks_dirty(db):
 
 # 6. dirty 刷新不读取 Card/Community
 def test_refresh_dirty_does_not_read_card_community():
-    src = inspect.getsource(builder.refresh_dirty_wikis)
+    src = inspect.getsource(builder._legacy_refresh_dirty_wikis)
     for forbidden in ("KnowledgeCard", "KnowledgeCommunity"):
         assert forbidden not in src
 
@@ -127,7 +127,7 @@ def test_legacy_sections_not_overwritten_by_summary(db):
     # 构造含 entities/evidence 等旧结构的 Wiki，再触发自动更新
     p = _page(db, "p1", "水箱", "水箱内容足够长", "engineering")
     db.commit()
-    _run(builder.build_wiki_from_pages(db, [p], llm_json=_mk_llm([{"action": "create", "title": "水箱", "content": "旧正文", "summary": "旧摘要"}])))
+    _run(builder._legacy_build_wiki_from_pages(db, [p], llm_json=_mk_llm([{"action": "create", "title": "水箱", "content": "旧正文", "summary": "旧摘要"}])))
     wp = db.query(WikiPage).filter(WikiPage.title == "水箱").first()
     # 给当前 revision 追加旧结构 Section
     rev = db.get(WikiRevision, wp.current_revision_id)
@@ -135,7 +135,7 @@ def test_legacy_sections_not_overwritten_by_summary(db):
     db.add(WikiSection(id="extra-ev", revision_id=rev.id, section_type="evidence", heading="证据", content="证据Y", order_index=6))
     db.commit()
 
-    _run(builder.build_wiki_from_pages(db, [p], llm_json=_mk_llm([{"action": "update", "title": "水箱", "content": "新正文", "summary": "新摘要"}])))
+    _run(builder._legacy_build_wiki_from_pages(db, [p], llm_json=_mk_llm([{"action": "update", "title": "水箱", "content": "新正文", "summary": "新摘要"}])))
     db.expire_all()
     wp = db.query(WikiPage).filter(WikiPage.title == "水箱").first()
     new_rev = db.get(WikiRevision, wp.current_revision_id)
@@ -184,7 +184,7 @@ def test_long_document_tail_chunk_in_input(db):
 def test_category_persisted(db):
     p = _page(db, "p1", "水箱", "水箱内容足够长", "engineering")
     db.commit()
-    _run(builder.build_wiki_from_pages(db, [p], llm_json=_mk_llm([{"action": "create", "title": "水箱", "category": "操作指南", "content": "正文", "summary": "摘要"}])))
+    _run(builder._legacy_build_wiki_from_pages(db, [p], llm_json=_mk_llm([{"action": "create", "title": "水箱", "category": "操作指南", "content": "正文", "summary": "摘要"}])))
     wp = db.query(WikiPage).filter(WikiPage.title == "水箱").first()
     assert wp.category == "操作指南"
 
@@ -210,7 +210,7 @@ def test_single_page_ops_transactional(db):
         ]}
 
     # category 截断用 str，不会异常。这里验证两个 op 都成功时原子提交。
-    stats = _run(builder.build_wiki_from_pages(db, [p], llm_json=_mk_llm([
+    stats = _run(builder._legacy_build_wiki_from_pages(db, [p], llm_json=_mk_llm([
         {"action": "create", "title": "主题A", "content": "内容A", "summary": "a"},
         {"action": "create", "title": "主题B", "content": "内容B", "summary": "b"},
     ])))
@@ -228,7 +228,7 @@ def test_single_page_op_failure_rolls_back(db):
         raise RuntimeError("boom")
     builder._identify_topics = _boom
     try:
-        stats2 = _run(builder.build_wiki_from_pages(db, [p], llm_json=_mk_llm([{"action": "create", "title": "X", "content": "Y", "summary": "z"}])))
+        stats2 = _run(builder._legacy_build_wiki_from_pages(db, [p], llm_json=_mk_llm([{"action": "create", "title": "X", "content": "Y", "summary": "z"}])))
     finally:
         builder._identify_topics = orig
     assert stats2["failed"] == 1

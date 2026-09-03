@@ -203,7 +203,8 @@ def test_flag_on_schedule_page_refresh_creates_run(tmp_path, monkeypatch, wiki_d
         assert run.status == "queued"
         assert run.workspace_id, "run 必须归属 active workspace"
         assert run.pipeline_version == "1"
-        assert run.idempotency_key.startswith(f"wiki.default:{run.workspace_id}:p1:")
+        assert run.idempotency_key.startswith("wiki.default:v1:"), \
+            "Phase 5.2：page_changed 幂等键改为统一 helper（wiki.default:v1:<digest>）"
     finally:
         db.close()
         engine.dispose()

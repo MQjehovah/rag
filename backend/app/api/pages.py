@@ -9,7 +9,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-from app.models.database import Page, Notebook, PageChunk, get_session, get_engine
+from app.models.database import Page, Notebook, PageChunk, WikiPage, get_session, get_engine
 from app.models.schema import (
     PageCreate,
     PageListItem,
@@ -357,6 +357,25 @@ def update_page(page_id: str, data: PageUpdate, background_tasks: BackgroundTask
         background_tasks.add_task(_schedule_graph_rebuild, page.id)
     return page
 
+
+def _mark_wikis_dirty_for_page(db: Session, page_id: str) -> None:
+    """kill off：物理删除前把 source_page_ids 引用该 Page 的 WikiPage 置 dirty。
+
+    不改 status/source_page_ids、不调用 legacy 发布；dirty 由后续开关恢复后的
+    recover_dirty_pages / 手动刷新重建（悬空来源清理语义移交 pipeline）。
+    """
+    import json as _json
+
+    rows = db.query(WikiPage).filter(WikiPage.source_page_ids.isnot(None)).all()
+    for wp in rows:
+        try:
+            ids = _json.loads(wp.source_page_ids or "[]")
+        except (TypeError, ValueError):
+            ids = []
+        if isinstance(ids, list) and page_id in ids:
+            wp.dirty = True
+
+
 @router.delete("/{page_id}")
 def delete_page(page_id: str, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     page = db.query(Page).filter(Page.id == page_id).first()
@@ -365,50 +384,55 @@ def delete_page(page_id: str, db: Session = Depends(get_db), current_user=Depend
     _check_page_manage(current_user)
     _check_page_access(page, current_user, db)
 
-    # Phase 5.1：Page 物理删除前，先在同事务创建 page_deleted CompileRun（若编译启用、
-    # pipeline 已注册且可解析 workspace），把删除事件落为可追溯/可恢复任务。删除本身
-    # 仍同步移除 Wiki 来源（即时 draft/archived 失效）；run 由 worker 泵消费，重复移除
-    # 幂等（_safe_remove_source_page 二次移除 no-op），并负责图谱清理/审计。run 创建
-    # 失败不阻断删除（删除正确性不依赖编译开关）。
-    try:
-        from app.core.wiki_workspace.routing import page_workspace_id
-        from app.core.wiki_pipeline.executor import create_run as _pipeline_create_run
-        from app.core.wiki_pipeline.pipelines.wiki_default import PIPELINE_KEY as _PK
-        from app.config import settings as _settings
-        if getattr(_settings, "wiki_pipeline_default_enabled", False):
-            _ws = page_workspace_id(db, page)
-            if _ws:
-                import hashlib as _hl
-                _ih = _hl.sha256(
-                    f"page_deleted:{page_id}:{_ws}:{page.notebook_id or ''}".encode("utf-8")
-                ).hexdigest()
-                _pipeline_create_run(
-                    db,
-                    pipeline_key=_PK,
-                    trigger_type="page_deleted",
-                    trigger_object_id=page_id,
-                    workspace_id=_ws,
-                    input_hash=_ih,
-                    supersede_same_trigger=True,
-                )
-    except Exception:
-        import logging as _log
-        _log.getLogger(__name__).exception("page_deleted run enqueue skipped page=%s", page_id)
+    # Phase 5.2.1：统一 DB-first kill switch（scheduler / API / 删除入口共用同一读取
+    # 函数）。kill switch 默认 settings 打开；DB RuntimeFeatureFlag 同名行可关闭。
+    # 三分支：
+    #   A. kill OFF           → 不建 run、引用 Wiki 保持 dirty、允许物理删除、不调 legacy。
+    #   B. kill ON + workspace→ 先持久化 page_deleted Run + deletion artifact，成功才删。
+    #   C. kill ON 无 workspace→ HTTP 409，Page/PageChunk 均不删、不建残缺 run、不调 legacy。
+    from app.core.knowledge_compiler_v3.wiki_refresh_scheduler import _pipeline_kill_switch_enabled
 
-    # V4 Phase J-3：先移除图谱 provenance（在删 PageChunk 前收集受影响关系/实体/Community，
-    # 避免 FK CASCADE 先删 provenance 导致无法收集），再删 Chunk/Page，最后统一 commit。
-    from app.core.knowledge_compiler_v3.v4_graph_builder import remove_page_graph
-    remove_page_graph(db, page_id, commit=False)
+    kill_switch_on = _pipeline_kill_switch_enabled()
+    ws = None
+    if kill_switch_on:
+        from app.core.wiki_workspace.routing import page_workspace_id
+        ws = page_workspace_id(db, page)
+        if ws is None:
+            # C：kill ON 但无 workspace 绑定 —— 删除事件无法登记 compile scope。
+            # 与 kill OFF 明确区分：拒绝删除，不留残缺 Run / Artifact / 半删除状态。
+            raise HTTPException(
+                status_code=409,
+                detail="page_workspace_required: 页面尚未绑定 Wiki Workspace，未执行删除",
+            )
+
+    if kill_switch_on:
+        # B：先持久化 page_deleted CompileRun + deletion input artifact，成功后才允许
+        # 物理删除（MUST-4：登记失败 → 删除中止，不吞异常继续删）。图谱移除 / 来源移除
+        # 语义移交 pipeline publish 的 page_deleted 分支处理，API 不再直接调
+        # remove_page_graph / remove_source_page_from_wikis。
+        try:
+            from app.core.wiki_pipeline.pipelines.wiki_default import create_page_deleted_run
+            create_page_deleted_run(
+                db,
+                page_id=page.id,
+                workspace_id=ws,
+                notebook_id=page.notebook_id,
+            )
+            db.commit()
+        except Exception as exc:  # noqa: BLE001
+            db.rollback()
+            logger.exception("page_deleted run persist failed page=%s: %s", page_id, exc)
+            raise HTTPException(status_code=500, detail="页面删除事件登记失败，未删除页面") from exc
+    else:
+        # A：kill off —— 不建 run；物理删除前把引用该 Page 的 WikiPage 置 dirty（保持
+        # 可恢复，不改 status/source_page_ids、不调 legacy 发布），由后续开关恢复后的
+        # 刷新兜底。
+        _mark_wikis_dirty_for_page(db, page.id)
+
+    # 物理删除 PageChunk + Page（图谱/来源语义由 pipeline run 处理）。
     db.query(PageChunk).filter(PageChunk.page_id == page_id).delete()
     db.delete(page)
     db.commit()
-
-    # V4 Phase C：删除来源 Page → 同步移除 Wiki 来源并标记 dirty（立即失效；不调用 LLM）。
-    # 该函数查 wiki.source_page_ids（JSON），不依赖 Page 行存在，故物理删除后仍可执行。
-    # 删除前已建 page_deleted CompileRun（若编译启用）由泵消费做审计/图谱清理（幂等）；
-    # 此处同步移除保证删除后旧 Revision 立即 draft/archived，不等待异步 run。
-    from app.core.knowledge_compiler_v3.wiki_page_builder import remove_source_page_from_wikis
-    remove_source_page_from_wikis(db, page_id, commit=True)
 
     return {"message": "删除成功"}
 

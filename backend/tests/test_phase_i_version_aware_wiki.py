@@ -145,7 +145,7 @@ def _mk_versioned_llm():
 def _build_20(db):
     p = _page(db, "p20", "Titan 2.0 安装说明", "Titan 2.0 使用旧版安装接口，配置路径 /etc/titan-v2/config。安装前关闭服务。")
     db.commit()
-    _run(builder.build_wiki_from_pages(db, [p], llm_json=_mk_versioned_llm()))
+    _run(builder._legacy_build_wiki_from_pages(db, [p], llm_json=_mk_versioned_llm()))
     return db.query(WikiPage).filter(WikiPage.title == "Titan 安装说明").first()
 
 
@@ -162,7 +162,7 @@ def test_import_20_then_30(db):
     _build_20(db)
     p = _page(db, "p30", "Titan 3.0 安装说明", "Titan 3.0 使用新版安装接口，配置路径 /etc/titan-v3/config。安装前关闭服务。")
     db.commit()
-    _run(builder.build_wiki_from_pages(db, [p], llm_json=_mk_versioned_llm()))
+    _run(builder._legacy_build_wiki_from_pages(db, [p], llm_json=_mk_versioned_llm()))
 
     db.expire_all()
     wiki = db.query(WikiPage).filter(WikiPage.title == "Titan 安装说明").first()
@@ -203,7 +203,7 @@ def test_manual_edit_20_then_import_30(db):
     # 再导入 3.0
     p = _page(db, "p30", "Titan 3.0 安装说明", "Titan 3.0 使用新版安装接口，配置路径 /etc/titan-v3/config。安装前关闭服务。")
     db.commit()
-    _run(builder.build_wiki_from_pages(db, [p], llm_json=_mk_versioned_llm()))
+    _run(builder._legacy_build_wiki_from_pages(db, [p], llm_json=_mk_versioned_llm()))
 
     db.expire_all()
     wiki = db.query(WikiPage).filter(WikiPage.title == "Titan 安装说明").first()
@@ -225,8 +225,8 @@ def test_manual_edit_20_then_import_30(db):
 
 def test_import_40_becomes_latest(db):
     _build_20(db)
-    _run(builder.build_wiki_from_pages(db, [_page(db, "p30", "Titan 3.0 安装说明", "3.0 内容与安装前关闭服务", "engineering")], llm_json=_mk_versioned_llm()))
-    _run(builder.build_wiki_from_pages(db, [_page(db, "p40", "Titan 4.0 安装说明", "4.0 内容与安装前关闭服务", "engineering")], llm_json=_mk_versioned_llm()))
+    _run(builder._legacy_build_wiki_from_pages(db, [_page(db, "p30", "Titan 3.0 安装说明", "3.0 内容与安装前关闭服务", "engineering")], llm_json=_mk_versioned_llm()))
+    _run(builder._legacy_build_wiki_from_pages(db, [_page(db, "p40", "Titan 4.0 安装说明", "4.0 内容与安装前关闭服务", "engineering")], llm_json=_mk_versioned_llm()))
 
     db.expire_all()
     wiki = db.query(WikiPage).filter(WikiPage.title == "Titan 安装说明").first()
@@ -245,7 +245,7 @@ def test_same_version_duplicate_files(db):
     p1 = _page(db, "p20a", "Titan 2.0 安装说明", "Titan 2.0 使用旧版安装接口，路径 /etc/titan-v2/config。")
     p2 = _page(db, "p20b", "Titan 2.0 安装", "Titan 2.0 使用旧版安装接口，路径 /etc/titan-v2/config。")
     db.commit()
-    _run(builder.build_wiki_from_pages(db, [p1, p2], llm_json=_mk_versioned_llm()))
+    _run(builder._legacy_build_wiki_from_pages(db, [p1, p2], llm_json=_mk_versioned_llm()))
     db.expire_all()
     wiki = db.query(WikiPage).filter(WikiPage.title == "Titan 安装说明").first()
     secs = _sections_by_label(db, wiki)
@@ -271,7 +271,7 @@ def test_same_version_conflict_marks_diff(db):
             }
         return {"worthy": True, "ops": [{"action": "create", "title": "Titan 安装说明", "category": "部署运维"}]}
 
-    _run(builder.build_wiki_from_pages(db, [_page(db, "p1", "Titan 2.0 安装说明", "Titan 2.0 路径是 /etc/v2。", "engineering")], llm_json=_llm))
+    _run(builder._legacy_build_wiki_from_pages(db, [_page(db, "p1", "Titan 2.0 安装说明", "Titan 2.0 路径是 /etc/v2。", "engineering")], llm_json=_llm))
     db.expire_all()
     wiki = db.query(WikiPage).filter(WikiPage.title == "Titan 安装说明").first()
     secs = _sections_by_label(db, wiki)
@@ -294,7 +294,7 @@ def test_unversioned_file(db):
             return {"summary": "Titan 说明", "content": "安装前关闭服务。"}
         return {"worthy": True, "ops": [{"action": "create", "title": "Titan 说明", "category": "部署运维"}]}
 
-    _run(builder.build_wiki_from_pages(db, [p], llm_json=_llm))
+    _run(builder._legacy_build_wiki_from_pages(db, [p], llm_json=_llm))
     db.expire_all()
     wiki = db.query(WikiPage).filter(WikiPage.title == "Titan 说明").first()
     # 无版本证据 → 走传统路径，latest 为空（不猜版本）
@@ -324,7 +324,7 @@ def test_manual_edit_common_then_add_version(db):
     assert secs["common"].merge_policy == "protected"
 
     # 新版本仍可添加
-    _run(builder.build_wiki_from_pages(db, [_page(db, "p30", "Titan 3.0 安装说明", "3.0 内容与安装前关闭服务", "engineering")], llm_json=_mk_versioned_llm()))
+    _run(builder._legacy_build_wiki_from_pages(db, [_page(db, "p30", "Titan 3.0 安装说明", "3.0 内容与安装前关闭服务", "engineering")], llm_json=_mk_versioned_llm()))
     db.expire_all()
     wiki = db.query(WikiPage).filter(WikiPage.title == "Titan 安装说明").first()
     secs = _sections_by_label(db, wiki)
@@ -372,7 +372,7 @@ def test_rollback_restores_version_structure(db):
     old_latest = wiki.latest_version
 
     # 导入 3.0 → latest 变 3.0
-    _run(builder.build_wiki_from_pages(db, [_page(db, "p30", "Titan 3.0 安装说明", "3.0 内容与安装前关闭服务", "engineering")], llm_json=_mk_versioned_llm()))
+    _run(builder._legacy_build_wiki_from_pages(db, [_page(db, "p30", "Titan 3.0 安装说明", "3.0 内容与安装前关闭服务", "engineering")], llm_json=_mk_versioned_llm()))
     db.expire_all()
     wiki = db.query(WikiPage).filter(WikiPage.title == "Titan 安装说明").first()
     assert wiki.latest_version == "3.0"
@@ -392,7 +392,7 @@ def test_rollback_restores_version_structure(db):
 
 def test_query_specific_version_routes(db):
     _build_20(db)
-    _run(builder.build_wiki_from_pages(db, [_page(db, "p30", "Titan 3.0 安装说明", "3.0 使用新版接口 /etc/titan-v3/config。安装前关闭服务", "engineering")], llm_json=_mk_versioned_llm()))
+    _run(builder._legacy_build_wiki_from_pages(db, [_page(db, "p30", "Titan 3.0 安装说明", "3.0 使用新版接口 /etc/titan-v3/config。安装前关闭服务", "engineering")], llm_json=_mk_versioned_llm()))
     db.commit()
 
     user = {"id": "u1", "username": "u", "groups": ["engineering"]}
@@ -429,8 +429,8 @@ def test_acl_scope_isolation(db):
     p_eng = _page(db, "eng", "Titan 2.0 安装说明", "工程组 2.0 内容", group_id="engineering")
     p_sales = _page(db, "sales", "Titan 2.0 安装说明", "销售组 2.0 内容", group_id="sales")
     db.commit()
-    _run(builder.build_wiki_from_pages(db, [p_eng], llm_json=_mk_versioned_llm()))
-    _run(builder.build_wiki_from_pages(db, [p_sales], llm_json=_mk_versioned_llm()))
+    _run(builder._legacy_build_wiki_from_pages(db, [p_eng], llm_json=_mk_versioned_llm()))
+    _run(builder._legacy_build_wiki_from_pages(db, [p_sales], llm_json=_mk_versioned_llm()))
 
     eng_wikis = db.query(WikiPage).filter(WikiPage.acl_scope == '{"groups": ["engineering"]}').all()
     sales_wikis = db.query(WikiPage).filter(WikiPage.acl_scope == '{"groups": ["sales"]}').all()
@@ -451,7 +451,7 @@ def test_acl_scope_isolation(db):
 
 def test_source_delete_only_affects_version(db):
     _build_20(db)
-    _run(builder.build_wiki_from_pages(db, [_page(db, "p30", "Titan 3.0 安装说明", "3.0 内容与安装前关闭服务", "engineering")], llm_json=_mk_versioned_llm()))
+    _run(builder._legacy_build_wiki_from_pages(db, [_page(db, "p30", "Titan 3.0 安装说明", "3.0 内容与安装前关闭服务", "engineering")], llm_json=_mk_versioned_llm()))
     db.commit()
 
     # 删除 3.0 来源 Page
@@ -479,7 +479,7 @@ def test_llm_failure_keeps_revision_and_dirty(db):
     async def _fail(messages, context="", timeout=120.0):
         raise RuntimeError("down")
 
-    _run(builder.build_wiki_from_pages(db, [_page(db, "p30", "Titan 3.0 安装说明", "3.0 内容", "engineering")], llm_json=_fail))
+    _run(builder._legacy_build_wiki_from_pages(db, [_page(db, "p30", "Titan 3.0 安装说明", "3.0 内容", "engineering")], llm_json=_fail))
     db.expire_all()
     wiki = db.query(WikiPage).filter(WikiPage.title == "Titan 安装说明").first()
     assert wiki.current_revision_id == old_rev_id  # 保留上一 Revision
@@ -499,7 +499,7 @@ def test_stale_input_drops_result(db):
             return {"summary": "s", "common": "c", "versions": [{"version": "2.0", "content": "x", "diff_notice": ""}], "unversioned": ""}
         return {"worthy": True, "ops": [{"action": "create", "title": "Titan 安装说明", "category": "x"}]}
 
-    _run(builder.build_wiki_from_pages(db, [_page(db, "p30", "Titan 3.0 安装说明", "3.0 内容", "engineering")], llm_json=_mutate))
+    _run(builder._legacy_build_wiki_from_pages(db, [_page(db, "p30", "Titan 3.0 安装说明", "3.0 内容", "engineering")], llm_json=_mutate))
     db.expire_all()
     wiki = db.query(WikiPage).filter(WikiPage.title == "Titan 安装说明").first()
     assert wiki.current_revision_id == old_rev_id  # stale_input 丢弃结果

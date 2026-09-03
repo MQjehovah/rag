@@ -107,7 +107,7 @@ def test_worthy_true_empty_ops_invalid_response():
 def test_all_illegal_ops_invalid_response_no_source_release(db):
     p = _page(db, "p1", "水箱", "水箱内容足够长", "engineering")
     db.commit()
-    _run(builder.build_wiki_from_pages(db, [p], llm_json=_mk_llm([{"action": "create", "title": "主题", "content": "正文", "summary": "s"}])))
+    _run(builder._legacy_build_wiki_from_pages(db, [p], llm_json=_mk_llm([{"action": "create", "title": "主题", "content": "正文", "summary": "s"}])))
     wp = db.query(WikiPage).filter(WikiPage.title == "主题").first()
     assert "p1" in json.loads(wp.source_page_ids)
 
@@ -116,7 +116,7 @@ def test_all_illegal_ops_invalid_response_no_source_release(db):
             return {"summary": "s", "content": "正文"}
         return {"worthy": True, "ops": [{"action": "delete", "title": "主题"}]}
 
-    _run(builder.build_wiki_from_pages(db, [p], llm_json=_bad))
+    _run(builder._legacy_build_wiki_from_pages(db, [p], llm_json=_bad))
     db.expire_all()
     wp = db.query(WikiPage).filter(WikiPage.title == "主题").first()
     assert "p1" in json.loads(wp.source_page_ids or "[]")
@@ -131,7 +131,7 @@ def test_new_wiki_synthesis_fail_invisible_to_user(db):
             raise RuntimeError("down")
         return {"worthy": True, "ops": [{"action": "create", "title": "主题", "category": "x"}]}
 
-    _run(builder.build_wiki_from_pages(db, [p], llm_json=_fail_synthesis))
+    _run(builder._legacy_build_wiki_from_pages(db, [p], llm_json=_fail_synthesis))
     db.expire_all()
     wp = db.query(WikiPage).filter(WikiPage.title == "主题").first()
     assert wp is not None
@@ -147,7 +147,7 @@ def test_new_wiki_synthesis_fail_no_published_empty_revision(db):
             raise RuntimeError("down")
         return {"worthy": True, "ops": [{"action": "create", "title": "主题", "category": "x"}]}
 
-    _run(builder.build_wiki_from_pages(db, [p], llm_json=_fail_synthesis))
+    _run(builder._legacy_build_wiki_from_pages(db, [p], llm_json=_fail_synthesis))
     wp = db.query(WikiPage).filter(WikiPage.title == "主题").first()
     revs = db.query(WikiRevision).filter(WikiRevision.wiki_page_id == wp.id, WikiRevision.status == "published").all()
     assert len(revs) == 0
@@ -163,7 +163,7 @@ def test_synthesis_fail_page_keeps_dirty(db):
             raise RuntimeError("down")
         return {"worthy": True, "ops": [{"action": "create", "title": "主题", "category": "x"}]}
 
-    _run(builder.build_wiki_from_pages(db, [p], llm_json=_fail_synthesis))
+    _run(builder._legacy_build_wiki_from_pages(db, [p], llm_json=_fail_synthesis))
     db.expire_all()
     p = db.get(Page, "p1")
     assert p.wiki_dirty is True
@@ -186,7 +186,7 @@ def test_two_targets_one_fail_returns_partial(db):
             {"action": "create", "title": "主题B", "category": "x"},
         ]}
 
-    out = _run(builder.process_page_wiki(db, "p1", _llm, commit=True))
+    out = _run(builder._legacy_process_page_wiki(db, "p1", _llm, commit=True))
     assert out["status"] == "partial"
     db.expire_all()
     p = db.get(Page, "p1")
@@ -203,14 +203,14 @@ def test_topic_migration_auto_resynthesizes_old_source(db):
             return {"summary": "s", "content": "聚合"}
         return {"worthy": True, "ops": [{"action": "create", "title": "主题A", "category": "x"}]}
 
-    _run(builder.build_wiki_from_pages(db, [p], llm_json=_llm))
-    _run(builder.build_wiki_from_pages(db, [p2], llm_json=_llm))
+    _run(builder._legacy_build_wiki_from_pages(db, [p], llm_json=_llm))
+    _run(builder._legacy_build_wiki_from_pages(db, [p2], llm_json=_llm))
 
     async def _llm2(messages, context="", timeout=120.0):
         if context == "wiki-synthesis":
             return {"summary": "s", "content": "聚合"}
         return {"worthy": True, "ops": [{"action": "create", "title": "主题B", "category": "x"}]}
-    _run(builder.build_wiki_from_pages(db, [p], llm_json=_llm2))
+    _run(builder._legacy_build_wiki_from_pages(db, [p], llm_json=_llm2))
     db.expire_all()
     # 主题A 已解除 p1，只剩 p2 来源（自动用剩余来源重新合成，dirty 已清）
     a = db.query(WikiPage).filter(WikiPage.title == "主题A").first()
@@ -224,8 +224,8 @@ def test_data_source_delete_auto_resynthesizes_remaining(db):
     p1 = _page(db, "p1", "来源一", "第一个来源知识A", "engineering")
     p2 = _page(db, "p2", "来源二", "第二个来源知识B", "engineering")
     db.commit()
-    _run(builder.build_wiki_from_pages(db, [p1], llm_json=_mk_llm([{"action": "create", "title": "主题", "content": "A", "summary": "s"}])))
-    _run(builder.build_wiki_from_pages(db, [p2], llm_json=_mk_llm([{"action": "update", "title": "主题", "content": "B", "summary": "s"}])))
+    _run(builder._legacy_build_wiki_from_pages(db, [p1], llm_json=_mk_llm([{"action": "create", "title": "主题", "content": "A", "summary": "s"}])))
+    _run(builder._legacy_build_wiki_from_pages(db, [p2], llm_json=_mk_llm([{"action": "update", "title": "主题", "content": "B", "summary": "s"}])))
     result = builder.remove_source_page_from_wikis(db, "p1")
     assert len(result["dirty_remaining_wiki_ids"]) == 1
 
@@ -264,15 +264,15 @@ def test_three_sources_all_in_synthesis_prompt(db):
     p2 = _page(db, "p2", "来源二", "第二个来源知识", "engineering")
     p3 = _page(db, "p3", "来源三", "第三个来源知识", "engineering")
     db.commit()
-    _run(builder.build_wiki_from_pages(db, [p1], llm_json=_mk_llm([{"action": "create", "title": "主题", "content": "A", "summary": "s"}])))
-    _run(builder.build_wiki_from_pages(db, [p2], llm_json=_mk_llm([{"action": "update", "title": "主题", "content": "B", "summary": "s"}])))
+    _run(builder._legacy_build_wiki_from_pages(db, [p1], llm_json=_mk_llm([{"action": "create", "title": "主题", "content": "A", "summary": "s"}])))
+    _run(builder._legacy_build_wiki_from_pages(db, [p2], llm_json=_mk_llm([{"action": "update", "title": "主题", "content": "B", "summary": "s"}])))
     captured = {}
     async def _llm3(messages, context="", timeout=120.0):
         if context == "wiki-synthesis":
             captured["prompt"] = messages[0]["content"]
             return {"summary": "s", "content": "聚合"}
         return {"worthy": True, "ops": [{"action": "update", "title": "主题", "category": "x"}]}
-    _run(builder.build_wiki_from_pages(db, [p3], llm_json=_llm3))
+    _run(builder._legacy_build_wiki_from_pages(db, [p3], llm_json=_llm3))
     for src in ("来源一", "来源二", "来源三"):
         assert src in captured["prompt"]
 
@@ -287,5 +287,5 @@ def test_full_build_synthesizes_each_wiki_once(db):
             calls["n"] += 1
             return {"summary": "s", "content": "聚合"}
         return {"worthy": True, "ops": [{"action": "create", "title": "水箱主题", "category": "x"}]}
-    _run(builder.build_wiki_from_pages(db, [p1, p2], llm_json=_llm, dedupe_synthesis=True))
+    _run(builder._legacy_build_wiki_from_pages(db, [p1, p2], llm_json=_llm, dedupe_synthesis=True))
     assert calls["n"] == 1

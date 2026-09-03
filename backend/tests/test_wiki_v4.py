@@ -117,7 +117,7 @@ def test_build_from_pages_no_card_no_community(db):
     p = _page(db, "p1", "水箱安装手册", "水箱固定到机架，拧紧螺栓", "engineering")
     db.commit()
 
-    stats = _run(builder.build_wiki_from_pages(
+    stats = _run(builder._legacy_build_wiki_from_pages(
         db, [p], llm_json=_mk_llm([{"action": "create", "title": "水箱安装", "category": "操作指南", "content": "固定水箱步骤", "summary": "水箱安装"}]),
     ))
     assert stats["created"] == 1
@@ -149,7 +149,7 @@ def test_max_two_topics_per_page(db):
         {"action": "create", "title": "主题B", "category": "x", "content": "内容B", "summary": "b"},
         {"action": "create", "title": "主题C", "category": "x", "content": "内容C", "summary": "c"},
     ]
-    stats = _run(builder.build_wiki_from_pages(db, [p], llm_json=_mk_llm(three_ops)))
+    stats = _run(builder._legacy_build_wiki_from_pages(db, [p], llm_json=_mk_llm(three_ops)))
     assert stats["created"] == 2  # 最多 2 个
 
 
@@ -159,8 +159,8 @@ def test_multiple_pages_merge_same_topic(db):
     _share_workspace(db, "nb-p1", "nb-p2")  # Phase 3.1：显式绑定同一 workspace 才合并
     db.commit()
 
-    _run(builder.build_wiki_from_pages(db, [p1], llm_json=_mk_llm([{"action": "create", "title": "水箱", "category": "x", "content": "固定水箱", "summary": "水箱"}])))
-    stats = _run(builder.build_wiki_from_pages(db, [p2], llm_json=_mk_llm([{"action": "update", "title": "水箱", "content": "固定并加固水箱", "summary": "水箱"}])))
+    _run(builder._legacy_build_wiki_from_pages(db, [p1], llm_json=_mk_llm([{"action": "create", "title": "水箱", "category": "x", "content": "固定水箱", "summary": "水箱"}])))
+    stats = _run(builder._legacy_build_wiki_from_pages(db, [p2], llm_json=_mk_llm([{"action": "update", "title": "水箱", "content": "固定并加固水箱", "summary": "水箱"}])))
 
     assert stats["updated"] == 1
     pages = db.query(WikiPage).filter(WikiPage.acl_scope == '{"groups": ["engineering"]}').all()
@@ -182,9 +182,9 @@ def test_similar_title_not_duplicated(db):
     p2 = _page(db, "p2", "水箱二", "水箱加固补充说明的详细内容", "engineering")
     _share_workspace(db, "nb-p1", "nb-p2")  # Phase 3.1：显式绑定同一 workspace 才合并
     db.commit()
-    _run(builder.build_wiki_from_pages(db, [p1], llm_json=_mk_llm([{"action": "create", "title": "水箱安装", "content": "固定水箱", "summary": "s"}])))
+    _run(builder._legacy_build_wiki_from_pages(db, [p1], llm_json=_mk_llm([{"action": "create", "title": "水箱安装", "content": "固定水箱", "summary": "s"}])))
     # 相似标题「水箱安装」撞上「水箱 安装」（规范化后一致）→ update 而非 create
-    stats = _run(builder.build_wiki_from_pages(db, [p2], llm_json=_mk_llm([{"action": "create", "title": "水箱 安装", "content": "加固水箱", "summary": "s"}])))
+    stats = _run(builder._legacy_build_wiki_from_pages(db, [p2], llm_json=_mk_llm([{"action": "create", "title": "水箱 安装", "content": "加固水箱", "summary": "s"}])))
     assert stats["created"] == 0
     pages = db.query(WikiPage).filter(WikiPage.acl_scope == '{"groups": ["engineering"]}').all()
     assert len(pages) == 1
@@ -198,8 +198,8 @@ def test_scopes_not_merged(db):
     pa = _page(db, "pa", "工程水箱", "工程组水箱内容足够长", "engineering")
     pb = _page(db, "pb", "销售水箱", "销售组水箱内容足够长", "sales")
     db.commit()
-    _run(builder.build_wiki_from_pages(db, [pa], llm_json=_mk_llm([{"action": "create", "title": "水箱", "content": "工程水箱内容", "summary": "s"}])))
-    _run(builder.build_wiki_from_pages(db, [pb], llm_json=_mk_llm([{"action": "create", "title": "水箱", "content": "销售水箱内容", "summary": "s"}])))
+    _run(builder._legacy_build_wiki_from_pages(db, [pa], llm_json=_mk_llm([{"action": "create", "title": "水箱", "content": "工程水箱内容", "summary": "s"}])))
+    _run(builder._legacy_build_wiki_from_pages(db, [pb], llm_json=_mk_llm([{"action": "create", "title": "水箱", "content": "销售水箱内容", "summary": "s"}])))
 
     eng = db.query(WikiPage).filter(WikiPage.acl_scope == '{"groups": ["engineering"]}').count()
     sales = db.query(WikiPage).filter(WikiPage.acl_scope == '{"groups": ["sales"]}').count()
@@ -210,7 +210,7 @@ def test_page_no_notebook_fail_closed(db):
     db.add(Page(id="p-orphan", notebook_id=None, title="孤儿", content="没有笔记本的内容足够长"))
     db.commit()
     p = db.get(Page, "p-orphan")
-    stats = _run(builder.build_wiki_from_pages(db, [p], llm_json=_mk_llm([{"action": "create", "title": "x", "content": "y", "summary": "s"}])))
+    stats = _run(builder._legacy_build_wiki_from_pages(db, [p], llm_json=_mk_llm([{"action": "create", "title": "x", "content": "y", "summary": "s"}])))
     assert stats["failed"] == 1
     assert db.query(WikiPage).count() == 0
 
@@ -222,7 +222,7 @@ def test_page_no_notebook_fail_closed(db):
 def test_build_immediately_effective(db):
     p = _page(db, "p1", "水箱", "水箱固定内容足够长", "engineering")
     db.commit()
-    _run(builder.build_wiki_from_pages(db, [p], llm_json=_mk_llm([{"action": "create", "title": "水箱", "content": "正文", "summary": "摘要"}])))
+    _run(builder._legacy_build_wiki_from_pages(db, [p], llm_json=_mk_llm([{"action": "create", "title": "水箱", "content": "正文", "summary": "摘要"}])))
     wp = db.query(WikiPage).filter(WikiPage.title == "水箱").first()
     assert wp.status == "published"
     assert wp.current_revision_id is not None
@@ -238,7 +238,7 @@ def test_build_immediately_effective(db):
 def _build_single_wiki(db):
     p = _page(db, "p1", "水箱", "水箱固定内容足够长", "engineering")
     db.commit()
-    _run(builder.build_wiki_from_pages(db, [p], llm_json=_mk_llm([{"action": "create", "title": "水箱", "content": "旧正文", "summary": "摘要"}])))
+    _run(builder._legacy_build_wiki_from_pages(db, [p], llm_json=_mk_llm([{"action": "create", "title": "水箱", "content": "旧正文", "summary": "摘要"}])))
     return db.query(WikiPage).filter(WikiPage.title == "水箱").first()
 
 
@@ -288,7 +288,7 @@ def test_refresh_preserves_locked_section(db):
 
     # 刷新（LLM 返回 update 主题，正文不同）
     p = db.get(Page, "p1")
-    _run(builder.build_wiki_from_pages(db, [p], llm_json=_mk_llm([{"action": "update", "title": "水箱", "content": "自动新正文", "summary": "摘要"}])))
+    _run(builder._legacy_build_wiki_from_pages(db, [p], llm_json=_mk_llm([{"action": "update", "title": "水箱", "content": "自动新正文", "summary": "摘要"}])))
 
     db.expire_all()
     wp = db.query(WikiPage).filter(WikiPage.title == "水箱").first()
@@ -308,7 +308,7 @@ def test_llm_failure_does_not_overwrite(db):
 
     p = db.get(Page, "p1")
     # 非法 JSON / 空结果 → 返回 {}
-    _run(builder.build_wiki_from_pages(db, [p], llm_json=_mk_llm([])))
+    _run(builder._legacy_build_wiki_from_pages(db, [p], llm_json=_mk_llm([])))
 
     db.expire_all()
     wp = db.query(WikiPage).filter(WikiPage.title == "水箱").first()
@@ -322,7 +322,7 @@ def test_llm_exception_does_not_overwrite(db):
     old_rev_id = wp.current_revision_id
 
     p = db.get(Page, "p1")
-    _run(builder.build_wiki_from_pages(db, [p], llm_json=_mk_llm(exc=RuntimeError("timeout"))))
+    _run(builder._legacy_build_wiki_from_pages(db, [p], llm_json=_mk_llm(exc=RuntimeError("timeout"))))
 
     db.expire_all()
     wp = db.query(WikiPage).filter(WikiPage.title == "水箱").first()
@@ -338,7 +338,7 @@ def test_llm_failure_marks_dirty(db):
     assert wp.dirty is False
     p = db.get(Page, "p1")
     # 服务不可用（抛异常）→ Page.wiki_dirty=True（持久等待重试），不覆盖 Wiki 当前版本
-    _run(builder.build_wiki_from_pages(db, [p], llm_json=_mk_llm(exc=RuntimeError("service unavailable"))))
+    _run(builder._legacy_build_wiki_from_pages(db, [p], llm_json=_mk_llm(exc=RuntimeError("service unavailable"))))
     db.expire_all()
     fresh = db.get(Page, "p1")
     assert fresh.wiki_dirty is True
@@ -355,7 +355,7 @@ def test_not_worthy_does_not_mark_dirty(db):
     # 显式 worthy=False → not_worthy，解除来源，不把 Page 标记成服务故障
     async def _not_worthy(messages, context="", timeout=120.0):
         return {"worthy": False, "ops": []}
-    _run(builder.build_wiki_from_pages(db, [p], llm_json=_not_worthy))
+    _run(builder._legacy_build_wiki_from_pages(db, [p], llm_json=_not_worthy))
     db.expire_all()
     fresh = db.get(Page, "p1")
     assert fresh.wiki_dirty is False

@@ -54,14 +54,11 @@ def _start_scheduler():
 
     # Phase 5：注册 wiki.default pipeline。必须早于 recover_dirty_pages / worker
     # pump：flag on 时 recover 建 run 需 pipeline 已注册，pump 消费前注册可避免
-    # queued run 被标 PIPELINE_NOT_REGISTERED。幂等：重复注册 registry 抛
-    # PipelineError → 记录跳过，不影响启动。
-    try:
-        from app.core.wiki_pipeline.pipelines.wiki_default import register_default_pipeline
-        register_default_pipeline()
-    except Exception:
-        import logging
-        logging.getLogger(__name__).exception("register wiki.default pipeline skipped")
+    # queued run 被标 PIPELINE_NOT_REGISTERED。注册幂等（契约十二）：同 key+version
+    # 同定义重复注册 no-op；真实错误（定义冲突/registry 异常）→ raise 中止启动，
+    # 不再吞错继续。
+    from app.core.wiki_pipeline.pipelines.wiki_default import register_default_pipeline
+    register_default_pipeline()
 
     try:
         engine = get_engine(settings.database_url)

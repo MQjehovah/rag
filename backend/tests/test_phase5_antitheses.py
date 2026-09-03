@@ -429,7 +429,7 @@ def test_page_deleted_unique_source_archives_pipeline(tmp_path, wiki_pipeline):
 
         # 库B（旧）：create publish → remove_source_page_from_wikis
         ws_a, page_a = _seed(old_db, notebook_id="nb-1", page_id="p1")
-        asyncio.run(builder.build_wiki_from_pages(
+        asyncio.run(builder._legacy_build_wiki_from_pages(
             old_db, [page_a], llm_json=_async(_mk_llm()), commit=True))
         builder.remove_source_page_from_wikis(old_db, page_a.id, commit=True)
         old_db.expire_all()

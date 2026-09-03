@@ -4,7 +4,8 @@
 保证任意时刻可 json.dumps（stage 契约要求 payload/metrics JSON-safe，stage 间
 状态经 ctx["state"] 以 dict 传递也不失序列化能力）。
 
-- ResolveContext：resolve_context 输出（Page/workspace/binding/scope/hash 快照）。
+- ResolveContext：resolve_context 输出（Page/workspace/binding/scope/hash 快照；
+  含 batch_rebuild 的多 Page 扩展：page_ids + page_input_hashes，保留单 page 字段兼容）。
 - TopicDecision：topic_route 输出（LLM 主题判定结果，不触碰 Wiki/Revision 写）。
 - SynthesisResult：synthesize_default 输出（合成正文，正文不入 artifact，落库走
   Revision；本 DTO 只作为 stage 间内存传递与产物摘要）。
@@ -52,7 +53,14 @@ class ResolveContext:
     input_hash: str = ""
     source_sync_run_id: str | None = None
     source_page_ids: tuple[str, ...] = field(default_factory=tuple)  # manual_rebuild 来源
-    page_exists: bool = True  # page_deleted 且行已删 → False（不可再写来源关系）
+    page_exists: bool = True  # page_deleted 且行已删 → False（不可再读 Page，但可从 deletion Artifact 恢复来源移除）
+    # Phase 5.2 batch_rebuild：本批多 Page（排序去重）与每页确定性 input_hash（读输入 Artifact）。
+    page_ids: tuple[str, ...] = field(default_factory=tuple)
+    page_input_hashes: dict = field(default_factory=dict)
+    # Phase 5.2 page_deleted：Page 行删除后从 wiki_page_deleted_input Artifact 恢复的上下文。
+    deletion_source_wiki_ids: tuple[str, ...] = field(default_factory=tuple)  # 删除前该 Page 的来源 Wiki
+    deletion_hash: str = ""  # 删除事件确定性指纹（完整 64）
+    notebook_id_restored: str = ""  # 行删后恢复的 notebook_id（审计）
 
     def to_dict(self) -> dict:
         return _to_dict(self)

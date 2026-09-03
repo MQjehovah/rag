@@ -131,7 +131,7 @@ def _build_wiki(db, versions, common="安装前关闭服务。"):
     for v in versions:
         p = _page(db, f"p{v}", f"Titan {v} 安装说明", f"Titan {v} 内容，安装前关闭服务。")
         db.commit()
-        _run(builder.build_wiki_from_pages(db, [p], llm_json=_mk_llm(versions, common)))
+        _run(builder._legacy_build_wiki_from_pages(db, [p], llm_json=_mk_llm(versions, common)))
     db.expire_all()
     return db.query(WikiPage).filter(WikiPage.title == "Titan 安装说明").first()
 
@@ -252,7 +252,7 @@ def test_diff_notice_into_api_response(db):
             }
         return {"worthy": True, "ops": [{"action": "create", "title": "Titan 安装说明", "category": "部署运维"}]}
 
-    _run(builder.build_wiki_from_pages(db, [_page(db, "p1", "Titan 2.0 安装说明", "Titan 2.0 路径 /etc/v2。")], llm_json=_llm))
+    _run(builder._legacy_build_wiki_from_pages(db, [_page(db, "p1", "Titan 2.0 安装说明", "Titan 2.0 路径 /etc/v2。")], llm_json=_llm))
     db.expire_all()
     wiki = db.query(WikiPage).filter(WikiPage.title == "Titan 安装说明").first()
 
@@ -304,7 +304,7 @@ def test_manual_protect_20_still_add_30(db):
     # 新增 3.0
     p = _page(db, "p3.0", "Titan 3.0 安装说明", "Titan 3.0 内容，安装前关闭服务。")
     db.commit()
-    _run(builder.build_wiki_from_pages(db, [p], llm_json=_mk_llm(["2.0", "3.0"])))
+    _run(builder._legacy_build_wiki_from_pages(db, [p], llm_json=_mk_llm(["2.0", "3.0"])))
 
     db.expire_all()
     wiki = db.query(WikiPage).filter(WikiPage.title == "Titan 安装说明").first()

@@ -92,6 +92,82 @@ def _require_enabled(db: Session) -> None:
         raise HTTPException(status_code=404, detail="Wiki 主题功能未启用")
 
 
+def _pipeline_enabled() -> bool:
+    """统一 DB-first kill switch 门（scheduler / API / 删除入口共用同一读取函数）。
+
+    返回 True = wiki.default 编译启用（可建 queued run）；False = kill（暂停编译，
+    不建 run、保持 dirty、绝不回退 legacy builder）。
+    """
+    from app.core.knowledge_compiler_v3.wiki_refresh_scheduler import (
+        _pipeline_kill_switch_enabled,
+    )
+    return _pipeline_kill_switch_enabled()
+
+
+def _enqueue_rebuild_batches(db: Session) -> dict:
+    """Page 驱动全量重建入队：按 workspace 分组 → 每 workspace 建一个 batch_rebuild
+    CompileRun（queued run 由 wiki.default worker 泵执行）。
+
+    - 加载全部非空 Page，用 page_workspace_id（只读，勿 auto-create）分组；
+    - 每组调 wiki_default.create_batch_run 后统一 commit；
+    - kill off：不建 run，返回 skipped=True（不偷偷回退 legacy builder）。
+    """
+    if not _pipeline_enabled():
+        return {
+            "skipped": True, "workspaces": 0, "runs": 0, "pages": 0, "unbound": 0,
+            "message": "kill switch off：跳过",
+        }
+    from app.core.wiki_workspace.routing import page_workspace_id
+    from app.core.wiki_pipeline.pipelines.wiki_default import create_batch_run
+
+    pages = db.query(Page).filter(Page.content.isnot(None), Page.content != "").all()
+    groups: dict[str, list[str]] = {}
+    unbound = 0
+    for p in pages:
+        ws = page_workspace_id(db, p)
+        if ws:
+            groups.setdefault(ws, []).append(p.id)
+        else:
+            unbound += 1
+    run_count = 0
+    for ws_id, ids in sorted(groups.items()):
+        create_batch_run(db, workspace_id=ws_id, page_ids=ids)
+        run_count += 1
+    db.commit()
+    total_pages = sum(len(ids) for ids in groups.values())
+    return {
+        "skipped": False, "workspaces": len(groups), "runs": run_count,
+        "pages": total_pages, "unbound": unbound,
+        "message": f"已提交 {run_count} 个 workspace batch 编译任务（共 {total_pages} 页）",
+    }
+
+
+def _refresh_dirty_wikis_scheduled(db: Session) -> dict:
+    """dirty Wiki → schedule_wiki_rebuild（内部已 DB-first kill 门控、建 manual_rebuild run）。
+
+    kill off：提交数 0、message 说明；不调 legacy builder。返回汇总统计 dict。
+    """
+    if not _pipeline_enabled():
+        return {
+            "skipped": True, "submitted": 0, "rejected": 0,
+            "message": "kill switch off：跳过（保持 dirty）",
+        }
+    from app.core.knowledge_compiler_v3.wiki_refresh_scheduler import schedule_wiki_rebuild
+
+    dirty_wikis = db.query(WikiPage.id).filter(WikiPage.dirty.is_(True)).all()
+    submitted = 0
+    rejected = 0
+    for (wiki_id,) in dirty_wikis:
+        if schedule_wiki_rebuild(wiki_id):
+            submitted += 1
+        else:
+            rejected += 1
+    return {
+        "skipped": False, "submitted": submitted, "rejected": rejected,
+        "message": "Page 驱动 dirty 刷新已提交",
+    }
+
+
 def _latest_draft_revision(db: Session, page: WikiPage) -> WikiRevision | None:
     return (
         db.query(WikiRevision)
@@ -245,9 +321,11 @@ def list_wiki(
 
 
 def _run_page_build_sync() -> None:
-    """Page 驱动的后台全量构建（后台线程内运行，不读取 Card/Community）。
+    """Page 驱动的后台全量构建（Phase 5.2：每 workspace 建 batch_rebuild CompileRun）。
 
-    注意：running=True 已在 _spawn_page_build 持有锁时设置，这里只更新进度/统计。
+    只把任务落为 DB queued run（由 wiki.default worker 泵执行），不调 LLM、不调任何
+    legacy builder。running=True 已在 _spawn_page_build 持有锁时设置，这里只更新
+    进度/统计。kill off：不建 run、更新 message 后返回（不偷偷回退 legacy）。
     """
     global _page_build_state
     _page_build_state.update({
@@ -255,29 +333,24 @@ def _run_page_build_sync() -> None:
         "updated": 0, "skipped": 0, "failed": 0, "message": "加载原始文档...",
     })
 
-    from app.core.knowledge_compiler_v3.wiki_page_builder import build_wiki_from_pages
     engine = get_shared_engine()
     from app.models.database import get_session as _get_session
     db = _get_session(engine)
     try:
-        pages = db.query(Page).filter(Page.content.isnot(None), Page.content != "").all()
-        _page_build_state["total"] = len(pages)
-        try:
-            import asyncio as _asyncio
-            stats = _asyncio.run(build_wiki_from_pages(db, pages, commit=True))
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("page wiki build failed")
-            _page_build_state["failed"] += 1
-            _page_build_state["message"] = f"构建失败：{exc}"
-            return
+        result = _enqueue_rebuild_batches(db)
         _page_build_state.update({
-            "processed": len(pages),
-            "created": stats.get("created", 0),
-            "updated": stats.get("updated", 0),
-            "skipped": stats.get("skipped", 0),
-            "failed": stats.get("failed", 0),
-            "message": "Page 驱动 Wiki 构建完成",
+            "processed": result.get("pages", 0),
+            "total": result.get("pages", 0),
+            "created": result.get("runs", 0),
+            "skipped": result.get("unbound", 0),
+            "updated": 0,
+            "failed": 0,
+            "message": result.get("message", ""),
         })
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("page wiki batch enqueue failed")
+        _page_build_state["failed"] += 1
+        _page_build_state["message"] = f"batch 入队失败：{exc}"
     finally:
         db.close()
         _page_build_state["running"] = False
@@ -372,22 +445,20 @@ def refresh_status(
 
 
 @router.post("/refresh-page-dirty")
-async def refresh_page_dirty(
+def refresh_page_dirty(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    """Page 驱动的 dirty 刷新（V4 Phase C 正式入口）。
+    """Page 驱动的 dirty 刷新（V4 Phase C 正式入口，Phase 5.2 单轨 CompileRun）。
 
-    扫描 WikiPage.dirty=true → 读取 source_page_ids → 加载 Page → 按权限域
-    校验 → 用 Page 驱动构建器刷新 → 成功 dirty=false，失败继续 dirty=true。
-    不读取 Card / Community。
+    扫描 WikiPage.dirty=true → 每个 dirty Wiki 调 schedule_wiki_rebuild（内部 DB-first
+    kill switch 门控、建 manual_rebuild queued run 由 worker 泵消费）。kill off →
+    提交数 0 且保持 dirty；不再调用 legacy refresh_dirty_wikis。
     """
     _require_enabled(db)
     _require_admin(current_user)
-    from app.core.knowledge_compiler_v3.wiki_page_builder import refresh_dirty_wikis
-
-    result = await refresh_dirty_wikis(db, commit=True)
-    return {"message": "Page 驱动 dirty 刷新完成", **result}
+    result = _refresh_dirty_wikis_scheduled(db)
+    return {"message": result["message"], **result}
 
 
 @router.get("/{page_id}")

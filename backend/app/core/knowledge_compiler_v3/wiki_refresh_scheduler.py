@@ -9,16 +9,19 @@
 
 Phase 5.1 单轨化（kill switch 语义）：
 - 生产唯一自动链路 = wiki.default pipeline（KnowledgeCompileRun queued 落 DB，
-  pipeline worker 消费）。旧线程池 `_run_page_refresh`/`_run_wiki_rebuild` 仅保留
-  定义供测试/legacy 引用，生产入口一律不再 submit（双重发布消除）。
+  pipeline worker 消费）。旧线程池 worker 已改名 `_legacy_run_page_refresh` /
+  `_legacy_run_wiki_rebuild`（保留同名兼容别名 `_run_page_refresh` /
+  `_run_wiki_rebuild` 仅供旧测试 monkeypatch/断言，生产路径绝不调用）。双重发布
+  消除：生产入口一律不再 submit。
 - flag `wiki_pipeline_default_enabled` 是 kill switch：settings 默认 True；DB
   RuntimeFeatureFlag 同名行可关闭。关闭 = 暂停编译：schedule_* 不建 run、保持
   dirty、返回未调度，绝不回退旧 Builder。
 - flag 读取 DB-first（`_pipeline_kill_switch_enabled`）：DB 行优先，无行回退
   settings；进程内 5s TTL 缓存；DB 读失败回退 settings。
 
-严格 LLM：_run_page_refresh / _run_wiki_rebuild 使用 call_wiki_llm_json（区分
-service_unavailable 与 invalid_response），不再显式导入旧 call_llm_json。
+严格 LLM：_legacy_run_page_refresh / _legacy_run_wiki_rebuild 使用
+call_wiki_llm_json（区分 service_unavailable 与 invalid_response），不再显式导入旧
+call_llm_json。
 """
 from __future__ import annotations
 
@@ -30,8 +33,8 @@ from concurrent.futures import ThreadPoolExecutor
 from app.config import settings
 from app.core.knowledge_compiler_v3.wiki_page_builder import (
     call_wiki_llm_json,
-    rebuild_wiki_from_sources,
-    refresh_wiki_for_page,
+    _legacy_rebuild_wiki_from_sources,
+    _legacy_refresh_wiki_for_page,
 )
 from app.models.database import get_engine, get_session, init_db
 
@@ -92,7 +95,7 @@ def _wiki_refresh_enabled(db) -> bool:
         return False
 
 
-def _run_page_refresh(page_id: str) -> None:
+def _legacy_run_page_refresh(page_id: str) -> None:
     engine = get_engine(settings.database_url)
     try:
         try:
@@ -110,7 +113,7 @@ def _run_page_refresh(page_id: str) -> None:
             if page is None:
                 return
             import asyncio as _asyncio
-            _asyncio.run(refresh_wiki_for_page(db, page, commit=True))
+            _asyncio.run(_legacy_refresh_wiki_for_page(db, page, commit=True))
 
             # V4 Phase F：Page 更新/刷新后，同 scope 债务有界重验证（失败不影响主流程）。
             try:
@@ -149,7 +152,7 @@ def _run_page_refresh(page_id: str) -> None:
         _pump_recovery_backlog()
 
 
-def _run_wiki_rebuild(wiki_id: str) -> None:
+def _legacy_run_wiki_rebuild(wiki_id: str) -> None:
     engine = get_engine(settings.database_url)
     try:
         try:
@@ -163,7 +166,7 @@ def _run_wiki_rebuild(wiki_id: str) -> None:
                 logger.info("wiki rebuild disabled, skip wiki=%s", wiki_id)
                 return
             import asyncio as _asyncio
-            _asyncio.run(rebuild_wiki_from_sources(db, wiki_id, call_wiki_llm_json, commit=True))
+            _asyncio.run(_legacy_rebuild_wiki_from_sources(db, wiki_id, call_wiki_llm_json, commit=True))
 
             # V4 Phase F：Wiki 重建/新建后，同 scope 债务有界重验证（携带真实生效内容）。
             try:
@@ -197,6 +200,12 @@ def _run_wiki_rebuild(wiki_id: str) -> None:
             _pending_wikis.discard(wiki_id)
         _get_semaphore().release()
         _pump_recovery_backlog()
+
+
+# 旧线程池 worker 兼容别名（Phase 5.2）：仅旧测试 monkeypatch `_run_page_refresh` /
+# `_run_wiki_rebuild` 断言「不得被调用」时引用。生产路径绝不调用这两个 legacy worker。
+_run_page_refresh = _legacy_run_page_refresh
+_run_wiki_rebuild = _legacy_run_wiki_rebuild
 
 
 # ---------------------------------------------------------------------------
@@ -375,8 +384,9 @@ def _create_default_run(
 ) -> bool:
     """建 wiki.default queued run 并 commit；任何失败回滚并返回 False。
 
-    input_hash 缺省时由 executor 按 trigger 维度确定性计算（仅身份、不含内容）；
-    删除事件等需内容/事件指纹的入队须显式传 input_hash（完整 64hex）。
+    三个调度入口（page_changed/manual_rebuild/page_deleted）均显式传完整 64hex
+    input_hash（内容/事件指纹），run.input_hash 即该完整值；缺省仅测试/非内容
+    触发场景回退 executor 身份哈希。
     """
     from app.core.wiki_pipeline.executor import create_run
     from app.core.wiki_pipeline.pipelines.wiki_default import PIPELINE_KEY
@@ -438,9 +448,16 @@ def _enqueue_page_changed(page_id: str) -> bool:
                 logger.warning("wiki.default enqueue skip page=%s (no workspace)", page_id)
                 return False
             input_hash = _page_refresh_input_hash(db, page_id)
-            # idempotency_key 列 String(128)：完整 64 hex + uuid 组合会超长，
-            # hash 截断 16 hex（2^64 冲突概率可忽略），保持可读前缀。
-            idempotency_key = f"wiki.default:{workspace_id}:{page_id}:{(input_hash or '_')[:16]}"
+            # 统一幂等键（Phase 5.2）：完整 64hex input_hash 进 helper 计算，
+            # 不再截断 16 hex（列 String(128) 足够容纳 v1 前缀 15 + 64 hex）。
+            from app.core.wiki_pipeline.pipelines.wiki_default import make_default_idempotency_key
+            idempotency_key = make_default_idempotency_key(
+                workspace_id=workspace_id,
+                trigger_type="page_changed",
+                trigger_object_id=page_id,
+                wiki_page_id="",
+                full_input_hash=input_hash,
+            )
             return _create_default_run(
                 db,
                 trigger_type="page_changed",
@@ -448,6 +465,7 @@ def _enqueue_page_changed(page_id: str) -> bool:
                 workspace_id=workspace_id,
                 wiki_page_id=None,
                 idempotency_key=idempotency_key,
+                input_hash=input_hash,
             )
         finally:
             db.close()
@@ -481,8 +499,16 @@ def _enqueue_manual_rebuild(wiki_id: str) -> bool:
                 logger.warning("wiki.default enqueue skip wiki=%s (no workspace)", wiki_id)
                 return False
             input_hash = _wiki_rebuild_input_hash(db, wiki)
-            # idempotency_key 列 String(128)：hash 截断 16 hex 防超长。
-            idempotency_key = f"wiki.default:{workspace_id}:{wiki_id}:{(input_hash or '_')[:16]}"
+            # 统一幂等键（Phase 5.2）：trigger_object_id=""（manual_rebuild 身份维是
+            # wiki_page_id），完整 wiki rebuild hash 进 helper；不再截断。
+            from app.core.wiki_pipeline.pipelines.wiki_default import make_default_idempotency_key
+            idempotency_key = make_default_idempotency_key(
+                workspace_id=workspace_id,
+                trigger_type="manual_rebuild",
+                trigger_object_id="",
+                wiki_page_id=wiki_id,
+                full_input_hash=input_hash,
+            )
             return _create_default_run(
                 db,
                 trigger_type="manual_rebuild",
@@ -490,6 +516,7 @@ def _enqueue_manual_rebuild(wiki_id: str) -> bool:
                 workspace_id=workspace_id,
                 wiki_page_id=wiki_id,
                 idempotency_key=idempotency_key,
+                input_hash=input_hash,
             )
         finally:
             db.close()
@@ -694,39 +721,16 @@ def _query_dirty_page_ids(db, limit: int | None) -> list[str]:
     return [pid for pid in ids if pid not in source_page_ids or pid in active_source_ids]
 
 
-def _page_deleted_input_hash(page_id: str, workspace_id: str | None, notebook_id: str | None) -> str:
-    """删除事件确定性输入指纹（契约四.2）。
-
-    sha256("page_deleted:"+page_id+":"+(workspace_id or "")+":"+(notebook_id or ""))
-    不含正文内容：删除事件本身即输入。恢复后再删 → workspace/notebook 变化产生新 hash。
-    """
-    import hashlib
-
-    raw = "page_deleted:" + (page_id or "") + ":" + (workspace_id or "") + ":" + (notebook_id or "")
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
-
-
-def _page_deleted_idempotency_key(workspace_id: str, page_id: str, input_hash: str) -> str:
-    """契约三：`wiki.default:v1:<sha256(workspace_id|page_deleted|page_id||input_hash)>`。
-
-    列 String(128) 恰好容纳前缀 15 + 64 hex。内容冲突判定由 executor 基于
-    run.input_hash（全量）比对，idempotency_key 只做唯一身份。
-    """
-    import hashlib
-
-    raw = f"{workspace_id}|page_deleted|{page_id}||{input_hash}"
-    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
-    return f"wiki.default:v1:{digest}"
-
-
 def _enqueue_page_deleted(page_id: str) -> bool:
-    """kill on：page_deleted → 建 wiki.default queued run（单 engine/session 生命周期）。
+    """kill on：page_deleted → create_page_deleted_run（page_deleted run + deletion
+    input artifact，统一 DB-first kill switch + 完整幂等键）。
 
     语义：
-    - Page 退役审计行保留时（sources 删除链）可解析 workspace → 建 run；
-    - Page 行已不存在 / 无 binding / create_run 异常 → 记录 warning、返回 False
-      （保持 dirty，不调旧删除 Builder；删除语义移交 pipeline publish_default 的
-      page_deleted 分支处理）。
+    - Page 行存在 + 可解析 active workspace → 建 run + artifact 并 commit；
+    - Page 行已不存在 / 无 binding → 记录 warning、返回 False（不调旧删除 Builder）；
+    - create_page_deleted_run / commit 异常 → rollback、返回 False（不回退旧 worker）。
+    - 幂等：同事件已存在 run 时 create_page_deleted_run 返回既有 run，commit 成功
+      同样视为 True（删除事件由 worker 泵消费做审计/来源移除）。
     """
     engine = get_engine(settings.database_url)
     try:
@@ -754,17 +758,29 @@ def _enqueue_page_deleted(page_id: str) -> bool:
                     "wiki.default enqueue page_deleted skip page=%s (no active workspace binding)", page_id
                 )
                 return False
-            input_hash = _page_deleted_input_hash(page_id, workspace_id, page.notebook_id)
-            idempotency_key = _page_deleted_idempotency_key(workspace_id, page_id, input_hash)
-            return _create_default_run(
-                db,
-                trigger_type="page_deleted",
-                trigger_object_id=page_id,
-                workspace_id=workspace_id,
-                wiki_page_id=None,
-                idempotency_key=idempotency_key,
-                input_hash=input_hash,
-            )
+            from app.core.wiki_pipeline.pipelines.wiki_default import create_page_deleted_run
+            try:
+                run = create_page_deleted_run(
+                    db,
+                    page_id=page_id,
+                    workspace_id=workspace_id,
+                    notebook_id=page.notebook_id,
+                )
+                db.commit()
+                logger.info(
+                    "wiki.default page_deleted run=%s page=%s workspace=%s",
+                    run.id, page_id, workspace_id,
+                )
+                return True
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "wiki.default page_deleted enqueue failed page=%s: %s", page_id, exc
+                )
+                try:
+                    db.rollback()
+                except Exception:  # noqa: BLE001
+                    pass
+                return False
         finally:
             db.close()
     finally:

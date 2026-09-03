@@ -176,7 +176,7 @@ def test_input_hash_includes_chunks(db):
 def test_acl_scope_change_archives_old_domain(db):
     p = _page(db, "p1", "水箱", "水箱内容足够长", "engineering")
     db.commit()
-    _run(builder.build_wiki_from_pages(db, [p], llm_json=_mk_llm([{"action": "create", "title": "水箱", "content": "正文", "summary": "摘要"}])))
+    _run(builder._legacy_build_wiki_from_pages(db, [p], llm_json=_mk_llm([{"action": "create", "title": "水箱", "content": "正文", "summary": "摘要"}])))
 
     # 在 LLM 调用期间修改 notebook group_id（scope 变化）
     async def _scope_llm(messages, context="", timeout=120.0):
@@ -187,7 +187,7 @@ def test_acl_scope_change_archives_old_domain(db):
             return {"worthy": True, "ops": [{"action": "update", "title": "水箱", "content": "正文", "summary": "摘要"}]}
         return {"summary": "s", "content": "聚合"}
 
-    out = _run(builder.process_page_wiki(db, "p1", _scope_llm, commit=True))
+    out = _run(builder._legacy_process_page_wiki(db, "p1", _scope_llm, commit=True))
     assert out["status"] == "scope_changed"
     db.expire_all()
     old = db.query(WikiPage).filter(WikiPage.acl_scope == '{"groups": ["engineering"]}').first()
@@ -209,8 +209,8 @@ def test_two_sources_aggregated(db):
             return {"summary": "s", "content": "知识A+知识B 聚合"}
         return {"worthy": True, "ops": [{"action": "create", "title": "主题", "content": "内容", "summary": "s"}]}
 
-    _run(builder.build_wiki_from_pages(db, [p1], llm_json=_llm))
-    _run(builder.build_wiki_from_pages(db, [p2], llm_json=_llm))
+    _run(builder._legacy_build_wiki_from_pages(db, [p1], llm_json=_llm))
+    _run(builder._legacy_build_wiki_from_pages(db, [p2], llm_json=_llm))
     # 最终合成 prompt 应包含两个来源标题
     assert "来源一" in captured["prompt"]
     assert "来源二" in captured["prompt"]
@@ -232,13 +232,13 @@ def test_delete_one_source_resynthesize(db):
             return {"summary": "s", "content": "只剩知识B"}
         return {"worthy": True, "ops": [{"action": "create", "title": "主题", "content": "内容", "summary": "s"}]}
 
-    _run(builder.build_wiki_from_pages(db, [p1], llm_json=_llm))
-    _run(builder.build_wiki_from_pages(db, [p2], llm_json=_llm))
+    _run(builder._legacy_build_wiki_from_pages(db, [p1], llm_json=_llm))
+    _run(builder._legacy_build_wiki_from_pages(db, [p2], llm_json=_llm))
     builder.remove_source_page_from_wikis(db, "p1")
     db.expire_all()
     wp = db.query(WikiPage).filter(WikiPage.title == "主题").first()
     assert wp.dirty is True
-    _run(builder.refresh_dirty_wikis(db, llm_json=_llm))
+    _run(builder._legacy_refresh_dirty_wikis(db, llm_json=_llm))
     db.expire_all()
     wp = db.query(WikiPage).filter(WikiPage.title == "主题").first()
     rev = db.get(WikiRevision, wp.current_revision_id)
@@ -260,7 +260,7 @@ def test_one_page_failure_does_not_rollback_others(db):
             raise RuntimeError("fail p2")
         return {"worthy": True, "ops": [{"action": "create", "title": "主题", "content": "知识A", "summary": "s"}]}
 
-    stats = _run(builder.build_wiki_from_pages(db, [p1, p2], llm_json=_selective_llm))
+    stats = _run(builder._legacy_build_wiki_from_pages(db, [p1, p2], llm_json=_selective_llm))
     # p1 成功，p2 失败（服务不可用），p1 的 Wiki 已提交
     assert db.query(WikiPage).count() == 1
 

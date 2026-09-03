@@ -28,10 +28,12 @@ from app.core.retrieval import bm25
 from app.main import app
 from app.models.database import (
     Notebook,
+    NotebookWorkspaceBinding,
     Page,
     WikiPage,
     WikiRevision,
     WikiSection,
+    WikiWorkspace,
     init_db,
 )
 
@@ -132,12 +134,33 @@ def test_admin_can_delete_page(client):
     c, engine = client
     db = _db(engine)
     nb = Notebook(id="nb", name="n", group_id="group_a")
-    db.add(nb); db.flush()
+    db.add(nb)
+    db.flush()
     db.add(Page(id="p1", title="t", content="c", notebook_id="nb"))
-    db.commit(); db.close()
-    _override({"id": "u1", "username": "a", "groups": ["admins"]})
-    r = c.delete("/api/pages/p1")
-    assert r.status_code == 200
+    db.flush()
+    # Phase 5.2.1：kill ON 删除要求 Page 已绑定 Wiki Workspace（未绑定 → 409）。
+    db.add(WikiWorkspace(
+        id="ws1", key="key-ws1", name="工程组",
+        acl_scope='{"groups": ["group_a"]}', scope_id="group:group_a", status="active",
+    ))
+    db.flush()
+    db.add(NotebookWorkspaceBinding(notebook_id="nb", workspace_id="ws1", status="active"))
+    db.commit()
+    db.close()
+    from app.core.wiki_pipeline import registry
+    from app.core.wiki_pipeline.pipelines.wiki_default import (
+        register_default_pipeline,
+        unregister_default_pipeline,
+    )
+    registry.REGISTRY.clear()
+    register_default_pipeline()
+    try:
+        _override({"id": "u1", "username": "a", "groups": ["admins"]})
+        r = c.delete("/api/pages/p1")
+        assert r.status_code == 200
+    finally:
+        unregister_default_pipeline()
+        registry.REGISTRY.clear()
 
 
 # ---------------------------------------------------------------------------

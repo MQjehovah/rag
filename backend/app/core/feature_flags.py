@@ -38,6 +38,16 @@ def set_feature_flag(db: Session, name: str, enabled: bool, user_id: str | None)
     # Keep the current process coherent with the persisted override; future
     # processes read the row from the database.
     setattr(settings, name, enabled)
+    if name == "wiki_pipeline_default_enabled":
+        # Phase 5.2：kill switch 进程内 TTL 缓存必须随 toggle 即时失效（运行时
+        # 关闭后 scheduler 无需等 5s TTL）。函数内延迟 import，避免模块级硬依赖。
+        try:
+            from app.core.knowledge_compiler_v3.wiki_refresh_scheduler import (
+                clear_kill_switch_cache,
+            )
+            clear_kill_switch_cache()
+        except Exception:
+            pass
     return bool(row.enabled)
 
 

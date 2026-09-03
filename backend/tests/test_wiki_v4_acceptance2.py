@@ -108,14 +108,14 @@ def _run(coro):
 def test_new_page_llm_unavailable_then_recovers(db):
     p = _page(db, "p1", "水箱", "水箱内容足够长", "engineering")
     db.commit()
-    _run(builder.build_wiki_from_pages(db, [p], llm_json=_mk_llm(exc=RuntimeError("down"))))
+    _run(builder._legacy_build_wiki_from_pages(db, [p], llm_json=_mk_llm(exc=RuntimeError("down"))))
     db.expire_all()
     p = db.get(Page, "p1")
     assert p.wiki_dirty is True
     assert p.wiki_last_error == "service_unavailable"
 
     # 恢复后补建
-    _run(builder.build_wiki_from_pages(db, [p], llm_json=_mk_llm([{"action": "create", "title": "水箱", "content": "正文", "summary": "摘要"}])))
+    _run(builder._legacy_build_wiki_from_pages(db, [p], llm_json=_mk_llm([{"action": "create", "title": "水箱", "content": "正文", "summary": "摘要"}])))
     db.expire_all()
     p = db.get(Page, "p1")
     assert p.wiki_dirty is False
@@ -126,12 +126,12 @@ def test_new_page_llm_unavailable_then_recovers(db):
 def test_page_topic_migration_reconciles_sources(db):
     p = _page(db, "p1", "水箱", "水箱内容足够长", "engineering")
     db.commit()
-    _run(builder.build_wiki_from_pages(db, [p], llm_json=_mk_llm([{"action": "create", "title": "主题A", "content": "内容A", "summary": "a"}])))
+    _run(builder._legacy_build_wiki_from_pages(db, [p], llm_json=_mk_llm([{"action": "create", "title": "主题A", "content": "内容A", "summary": "a"}])))
     a = db.query(WikiPage).filter(WikiPage.title == "主题A").first()
     assert "p1" in json.loads(a.source_page_ids)
 
     # 主题迁移：A → B
-    _run(builder.build_wiki_from_pages(db, [p], llm_json=_mk_llm([{"action": "create", "title": "主题B", "content": "内容B", "summary": "b"}])))
+    _run(builder._legacy_build_wiki_from_pages(db, [p], llm_json=_mk_llm([{"action": "create", "title": "主题B", "content": "内容B", "summary": "b"}])))
     db.expire_all()
     a = db.query(WikiPage).filter(WikiPage.title == "主题A").first()
     b = db.query(WikiPage).filter(WikiPage.title == "主题B").first()
@@ -143,14 +143,14 @@ def test_page_topic_migration_reconciles_sources(db):
 def test_not_worthy_reconciles_sources(db):
     p = _page(db, "p1", "水箱", "水箱内容足够长", "engineering")
     db.commit()
-    _run(builder.build_wiki_from_pages(db, [p], llm_json=_mk_llm([{"action": "create", "title": "主题A", "content": "内容A", "summary": "a"}])))
+    _run(builder._legacy_build_wiki_from_pages(db, [p], llm_json=_mk_llm([{"action": "create", "title": "主题A", "content": "内容A", "summary": "a"}])))
     a = db.query(WikiPage).filter(WikiPage.title == "主题A").first()
     assert "p1" in json.loads(a.source_page_ids)
 
     # 显式 not_worthy → 解除来源，Wiki archived（唯一来源）
     async def _not_worthy(messages, context="", timeout=120.0):
         return {"worthy": False, "ops": []}
-    _run(builder.build_wiki_from_pages(db, [p], llm_json=_not_worthy))
+    _run(builder._legacy_build_wiki_from_pages(db, [p], llm_json=_not_worthy))
     db.expire_all()
     a = db.query(WikiPage).filter(WikiPage.title == "主题A").first()
     assert a.status == "archived"
@@ -162,9 +162,9 @@ def test_delete_one_of_multiple_sources_keeps_dirty(db):
     p1 = _page(db, "p1", "水箱一", "水箱内容一足够长", "engineering")
     p2 = _page(db, "p2", "水箱二", "水箱内容二足够长", "engineering")
     db.commit()
-    _run(builder.build_wiki_from_pages(db, [p1], llm_json=_mk_llm([{"action": "create", "title": "水箱", "content": "正文", "summary": "摘要"}])))
+    _run(builder._legacy_build_wiki_from_pages(db, [p1], llm_json=_mk_llm([{"action": "create", "title": "水箱", "content": "正文", "summary": "摘要"}])))
     # p2 也加入同一主题
-    _run(builder.build_wiki_from_pages(db, [p2], llm_json=_mk_llm([{"action": "update", "title": "水箱", "content": "正文", "summary": "摘要"}])))
+    _run(builder._legacy_build_wiki_from_pages(db, [p2], llm_json=_mk_llm([{"action": "update", "title": "水箱", "content": "正文", "summary": "摘要"}])))
     wp = db.query(WikiPage).filter(WikiPage.title == "水箱").first()
     assert set(json.loads(wp.source_page_ids)) == {"p1", "p2"}
 
@@ -181,7 +181,7 @@ def test_delete_one_of_multiple_sources_keeps_dirty(db):
 def test_notebook_scope_change_removes_from_old_scope(db):
     p = _page(db, "p1", "水箱", "水箱内容足够长", "engineering")
     db.commit()
-    _run(builder.build_wiki_from_pages(db, [p], llm_json=_mk_llm([{"action": "create", "title": "水箱", "content": "正文", "summary": "摘要"}])))
+    _run(builder._legacy_build_wiki_from_pages(db, [p], llm_json=_mk_llm([{"action": "create", "title": "水箱", "content": "正文", "summary": "摘要"}])))
     old_wp = db.query(WikiPage).filter(WikiPage.title == "水箱").first()
     assert old_wp.acl_scope == '{"groups": ["engineering"]}'
 
@@ -192,8 +192,8 @@ def test_notebook_scope_change_removes_from_old_scope(db):
     p.wiki_dirty = True
     db.commit()
 
-    # 用新 scope 重新构建（process_page_wiki 会检测 scope 变化）
-    _run(builder.build_wiki_from_pages(db, [p], llm_json=_mk_llm([{"action": "create", "title": "水箱", "content": "正文", "summary": "摘要"}])))
+    # 用新 scope 重新构建（_legacy_process_page_wiki 会检测 scope 变化）
+    _run(builder._legacy_build_wiki_from_pages(db, [p], llm_json=_mk_llm([{"action": "create", "title": "水箱", "content": "正文", "summary": "摘要"}])))
     db.expire_all()
     # 旧 engineering 域 Wiki 已 archived（无来源）
     old_wp = db.query(WikiPage).filter(WikiPage.title == "水箱", WikiPage.acl_scope == '{"groups": ["engineering"]}').first()
@@ -223,7 +223,7 @@ def test_stale_llm_result_discarded(db):
         db.commit()
         return {"ops": [{"action": "create", "title": "主题", "content": "旧结果", "summary": "s"}]}
 
-    _run(builder.build_wiki_from_pages(db, [p], llm_json=_slow_llm))
+    _run(builder._legacy_build_wiki_from_pages(db, [p], llm_json=_slow_llm))
     db.expire_all()
     p = db.get(Page, "p1")
     # 输入变化 → 旧结果丢弃，保持 dirty
@@ -237,7 +237,7 @@ def test_stale_llm_result_discarded(db):
 def test_no_source_wiki_cannot_be_published(db):
     p = _page(db, "p1", "水箱", "水箱内容足够长", "engineering")
     db.commit()
-    _run(builder.build_wiki_from_pages(db, [p], llm_json=_mk_llm([{"action": "create", "title": "水箱", "content": "正文", "summary": "摘要"}])))
+    _run(builder._legacy_build_wiki_from_pages(db, [p], llm_json=_mk_llm([{"action": "create", "title": "水箱", "content": "正文", "summary": "摘要"}])))
     wp = db.query(WikiPage).filter(WikiPage.title == "水箱").first()
     assert wp.status == "published"
 

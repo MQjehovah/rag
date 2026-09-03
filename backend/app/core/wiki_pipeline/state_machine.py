@@ -32,6 +32,7 @@ STAGE_TERMINAL = ("succeeded", "skipped", "cancelled")
 _TRIGGER_TYPES = (
     "page_changed", "page_deleted", "manual_rebuild",
     "skill_migration", "manual_edit",
+    "batch_rebuild",
 )
 
 # 转换表：current → {allowed new}。中心唯一事实来源。

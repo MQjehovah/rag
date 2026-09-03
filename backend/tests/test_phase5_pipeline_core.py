@@ -148,7 +148,22 @@ def test_register_default_pipeline_definition(wiki_pipeline):
     assert flags["schedule_graph"] == (True, False, False)
 
 
-def test_register_default_pipeline_duplicate_rejected(wiki_pipeline):
+def test_register_default_pipeline_duplicate_idempotent(wiki_pipeline):
+    # 契约十二：同 key+version+同定义重复注册 → 幂等返回，不抛。
+    register_default_pipeline()
+    pipe = registry.get_pipeline(PIPELINE_KEY, PIPELINE_VERSION)
+    assert pipe is not None and pipe.version == PIPELINE_VERSION
+    assert pipe.stage_keys() == list(STAGE_KEYS)
+
+
+def test_register_default_pipeline_conflict_definition_raises(wiki_pipeline):
+    # 已注册但定义（stage 序列）不同 → PipelineError（拒绝静默覆盖，启动应中止）。
+    registry.replace_for_test(registry.PipelineDef(
+        key=PIPELINE_KEY,
+        version=PIPELINE_VERSION,
+        stages=[registry.StageDef(key="resolve_context", version="1")],
+        allow_null_workspace=False,
+    ))
     with pytest.raises(registry.PipelineError):
         register_default_pipeline()
 

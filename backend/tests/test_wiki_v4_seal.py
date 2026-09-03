@@ -78,7 +78,7 @@ def test_pump_legacy_not_triggered_when_kill_off(monkeypatch):
 def test_mapreduce_limit_exceeded_no_final_synthesis(db):
     p1 = _page(db, "p1", "水箱", "水箱内容足够长", "engineering")
     db.commit()
-    _run(builder.build_wiki_from_pages(db, [p1], llm_json=lambda messages, context="", timeout=120.0: _identify_llm()))
+    _run(builder._legacy_build_wiki_from_pages(db, [p1], llm_json=lambda messages, context="", timeout=120.0: _identify_llm()))
     wp = db.query(WikiPage).filter(WikiPage.title == "主题").first()
     # 重新构造一个多来源 wiki 触发 mapreduce，且每层返回超长摘要
     # 直接调 _mapreduce_synthesize 验证 limit exceeded

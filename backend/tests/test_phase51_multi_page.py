@@ -1,7 +1,7 @@
 """Phase 5.1：多 Page 两阶段聚合 + 真实 Map-Reduce 覆盖。
 
 two_phase_build（legacy 识别 + wiki.default manual_rebuild CompileRun 聚合）应与旧
-build_wiki_from_pages(dedupe_synthesis=True) 等价：
+_legacy_build_wiki_from_pages(dedupe_synthesis=True) 等价：
 - 多个 Page 汇入同一 Wiki 只产生一次聚合 Revision（不产生中间 Revision）；
 - 超长多来源真实触发 Map-Reduce（wiki-batch-summary ×N + wiki-mapreduce ×1）；
 - 固定样本：最终 Wiki / current Revision / Section / source_page_ids 语义一致。

@@ -78,7 +78,7 @@ def test_http_401_maps_service_unavailable(db, monkeypatch):
         _run(b.call_wiki_llm_json([{"role": "user", "content": "x"}], context="wiki-synthesis"))
 
     # 通过正式 build 链路 → Page.wiki_last_error = service_unavailable
-    _run(b.build_wiki_from_pages(db, [p]))
+    _run(b._legacy_build_wiki_from_pages(db, [p]))
     db.expire_all()
     p = db.get(Page, "p1")
     assert p.wiki_last_error == "service_unavailable"
@@ -108,7 +108,7 @@ def test_http_timeout_maps_service_unavailable(db, monkeypatch):
     with pytest.raises(LLMServiceUnavailable):
         _run(b.call_wiki_llm_json([{"role": "user", "content": "x"}], context="wiki-synthesis"))
 
-    _run(b.build_wiki_from_pages(db, [p]))
+    _run(b._legacy_build_wiki_from_pages(db, [p]))
     db.expire_all()
     p = db.get(Page, "p1")
     assert p.wiki_last_error == "service_unavailable"
@@ -141,7 +141,7 @@ def test_http_200_illegal_json_maps_invalid_response(db, monkeypatch):
     monkeypatch.setattr(b.httpx, "AsyncClient", _Client)
 
     # 识别阶段返回非法 JSON → 空 dict → invalid_response
-    result = _run(b.build_wiki_from_pages(db, [p]))
+    result = _run(b._legacy_build_wiki_from_pages(db, [p]))
     db.expire_all()
     p = db.get(Page, "p1")
     assert p.wiki_last_error == "invalid_response"

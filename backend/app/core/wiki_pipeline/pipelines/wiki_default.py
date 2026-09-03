@@ -44,6 +44,7 @@ from app.core.knowledge_compiler_v3.wiki_page_builder import (
     WIKI_INGEST_PROMPT,
     _append_revision,
     _append_versioned_revision,
+    _create_wiki,
     _find_similar_wiki,
     _has_any_version_evidence,
     _identify_topics,
@@ -83,7 +84,9 @@ from app.core.wiki_pipeline.pipelines.dto import (
 from app.core.wiki_pipeline.registry import (
     FailureTransition,
     PipelineDef,
+    PipelineError,
     StageDef,
+    get_pipeline,
     register_pipeline,
     unregister_pipeline,
 )
@@ -107,6 +110,10 @@ ARTIFACT_TYPE_WIKI_PUBLISH_MANIFEST = "wiki_publish_manifest"
 ARTIFACT_SCHEMA_WIKI_PUBLISH = "wiki-publish/v1"
 MANIFEST_OBJECT_TYPE = "wiki_publish"
 
+# Phase 5.2 batch_rebuild：batch 输入 Artifact（create_batch_run 写入，resolve_context 读取）。
+ARTIFACT_TYPE_WIKI_BATCH_INPUT = "wiki_batch_input"
+ARTIFACT_SCHEMA_WIKI_BATCH = "wiki-batch/v1"
+
 # stage 契约 flag 参照（与 fake 对齐；全部非 cachable）。
 _STAGE_FLAGS = {
     "resolve_context": {"retryable": True, "allows_publish": False},
@@ -119,6 +126,21 @@ _STAGE_FLAGS = {
 }
 
 STAGE_KEYS = tuple(_STAGE_FLAGS)
+
+
+# ---------------------------------------------------------------------------
+# Phase 5.2 batch_rebuild：统一幂等 key helper（纯函数，无 db，供 A/C 复用）
+# ---------------------------------------------------------------------------
+
+
+def make_default_idempotency_key(*, workspace_id, trigger_type, trigger_object_id,
+                                 wiki_page_id, full_input_hash) -> str:
+    """wiki.default:v1:<sha256(workspace_id|trigger_type|trigger_object_id|wiki_page_id|full_input_hash)>"""
+    raw = "|".join([
+        workspace_id or "", trigger_type or "", trigger_object_id or "",
+        wiki_page_id or "", full_input_hash or "",
+    ])
+    return f"{PIPELINE_KEY}:v1:{hashlib.sha256(raw.encode('utf-8')).hexdigest()}"
 
 
 # ---------------------------------------------------------------------------
@@ -150,13 +172,18 @@ def _graph_runner(ctx):
     return _default_graph_runner
 
 
-def _default_graph_runner(*, wiki_page_id=None, page_id=None) -> bool:
-    """真实图谱 runner：**同步等待真实 rebuild 完成**（Phase 5.1）。
+def _default_graph_runner(*, wiki_page_id=None, page_id=None,
+                          remove_page=False, remove_wiki=False) -> bool:
+    """真实图谱 runner：**同步等待真实 rebuild/remove 完成**（Phase 5.1/5.2）。
 
-    用独立短生命周期 engine/session 调 v4_graph_builder.rebuild_wiki_graph /
-    rebuild_page_graph（幂等派生数据；内部自带事务 commit）。任一目标抛异常 →
-    向上抛（由 schedule_graph stage 捕获记 GRAPH_BUILD_FAILED，不回滚已发布
-    Revision）。返回 True = 全部目标真实重建完成。绝不以"提交后台任务"当成功。
+    用独立短生命周期 engine/session 调 v4_graph_builder：
+    - remove_wiki=True（删除上下文 archived 的 wiki）→ remove_wiki_graph；
+    - remove_page=True（删除上下文 page_remove）→ remove_page_graph（Page 行物理删除
+      后仍可调用，只依赖 graph 表）；
+    - 否则 → rebuild_wiki_graph / rebuild_page_graph（幂等派生数据）。
+    各写原语内部自带事务 commit。任一目标抛异常 → 向上抛（由 schedule_graph stage
+    捕获记 GRAPH_BUILD_FAILED，不回滚已发布 Revision）。返回 True = 全部目标真实
+    完成。绝不以"提交后台任务"当成功。
     """
     from app.config import settings
     from app.models.database import get_engine, get_session, init_db
@@ -170,10 +197,15 @@ def _default_graph_runner(*, wiki_page_id=None, page_id=None) -> bool:
             raise RuntimeError(f"graph init_db failed: {exc}") from exc
         db = get_session(engine)
         try:
-            if wiki_page_id:
-                _v4.rebuild_wiki_graph(db, wiki_page_id, commit=True)
-            if page_id:
-                _v4.rebuild_page_graph(db, page_id, commit=True)
+            if wiki_page_id and remove_wiki:
+                _v4.remove_wiki_graph(db, wiki_page_id, commit=True)
+            elif page_id and remove_page:
+                _v4.remove_page_graph(db, page_id, commit=True)
+            else:
+                if wiki_page_id:
+                    _v4.rebuild_wiki_graph(db, wiki_page_id, commit=True)
+                if page_id:
+                    _v4.rebuild_page_graph(db, page_id, commit=True)
         finally:
             db.close()
     finally:
@@ -249,6 +281,240 @@ def _content_guard_sig(db, wiki, page_ids) -> str | None:
     return hashlib.sha256(
         json.dumps(sig, ensure_ascii=False, sort_keys=True).encode("utf-8")
     ).hexdigest()
+
+
+def _page_full_hash(db, page_id: str) -> str:
+    """Page 确定性完整 input hash（与 _content_guard_sig 每页口径一致）。
+
+    batch 输入 Artifact / validate 前重算共用；Page 行缺失 → 空串（幂等确定性）。
+    """
+    p = db.get(Page, page_id)
+    if p is None:
+        return ""
+    scope = _page_scope(db, p)
+    acl = _scope_to_acl_json(scope) if scope else None
+    return _page_input_hash(
+        p.title or "", _page_text(db, p), p.notebook_id or "", acl or ""
+    )
+
+
+def _page_workspace_ok(db, page: Page, workspace_id: str | None) -> bool:
+    """Page 是否仍归属目标 workspace（无归属/错绑 → False，fail closed）。"""
+    if page is None:
+        return False
+    current = page_workspace_id(db, page)
+    return bool(current) and current == workspace_id
+
+
+def _page_current_hash_ok(db, page_id: str, expected_hash: str) -> bool:
+    """Page 当前完整 hash 是否与 batch 快照一致（跨 stage 窗口变化检测）。"""
+    return _page_full_hash(db, page_id) == (expected_hash or "")
+
+
+def _batch_input_hash(db, workspace_id: str, page_ids: list[str]) -> str:
+    """batch 确定性输入 hash = sha256(ws|有序 page_ids|每页完整 hash 拼接)。"""
+    raw = "|".join([
+        workspace_id or "",
+        "|".join(page_ids),
+        "".join(_page_full_hash(db, pid) for pid in page_ids),
+    ])
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def create_batch_run(db, *, workspace_id, page_ids, trigger_object_id=None,
+                     source_sync_run_id=None, input_hash=None, created_by=None):
+    """创建 wiki.default batch_rebuild run（每 Workspace 一个 batch Run 的入口）。
+
+    - page_ids 排序 + 去重；batch_input_hash 由调用方给 input_hash 时用之，否则按
+      `_batch_input_hash` 计算（覆盖每页完整 hash）。
+    - idempotency_key = make_default_idempotency_key(ws, batch_rebuild,
+      trigger_object_id or "", "", batch_input_hash)；同 key 命中 → 返回原 run（幂等，
+      不再写输入 Artifact、不触发抢占）。
+    - 写输入 Artifact：run 创建后、commit 前直接 ORM add Artifact(run_id,
+      artifact_type=wiki_batch_input, schema=wiki-batch/v1, stage_run_id=None)，
+      payload = {workspace_id, page_ids, page_input_hashes:{pid: full_hash}}。
+    - supersede_same_trigger=True：trigger_object_id 缺省取 workspace_id（每 Workspace
+      单 batch run，新 batch 抢占旧 queued/running/failed batch）。
+    返回 run（不 commit，由调用方提交，保证与调用方事务边界一致）。
+    """
+    from app.core.wiki_pipeline.executor import (
+        compute_artifact_content_hash,
+        create_run,
+    )
+    from app.models.database import KnowledgeCompileRun as CompileRun
+
+    ids = sorted({p for p in page_ids})
+    if not ids:
+        raise ValueError("create_batch_run: page_ids 不得为空")
+    if not workspace_id:
+        raise ValueError("create_batch_run: workspace_id 必须非空")
+    batch_hash = input_hash or _batch_input_hash(db, workspace_id, ids)
+    effective_object_id = trigger_object_id or workspace_id
+    key = make_default_idempotency_key(
+        workspace_id=workspace_id,
+        trigger_type="batch_rebuild",
+        trigger_object_id=effective_object_id,
+        wiki_page_id="",
+        full_input_hash=batch_hash,
+    )
+    existing = (
+        db.query(CompileRun)
+        .filter(CompileRun.idempotency_key == key)
+        .first()
+    )
+    if existing is not None:
+        return existing
+
+    run = create_run(
+        db,
+        pipeline_key=PIPELINE_KEY,
+        trigger_type="batch_rebuild",
+        trigger_object_id=effective_object_id,
+        source_sync_run_id=source_sync_run_id,
+        workspace_id=workspace_id,
+        input_hash=batch_hash,
+        idempotency_key=key,
+        supersede_same_trigger=True,
+        created_by=created_by,
+    )
+    payload = {
+        "workspace_id": workspace_id,
+        "page_ids": ids,
+        "page_input_hashes": {pid: _page_full_hash(db, pid) for pid in ids},
+    }
+    db.add(Artifact(
+        run_id=run.id,
+        stage_run_id=None,
+        artifact_type=ARTIFACT_TYPE_WIKI_BATCH_INPUT,
+        schema_version=ARTIFACT_SCHEMA_WIKI_BATCH,
+        content_hash=compute_artifact_content_hash(
+            payload, ARTIFACT_TYPE_WIKI_BATCH_INPUT, ARTIFACT_SCHEMA_WIKI_BATCH
+        ),
+        payload_json=json.dumps(payload, ensure_ascii=False, sort_keys=True),
+    ))
+    return run
+
+
+def read_batch_input_artifact(db, run_id: str) -> dict | None:
+    """读本 run 最新 wiki_batch_input Artifact payload（resolve_context batch 用）。"""
+    row = (
+        db.query(Artifact)
+        .filter(
+            Artifact.run_id == run_id,
+            Artifact.artifact_type == ARTIFACT_TYPE_WIKI_BATCH_INPUT,
+        )
+        .order_by(Artifact.created_at.desc())
+        .first()
+    )
+    if row is None or not row.payload_json:
+        return None
+    try:
+        payload = json.loads(row.payload_json)
+    except (TypeError, ValueError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+ARTIFACT_TYPE_WIKI_PAGE_DELETED_INPUT = "wiki_page_deleted_input"
+ARTIFACT_SCHEMA_WIKI_PAGE_DELETED = "wiki-page-deleted/v1"
+
+
+def _read_page_deleted_artifact(db, run_id: str) -> dict | None:
+    """读本 run 最新 wiki_page_deleted_input Artifact payload（resolve 恢复用）。
+
+    严格契约：artifact_type 与 schema_version 必须同时匹配（wiki-page-deleted/v1），
+    任一不符 → None（fail closed：run 会以 deletion_artifact_missing 失败，不静默恢复）。
+    """
+    row = (
+        db.query(Artifact)
+        .filter(
+            Artifact.run_id == run_id,
+            Artifact.artifact_type == ARTIFACT_TYPE_WIKI_PAGE_DELETED_INPUT,
+            Artifact.schema_version == ARTIFACT_SCHEMA_WIKI_PAGE_DELETED,
+        )
+        .order_by(Artifact.created_at.desc())
+        .first()
+    )
+    if row is None or not row.payload_json:
+        return None
+    try:
+        payload = json.loads(row.payload_json)
+    except (TypeError, ValueError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def create_page_deleted_run(db, *, page_id, workspace_id=None, notebook_id=None,
+                            source_wiki_ids=None, page_input_hash="",
+                            source_sync_run_id=None, created_by=None):
+    """创建 page_deleted CompileRun 并持久化 deletion input Artifact（Phase 5.2）。
+
+    在 Page 物理删除前调用（Page 行仍在，可解析 workspace / 查来源 Wiki）。run 入队后由
+    worker 泵消费；resolve_context 在 Page 行已删时从 Artifact 恢复来源上下文，publish
+    真实移除来源（唯一来源 archived / 多来源置 dirty 并触发重建），不产生 no-op。
+    """
+    from app.core.wiki_pipeline.executor import (
+        compute_artifact_content_hash,
+        create_run as _exec_create_run,
+    )
+    from app.models.database import KnowledgeCompileRun as _CompileRun
+    import datetime as _dt
+
+    if source_wiki_ids is None:
+        _affected: set[str] = set()
+        for _wp in db.query(WikiPage).filter(WikiPage.source_page_ids.isnot(None)).all():
+            if page_id in _parse_source_pages(_wp.source_page_ids):
+                _affected.add(_wp.id)
+        source_wiki_ids = sorted(_affected)
+    deletion_hash = hashlib.sha256(
+        f"page_deleted:{page_id}:{workspace_id or ''}:{notebook_id or ''}".encode("utf-8")
+    ).hexdigest()
+    idem = make_default_idempotency_key(
+        workspace_id=workspace_id or "", trigger_type="page_deleted",
+        trigger_object_id=page_id or "", wiki_page_id="", full_input_hash=deletion_hash,
+    )
+    # 幂等（同 create_batch_run）：同 idempotency_key 命中 → 直接返回既有 run，
+    # 不重复 add deletion Artifact（防重复删除事件产生多条 artifact）。
+    _existing = (
+        db.query(_CompileRun)
+        .filter(_CompileRun.idempotency_key == idem)
+        .first()
+    )
+    if _existing is not None:
+        return _existing
+    run = _exec_create_run(
+        db,
+        pipeline_key=PIPELINE_KEY,
+        trigger_type="page_deleted",
+        trigger_object_id=page_id,
+        workspace_id=workspace_id,
+        source_sync_run_id=source_sync_run_id,
+        input_hash=deletion_hash,
+        idempotency_key=idem,
+        supersede_same_trigger=True,
+        created_by=created_by,
+    )
+    payload = {
+        "page_id": page_id,
+        "workspace_id": workspace_id,
+        "notebook_id": notebook_id,
+        "source_wiki_ids": list(source_wiki_ids or []),
+        "page_input_hash": page_input_hash or "",
+        "deletion_hash": deletion_hash,
+    }
+    db.add(Artifact(
+        run_id=run.id,
+        stage_run_id=None,
+        artifact_type=ARTIFACT_TYPE_WIKI_PAGE_DELETED_INPUT,
+        schema_version=ARTIFACT_SCHEMA_WIKI_PAGE_DELETED,
+        object_type="page_deleted",
+        object_id=page_id,
+        content_hash=compute_artifact_content_hash(
+            payload, ARTIFACT_TYPE_WIKI_PAGE_DELETED_INPUT, ARTIFACT_SCHEMA_WIKI_PAGE_DELETED),
+        payload_json=json.dumps(payload, ensure_ascii=False),
+        created_at=_dt.datetime.now(),
+    ))
+    return run
 
 
 # ---------------------------------------------------------------------------
@@ -445,8 +711,9 @@ def _publish_manifest(state: dict) -> dict:
     """把 publish outcome + context 归一为 Publish Manifest payload（只存 ID/状态）。
 
     outcome/fail_code 判定表见 _classify_publish_note；fail_code 决定 finalize 是否使
-    Run failed。graph_targets 只在真实发布（published）时生成，供 schedule_graph 同步
-    重建与 retry 恢复全部目标（wiki + page）。
+    Run failed。graph_targets 在真实发布（published）时生成，供 schedule_graph 同步
+    重建与 retry 恢复全部目标（wiki + page）；page_deleted 删除清理也生成可追踪
+    graph_targets（page_remove + 受影响 wiki），供 schedule_graph 做 remove 语义。
     """
     publish = state.get("publish") or {}
     context = state.get("context") or {}
@@ -461,6 +728,19 @@ def _publish_manifest(state: dict) -> dict:
         ]
         if context.get("trigger_type") == "page_changed" and page_id:
             graph_targets.append({"kind": "page", "page_id": page_id})
+    elif context.get("trigger_type") == "page_deleted" and page_id and note in (
+        "page_deleted_remove_source", "page_deleted_no_remaining",
+    ):
+        # 删除清理成功：图谱目标可追踪 —— page_remove 清理该 Page 的全部图谱证据；
+        # 受影响 wiki（archived ∪ dirty ∪ artifact 声明来源全集）记 wiki target，
+        # schedule_graph 依 wiki 终态决定 remove_wiki / stale_deferred（不重建复活旧内容）。
+        affected: set[str] = set(publish.get("archived_wiki_ids") or [])
+        affected.update(publish.get("dirty_wiki_ids") or [])
+        affected.update(context.get("deletion_source_wiki_ids") or [])
+        graph_targets = [{"kind": "page_remove", "page_id": page_id}]
+        graph_targets.extend(
+            {"kind": "wiki", "wiki_page_id": wid} for wid in sorted(affected)
+        )
     return {
         "outcome": outcome,
         "fail_code": fail_code,
@@ -497,8 +777,10 @@ def _classify_publish_note(note: str, publish: dict) -> tuple[str, str | None]:
     - decision_invalid_response_keep_dirty、
       rebuild_keep_dirty:invalid_response（含未知子因兜底）  → keep_dirty + INVALID_RESPONSE
     - not_worthy*                                           → not_worthy
+    - deletion_artifact_missing/deletion_artifact_invalid    → keep_dirty + VALIDATION_FAILED
+      （删除上下文缺失/损坏/身份不一致：fail closed，run failed 而非静默 succeeded）
     - page_deleted 语义（真实移除分支）                       → archived / noop
-    - page_deleted_no_write / 目标不存在等                   → not_applicable
+    - 目标不存在等（page_not_found/wiki_not_found）           → not_applicable
     - 其它（含幂等重放 skip、noop_decision_*）               → noop
     """
     n = note or ""
@@ -526,10 +808,14 @@ def _classify_publish_note(note: str, publish: dict) -> tuple[str, str | None]:
         return OUTCOME_KEEP_DIRTY, FAIL_INVALID_RESPONSE
     if n.startswith("not_worthy"):
         return OUTCOME_NOT_WORTHY, None
+    if n in ("deletion_artifact_missing", "deletion_artifact_invalid") or \
+            n.startswith("deletion_artifact_"):
+        # 删除上下文缺失/损坏/身份不一致 → fail closed：run 必须 failed 带 fail_code，
+        # 绝不作为 not_applicable succeeded。页面已不存在时没有可 dirty 的 Page，
+        # KEEP_DIRTY 仅作结果标记，重点是 finalize 依据 fail_code 使 run failed。
+        return OUTCOME_KEEP_DIRTY, FAIL_VALIDATION_FAILED
     if n in ("page_deleted_remove_source", "page_deleted_during_publish"):
         return (OUTCOME_ARCHIVED, None) if archived_count else (OUTCOME_NOOP, None)
-    if n == "page_deleted_no_write":
-        return OUTCOME_NOT_APPLICABLE, None
     if n in ("page_not_found", "wiki_not_found") or n.startswith("unsupported_trigger"):
         return OUTCOME_NOT_APPLICABLE, None
     return OUTCOME_NOOP, None
@@ -569,6 +855,8 @@ def _stage_resolve_context(db, run, stage_row, ctx) -> dict:
 
     if trigger == "manual_rebuild":
         context = _resolve_context_manual(db, run)
+    elif trigger == "batch_rebuild":
+        context = _resolve_context_batch(db, run)
     elif trigger in ("page_changed", "page_deleted"):
         context = _resolve_context_page(db, run)
     else:
@@ -587,6 +875,7 @@ def _stage_resolve_context(db, run, stage_row, ctx) -> dict:
             "page_id": context.get("page_id"),
             "wiki_page_id": context.get("wiki_page_id"),
             "workspace_id": context.get("workspace_id"),
+            "batch_page_count": len(context.get("page_ids") or ()),
         },
     }
 
@@ -617,10 +906,127 @@ def _resolve_context_manual(db, run) -> dict:
     ).to_dict()
 
 
+def _resolve_context_batch(db, run) -> dict:
+    """batch_rebuild：读 wiki_batch_input Artifact → 恢复 page_ids / 每页 input_hash。
+
+    校验每个 Page 仍存在、scope 可解析且归属 run.workspace（fail closed）；不逐页建
+    draft/membership（batch 识别统一在 topic_route 汇总，写只在 publish）。
+    """
+    payload = read_batch_input_artifact(db, run.id)
+    if payload is None:
+        return ResolveContext(
+            applicable=False, reason="batch_input_artifact_missing",
+            trigger_type=run.trigger_type, input_hash=run.input_hash or "",
+        ).to_dict()
+    workspace_id = payload.get("workspace_id")
+    if workspace_id and run.workspace_id and workspace_id != run.workspace_id:
+        return ResolveContext(
+            applicable=False, reason="workspace_mismatch",
+            trigger_type=run.trigger_type, input_hash=run.input_hash or "",
+        ).to_dict()
+    page_ids = sorted({p for p in (payload.get("page_ids") or [])})
+    if not page_ids:
+        return ResolveContext(
+            applicable=False, reason="batch_no_pages",
+            trigger_type=run.trigger_type, input_hash=run.input_hash or "",
+        ).to_dict()
+    page_hashes = payload.get("page_input_hashes") or {}
+    ws = run.workspace_id or workspace_id
+    for pid in page_ids:
+        page = db.get(Page, pid)
+        if page is None:
+            return ResolveContext(
+                applicable=False, reason="page_not_found",
+                trigger_type=run.trigger_type, page_id=pid, input_hash=run.input_hash or "",
+                page_ids=tuple(page_ids), page_input_hashes=dict(page_hashes),
+            ).to_dict()
+        scope = _page_scope(db, page)
+        if scope is None:
+            return ResolveContext(
+                applicable=False, reason="no_scope",
+                trigger_type=run.trigger_type, page_id=pid, input_hash=run.input_hash or "",
+                page_ids=tuple(page_ids), page_input_hashes=dict(page_hashes),
+            ).to_dict()
+        if not _page_workspace_ok(db, page, ws):
+            return ResolveContext(
+                applicable=False, reason="workspace_mismatch",
+                trigger_type=run.trigger_type, page_id=pid, input_hash=run.input_hash or "",
+                page_ids=tuple(page_ids), page_input_hashes=dict(page_hashes),
+            ).to_dict()
+    return ResolveContext(
+        applicable=True, reason="",
+        trigger_type=run.trigger_type,
+        workspace_id=ws, input_hash=run.input_hash or "",
+        page_ids=tuple(page_ids), page_input_hashes=dict(page_hashes),
+    ).to_dict()
+
+
+def _is_full_sha256(value) -> bool:
+    """deletion_hash 等完整 64hex 校验（严格小写 16 进制）。"""
+    if not isinstance(value, str) or len(value) != 64:
+        return False
+    return all(c in "0123456789abcdef" for c in value)
+
+
+def _resolve_page_deleted_from_artifact(db, run) -> dict:
+    """page_deleted 且 Page 行已物理删除：从 wiki_page_deleted_input Artifact 恢复上下文。
+
+    - Artifact 缺失 → deletion_artifact_missing（fail closed，绝不 no-op succeeded）；
+    - payload 身份/形状/指纹校验失败 → deletion_artifact_invalid（fail closed）；
+    - 校验通过 → applicable=True 恢复 workspace/notebook/source_wiki_ids/deletion_hash，
+      publish 据此执行真实来源移除（唯一来源 archived / 多来源 dirty+draft）。
+    """
+    payload = _read_page_deleted_artifact(db, run.id)
+    if payload is None:
+        return ResolveContext(
+            applicable=False, reason="deletion_artifact_missing",
+            trigger_type=run.trigger_type, page_id=run.trigger_object_id,
+            page_exists=False,
+        ).to_dict()
+    page_id = payload.get("page_id")
+    payload_ws = payload.get("workspace_id")
+    source_wiki_ids = payload.get("source_wiki_ids")
+    deletion_hash = payload.get("deletion_hash")
+    valid = True
+    if page_id != run.trigger_object_id:
+        valid = False
+    if run.workspace_id is not None and (payload_ws or None) != run.workspace_id:
+        valid = False
+    if not isinstance(source_wiki_ids, list) or not all(
+        isinstance(w, str) and w for w in source_wiki_ids
+    ):
+        valid = False
+    if not _is_full_sha256(deletion_hash):
+        valid = False
+    if not valid:
+        return ResolveContext(
+            applicable=False, reason="deletion_artifact_invalid",
+            trigger_type=run.trigger_type, page_id=run.trigger_object_id,
+            page_exists=False,
+        ).to_dict()
+    notebook_id = payload.get("notebook_id")
+    ws_id = run.workspace_id or (payload_ws or None)
+    return ResolveContext(
+        applicable=True, reason="",
+        trigger_type=run.trigger_type,
+        page_id=page_id,
+        workspace_id=ws_id,
+        notebook_id=notebook_id,
+        notebook_id_restored=notebook_id or "",
+        deletion_source_wiki_ids=tuple(sorted({str(w) for w in source_wiki_ids})),
+        deletion_hash=str(deletion_hash),
+        source_sync_run_id=run.source_sync_run_id,
+        input_hash=run.input_hash or str(deletion_hash),
+        page_exists=False,
+    ).to_dict()
+
+
 def _resolve_context_page(db, run) -> dict:
-    """page_changed/page_deleted：读 Page → Notebook scope → workspace → input_hash。"""
+    """page_changed/page_deleted：Page 行在 → 读 Page；page_deleted 行已删 → artifact 恢复。"""
     page = db.get(Page, run.trigger_object_id) if run.trigger_object_id else None
     if page is None:
+        if run.trigger_type == "page_deleted":
+            return _resolve_page_deleted_from_artifact(db, run)
         return ResolveContext(
             applicable=False, reason="page_not_found",
             trigger_type=run.trigger_type, page_id=run.trigger_object_id,
@@ -677,14 +1083,24 @@ def _stage_topic_route(db, run, stage_row, ctx) -> dict:
     trigger = run.trigger_type
 
     if not _context_ok(context):
+        # artifact 缺失/损坏/身份不一致 → 保留 reason（deletion_artifact_*），
+        # 由 publish/classify 转成 run failed（fail closed），绝不判 page_deleted。
         decision = TopicDecision(status="not_applicable", note=context.get("reason") or "not_applicable")
     elif trigger == "page_deleted":
+        # 上下文可用（含 Page 行已删但从 deletion artifact 恢复的场景）→ 一律走真实
+        # 删除语义（remove_source）；不再因 page_exists=False 判 not_applicable。
         decision = TopicDecision(
-            status="page_deleted" if context.get("page_exists") else "not_applicable",
-            note="deletion trigger resolved on deletion",
+            status="page_deleted",
+            note=("deletion trigger resolved on deletion"
+                  if context.get("page_exists") else "deletion_resolved_from_artifact"),
         )
     elif trigger == "manual_rebuild":
         decision = TopicDecision(status="rebuild_wiki", note="rebuild dirty wiki")
+    elif trigger == "batch_rebuild":
+        # 逐 Page 路由（LLM wiki-ingest-page），只读不写；批量识别统一交给 synthesize 汇总。
+        page_decisions = _route_batch_pages(db, run, context, ctx)
+        state.setdefault("batch", {})["pages"] = page_decisions
+        decision = _aggregate_batch_topic(page_decisions)
     else:
         decision = _route_page_topic(db, run, context, ctx)
 
@@ -697,6 +1113,99 @@ def _stage_topic_route(db, run, stage_row, ctx) -> dict:
             "op_count": len(decision.ops),
         },
     }
+
+
+def _aggregate_batch_topic(page_decisions: list[dict]) -> TopicDecision:
+    """把 batch 逐 Page 决策汇总为一个 TopicDecision（批量 status=batch_routed）。"""
+    total_ops: list[dict] = []
+    fatal = {"service_unavailable", "invalid_response", "no_scope",
+             "no_workspace", "page_deleted"}
+    statuses = {d.get("status") for d in page_decisions}
+    for d in page_decisions:
+        total_ops.extend(d.get("ops") or [])
+    if not page_decisions:
+        status = "not_applicable"
+    elif statuses & {"service_unavailable"}:
+        status = "service_unavailable"
+    elif statuses & {"invalid_response"}:
+        status = "invalid_response"
+    elif statuses & {"no_scope", "no_workspace"}:
+        status = "not_applicable"
+    elif statuses & {"page_deleted"}:
+        status = "batch_deleted"
+    elif all(s in ("not_worthy", "not_applicable") for s in statuses):
+        status = "not_worthy"
+    else:
+        status = "batch_routed"
+    return TopicDecision(
+        status=status,
+        ops=total_ops[: MAX_TOPICS_PER_PAGE * max(len(page_decisions), 1)],
+        note=f"batch pages={len(page_decisions)} fatal={bool(statuses & fatal)}",
+    )
+
+
+def _route_batch_pages(db, run, context: dict, ctx) -> list[dict]:
+    """batch topic_route：对每个 page_id 调一次 ingest LLM，汇总 decisions（不写 DB）。
+
+    单 Page 缺 scope/workspace → fail closed（no_scope/no_workspace）；行已删 →
+    page_deleted；内容过短 → not_worthy（不调 LLM）。LLM 服务不可用 → 级联短路剩余
+    Page（避免逐页超时），整批 keep dirty。
+    """
+    decisions: list[dict] = []
+    page_hashes = context.get("page_input_hashes") or {}
+    workspace_id = context.get("workspace_id")
+    llm_down = False
+    for pid in context.get("page_ids") or ():
+        page = db.get(Page, pid)
+        if page is None:
+            decisions.append({
+                "page_id": pid, "status": "page_deleted", "ops": [],
+                "note": "page_deleted", "scope_acl_json": None, "workspace_id": workspace_id,
+                "input_hash": page_hashes.get(pid) or "",
+            })
+            continue
+        scope = _page_scope(db, page)
+        if scope is None:
+            decisions.append({
+                "page_id": pid, "status": "no_scope", "ops": [],
+                "note": "no_scope", "scope_acl_json": None, "workspace_id": workspace_id,
+                "input_hash": page_hashes.get(pid) or "",
+            })
+            continue
+        scope_acl = _scope_to_acl_json(scope)
+        if not _page_workspace_ok(db, page, workspace_id):
+            decisions.append({
+                "page_id": pid, "status": "no_workspace", "ops": [],
+                "note": "no_workspace_binding", "scope_acl_json": scope_acl,
+                "workspace_id": workspace_id, "input_hash": page_hashes.get(pid) or "",
+            })
+            continue
+        page_snap = {
+            "page_id": pid,
+            "title": page.title or "无标题",
+            "content_text": _page_text(db, page),
+            "scope_acl_json": scope_acl,
+            "workspace_id": workspace_id,
+            "input_hash": page_hashes.get(pid) or "",
+        }
+        content_text = page_snap["content_text"]
+        if llm_down and len(content_text.strip()) >= MIN_CONTENT_CHARS:
+            # 服务级级联失败：剩余可路由 Page 不再逐页调用（避免 N 次超时）。
+            decisions.append({
+                "page_id": pid, "status": "service_unavailable", "ops": [],
+                "note": "cascade_llm_down", "scope_acl_json": scope_acl,
+                "workspace_id": workspace_id, "input_hash": page_snap["input_hash"],
+            })
+            continue
+        dec = _route_page_topic(db, run, page_snap, ctx)
+        if dec.status == "service_unavailable":
+            llm_down = True
+        decisions.append({
+            "page_id": pid, "status": dec.status, "ops": list(dec.ops),
+            "note": dec.note, "scope_acl_json": scope_acl,
+            "workspace_id": workspace_id, "input_hash": page_snap["input_hash"],
+        })
+    return decisions
 
 
 def _route_page_topic(db, run, context: dict, ctx) -> TopicDecision:
@@ -837,6 +1346,23 @@ def _stage_synthesize_default(db, run, stage_row, ctx) -> dict:
         state["synthesis"] = synthesis.to_dict()
         return {"ok": True, "metrics": {"stage": "synthesize_default", "status": synthesis.status}}
 
+    if run.trigger_type == "batch_rebuild":
+        result = _synthesize_batch_stage(db, context, ctx)
+        state["synthesis"] = result.to_dict()
+        ok_count = sum(
+            1 for t in result.targets
+            if (state.get("batch") or {}).get("synth", {}).get(t.get("key"), {}).get("published_ready")
+        )
+        return {
+            "ok": True,
+            "metrics": {
+                "stage": "synthesize_default",
+                "status": result.status,
+                "target_count": len(result.targets),
+                "ok_count": ok_count,
+            },
+        }
+
     if decision.status in ("not_applicable", "page_deleted", "not_worthy",
                            "invalid_response", "service_unavailable"):
         synthesis = SynthesisResult(status="not_required", note=f"decision_{decision.status}")
@@ -908,6 +1434,120 @@ def _synthesize_create_update(db, context: dict, decision: TopicDecision, ctx) -
         elif entry is not None:
             synthesized[target["norm_title"]] = entry  # 记录失败原因供 publish 判定
     status = "success" if ok_count else ("not_required" if not targets else "invalid_response")
+    return SynthesisResult(status=status, targets=targets, synthesized=synthesized)
+
+
+# ---------------------------------------------------------------------------
+# batch_rebuild：汇总 planning（read-only）+ 一次合成 per 受影响 wiki
+# ---------------------------------------------------------------------------
+
+
+def _plan_batch_targets(db, context: dict, create_pages: list[dict]) -> list[dict]:
+    """把 batch 全部 create_update ops 去重为发布目标（scope × norm_title 唯一）。
+
+    现 wiki 标题匹配 → update（existing_id + 既有来源）；无相似 → create 目标
+    （batch 内不建行，publish 统一建）。source_page_ids = 既有来源 ∪ 本批 contributor。
+    """
+    ws = context.get("workspace_id")
+    scope_wiki_cache: dict[str, dict] = {}
+    by_key: dict[str, dict] = {}
+    for dec in create_pages:
+        pid = dec.get("page_id")
+        scope_acl = dec.get("scope_acl_json")
+        if not pid or not scope_acl:
+            continue
+        if scope_acl not in scope_wiki_cache:
+            scope_wiki_cache[scope_acl] = _load_scope_wikis_from_snapshot(db, scope_acl, ws)
+        wikis = scope_wiki_cache[scope_acl]
+        for op in (dec.get("ops") or [])[:MAX_TOPICS_PER_PAGE]:
+            action = op.get("action")
+            title = (op.get("title") or "").strip()
+            if not title or action not in ("create", "update"):
+                continue
+            category = (op.get("category") or "").strip()[:128]
+            norm = normalize_wiki_title(title)
+            existing = _find_similar_wiki(norm, wikis)
+            key = f"{scope_acl}\x1f{norm}"
+            if key not in by_key:
+                if existing is not None:
+                    t_title = existing.get("title") or title
+                    t_category = category or existing.get("category") or DEFAULT_CATEGORY
+                else:
+                    t_title = title
+                    t_category = category or DEFAULT_CATEGORY
+                by_key[key] = {
+                    "key": key,
+                    "action": "update" if existing is not None else "create",
+                    "norm_title": norm,
+                    "title": t_title,
+                    "category": t_category,
+                    "scope_acl_json": scope_acl,
+                    "workspace_id": ws,
+                    "existing_id": existing["id"] if existing is not None else None,
+                    "source_page_ids": [],
+                    "page_ids": [],
+                }
+            t = by_key[key]
+            if pid not in t["page_ids"]:
+                t["page_ids"].append(pid)
+            if category and not t["category"]:
+                t["category"] = category
+    for t in by_key.values():
+        existing_id = t["existing_id"]
+        existing_srcs: list[str] = []
+        if existing_id:
+            row = db.get(WikiPage, existing_id)
+            if row is not None:
+                existing_srcs = _parse_source_pages(row.source_page_ids)
+                t["title"] = row.title or t["title"]
+                t["category"] = row.category or t["category"] or DEFAULT_CATEGORY
+            else:
+                t["existing_id"] = None
+                t["action"] = "create"
+        t["source_page_ids"] = sorted(set(existing_srcs) | set(t["page_ids"]))
+        t["page_ids"] = sorted(set(t["page_ids"]))
+    return list(by_key.values())
+
+
+def _synthesize_batch_stage(db, context: dict, ctx) -> SynthesisResult:
+    """batch synthesize：汇总 ops → 去重目标 → 每个受影响 wiki 只合成一次。
+
+    - 任一 Page LLM 级失败（service_unavailable/invalid_response）或结构失败
+      （no_scope/no_workspace）→ 记 batch fatal，整批不合成不发布（publish 置 dirty）。
+    - create 目标不建 Wiki 行；对 update 目标读现有来源，多来源真实走 mapreduce。
+    """
+    state = ctx["state"]
+    batch = state.setdefault("batch", {})
+    decisions = batch.get("pages") or []
+    fatal = None
+    for d in decisions:
+        if d.get("status") in ("service_unavailable", "invalid_response",
+                               "no_scope", "no_workspace"):
+            fatal = d.get("status")
+            break
+    batch["fatal"] = fatal
+    if fatal is not None:
+        return SynthesisResult(status="not_required", note=f"batch_{fatal}")
+    create_pages = [d for d in decisions if d.get("status") == "create_update"]
+    if not create_pages:
+        return SynthesisResult(status="not_required", note="no_worthy_pages")
+    targets = _plan_batch_targets(db, context, create_pages)
+    batch["targets"] = targets
+    if not targets:
+        return SynthesisResult(status="not_required", note="no_targets")
+    synthesized: dict = {}
+    ok_count = 0
+    for t in targets:
+        pages = _load_pages(db, t.get("source_page_ids") or [])
+        standin = _standin_wiki(t, db, context.get("workspace_id"))
+        entry = _synthesize_entry(db, t, pages, standin, context, ctx)
+        if entry is None:
+            continue
+        synthesized[t["key"]] = entry
+        if entry.get("published_ready"):
+            ok_count += 1
+    batch["synth"] = synthesized
+    status = "success" if ok_count else ("invalid_response" if targets else "not_required")
     return SynthesisResult(status=status, targets=targets, synthesized=synthesized)
 
 
@@ -1121,6 +1761,8 @@ def _stage_publish_default(db, run, stage_row, ctx) -> dict:
 
     if trigger == "page_deleted":
         return _finish_publish(ctx, _publish_page_deleted(db, context, status, ctx))
+    if trigger == "batch_rebuild":
+        return _finish_publish(ctx, _publish_batch(db, run, context, outcome, ctx))
     if status in ("service_unavailable", "invalid_response"):
         _keep_page_dirty(db, context, status)
         outcome["kept_dirty"] = 1
@@ -1137,10 +1779,21 @@ def _stage_publish_default(db, run, stage_row, ctx) -> dict:
 
 
 def _publish_page_deleted(db, context: dict, decision_status: str, ctx) -> dict:
-    """page_deleted：Page 行已删 → 无动作；仍在 → remove_source 语义（唯一来源 archived）。"""
+    """page_deleted：上下文可用时真实 remove_source（唯一来源 archived / 多来源 dirty）。
+
+    绝不以 page_exists=False 作为 no-op 成功的理由：Page 行已删但 artifact 恢复了
+    上下文 → 仍执行真实来源移除（_safe_remove_source_page 只依赖 WikiPage 来源字段，
+    不依赖 Page 行）。实际移除为空但 artifact 声明过来源（重复清理幂等）→ 仍记
+    page_deleted_remove_source（archived=0），classify 归 noop，属合法清理完成。
+    context 不可用（deletion_artifact_*）→ early-return 且 note 携带 reason，
+    由 classify 映射 fail_code 使 run 真实 failed。
+    """
     outcome = ctx["state"]["publish"]
-    if not context.get("page_exists"):
-        outcome.update({"applied": False, "note": "page_deleted_no_write"})
+    if not context.get("applicable"):
+        outcome.update({
+            "applied": False,
+            "note": context.get("reason") or f"noop_decision_{decision_status}",
+        })
         return {"ok": True, "metrics": {"stage": "publish_default", "note": outcome["note"]}}
     removal = _safe_remove_source_page(db, context.get("page_id") or "")
     outcome.update({
@@ -1434,6 +2087,271 @@ def _publish_create_update(db, run, context, decision, synthesis, outcome: dict,
     }
 
 
+_BATCH_FATAL_LAST_ERROR = {
+    "service_unavailable": "service_unavailable",
+    "invalid_response": "invalid_response",
+    "no_scope": "no_workspace_binding",
+    "no_workspace": "no_workspace_binding",
+}
+
+
+def _publish_batch(db, run, context: dict, outcome: dict, ctx) -> dict:
+    """batch_rebuild 发布：每个受影响 wiki **只聚合发布一次**（无中间 Revision）。
+
+    - fatal（任一 Page LLM/结构失败）→ 整批 keep dirty、不发布（原子，与单 Page 同构）。
+    - create 目标统一 _create_wiki（scope 解析）；update 目标把本批 page 追加到
+      source_page_ids，随后各调一次 _publish_wiki_from_entry（真实聚合 Revision）。
+    - 页级 input hash 跨窗口守卫 + 成员关系 reconcile（page 只保留本批目标 wiki）。
+    写 wiki_publish_manifest（wiki_page_ids/revision_ids 覆盖本批全部）。
+    """
+    state = ctx["state"]
+    batch = state.get("batch") or {}
+    decisions = batch.get("pages") or []
+    targets = batch.get("targets") or []
+    synth = batch.get("synth") or {}
+    fatal = batch.get("fatal")
+    workspace_id = context.get("workspace_id")
+    page_hashes = context.get("page_input_hashes") or {}
+
+    by_pid = {d["page_id"]: d for d in decisions if d.get("page_id")}
+    create_update_pids = [pid for pid, d in by_pid.items() if d.get("status") == "create_update"]
+    not_worthy_pids = [pid for pid, d in by_pid.items() if d.get("status") == "not_worthy"]
+
+    def _set_page_errors(status_map: dict) -> int:
+        marked = 0
+        for pid, d in by_pid.items():
+            if d.get("status") == "page_deleted":
+                continue
+            page = db.get(Page, pid)
+            if page is None:
+                continue
+            page.wiki_dirty = True
+            page.wiki_last_error = status_map.get(d.get("status")) or "wiki_synthesis_failed"
+            marked += 1
+        return marked
+
+    if fatal is not None:
+        # 整批 keep dirty，不发布任何 Revision（原子，retry 可恢复）。
+        marked = _set_page_errors(_BATCH_FATAL_LAST_ERROR)
+        if fatal in ("no_scope", "no_workspace"):
+            note = "workspace_mismatch"
+        else:
+            note = f"decision_{fatal}_keep_dirty"
+        outcome.update({"applied": True, "kept_dirty": marked, "note": note})
+        return {"ok": True, "metrics": {"stage": "publish_default", "note": note,
+                                        "kept_dirty": marked}}
+
+    # —— 页级输入守卫（跨 run 创建→publish 窗口）：任一变 → 整批 keep dirty，不发布。
+    for pid in create_update_pids + not_worthy_pids:
+        page = db.get(Page, pid)
+        if page is None:
+            continue
+        if not _page_workspace_ok(db, page, workspace_id):
+            page.wiki_dirty = True
+            page.wiki_last_error = "scope_changed_during_llm"
+            marked = _set_page_errors({"create_update": "scope_changed_during_llm"})
+            outcome.update({"applied": True, "kept_dirty": marked, "note": "scope_changed_during_llm"})
+            return {"ok": True, "metrics": {"stage": "publish_default",
+                                            "note": "scope_changed_during_llm", "kept_dirty": marked}}
+        if not _page_current_hash_ok(db, pid, page_hashes.get(pid) or ""):
+            page.wiki_dirty = True
+            page.wiki_last_error = "input_changed_during_synthesis"
+            marked = _set_page_errors({"create_update": "input_changed_during_synthesis",
+                                       "not_worthy": "input_changed_during_synthesis"})
+            outcome.update({"applied": True, "kept_dirty": marked,
+                            "note": "input_changed_during_synthesis"})
+            return {"ok": True, "metrics": {"stage": "publish_default",
+                                            "note": "input_changed_during_synthesis",
+                                            "kept_dirty": marked}}
+
+    archived_wiki_ids: list[str] = []
+    dirty_wiki_ids: list[str] = []
+
+    # —— not_worthy pages：解除全部旧来源（无 membership 残留）。
+    for pid in not_worthy_pids:
+        removal = _safe_reconcile_membership(db, pid, set())
+        for wid in removal["archived_wiki_ids"]:
+            if wid not in archived_wiki_ids:
+                archived_wiki_ids.append(wid)
+        for wid in removal["dirty_remaining_wiki_ids"]:
+            if wid not in dirty_wiki_ids:
+                dirty_wiki_ids.append(wid)
+        page = db.get(Page, pid)
+        if page is not None:
+            page.wiki_dirty = False
+            page.wiki_compiled_content_hash = page_hashes.get(pid) or ""
+            page.wiki_last_error = None
+
+    # —— 1) 目标 wiki 行就位（update 追加 sources；create 新建 draft 行）——
+    partial = False
+    for t in targets:
+        entry = synth.get(t.get("key"))
+        if entry is None or not entry.get("published_ready"):
+            partial = True
+            reason = (entry or {}).get("fail_reason") or "no_synthesis"
+            for pid in t.get("page_ids") or []:
+                page = db.get(Page, pid)
+                if page is None:
+                    continue
+                page.wiki_dirty = True
+                page.wiki_last_error = reason
+            existing_id = t.get("existing_id")
+            if existing_id:
+                wiki = db.get(WikiPage, existing_id)
+                if wiki is not None and wiki.id not in dirty_wiki_ids:
+                    wiki.dirty = True
+                    wiki.status = "draft"
+                    dirty_wiki_ids.append(wiki.id)
+            t["wiki_id"] = existing_id
+            continue
+        source_ids = sorted({i for i in (entry.get("source_page_ids") or []) if i})
+        if t.get("action") == "create" and not t.get("existing_id"):
+            scope = _scope_from_acl_json(t.get("scope_acl_json"))
+            if scope.kind == access_control.SCOPE_UNKNOWN:
+                partial = True
+                for pid in t.get("page_ids") or []:
+                    page = db.get(Page, pid)
+                    if page is not None:
+                        page.wiki_dirty = True
+                        page.wiki_last_error = "unknown_scope"
+                continue
+            base_pid = next(iter(source_ids), None) or next(iter(t.get("page_ids") or []), None)
+            if base_pid is None:
+                partial = True
+                continue
+            wiki = _create_wiki(
+                db, scope, t.get("title") or "无标题", t.get("category") or DEFAULT_CATEGORY,
+                "", "", base_pid, workspace_id,
+            )
+            t["wiki_id"] = wiki.id
+            _set_source_pages(wiki, source_ids)
+        else:
+            wiki = db.get(WikiPage, t.get("existing_id")) if t.get("existing_id") else None
+            if wiki is None:
+                partial = True
+                t["wiki_id"] = None
+                continue
+            t["wiki_id"] = wiki.id
+            _set_source_pages(wiki, source_ids)
+
+    # —— 2) 成员关系 reconcile：本批 create_update page 只保留其目标 wiki ——
+    for pid in create_update_pids:
+        target_ids = {
+            t["wiki_id"] for t in targets
+            if t.get("wiki_id") and pid in (t.get("page_ids") or [])
+        }
+        membership = _safe_reconcile_membership(db, pid, target_ids)
+        for wid in membership["archived_wiki_ids"]:
+            if wid not in archived_wiki_ids:
+                archived_wiki_ids.append(wid)
+        for wid in membership["dirty_remaining_wiki_ids"]:
+            if wid not in dirty_wiki_ids:
+                dirty_wiki_ids.append(wid)
+
+    # —— 3) 每个受影响 wiki 只发布一次聚合 Revision ——
+    created = updated = 0
+    revisions: list[str] = []
+    published_wiki_ids: list[str] = []
+    published_target_keys: set[str] = set()
+    for t in targets:
+        entry = synth.get(t.get("key"))
+        if entry is None or not entry.get("published_ready"):
+            continue
+        wiki = db.get(WikiPage, t.get("wiki_id")) if t.get("wiki_id") else None
+        if wiki is None:
+            partial = True
+            continue
+        pages = _load_pages(db, entry.get("source_page_ids") or [])
+        if not pages:
+            partial = True
+            continue
+        if not _check_wiki_scope_ok(db, wiki, pages):
+            wiki.dirty = True
+            wiki.status = "draft"
+            if wiki.id not in dirty_wiki_ids:
+                dirty_wiki_ids.append(wiki.id)
+            partial = True
+            continue
+        rev_id = _publish_wiki_from_entry(db, wiki, pages, entry)
+        if rev_id is None:
+            if wiki.id not in dirty_wiki_ids:
+                dirty_wiki_ids.append(wiki.id)
+            partial = True
+            continue
+        revisions.append(rev_id)
+        published_wiki_ids.append(wiki.id)
+        published_target_keys.add(t.get("key"))
+        if t.get("action") == "create" and not t.get("existing_id"):
+            created += 1
+        else:
+            updated += 1
+
+    # —— 4) Page 状态收尾：全部目标 wiki 发布成功 + hash 未变 → 清 dirty ——
+    for pid in create_update_pids:
+        my_keys = [t.get("key") for t in targets if pid in (t.get("page_ids") or [])]
+        all_pub = bool(my_keys) and all(k in published_target_keys for k in my_keys)
+        page = db.get(Page, pid)
+        if page is None:
+            continue
+        if all_pub:
+            if _page_current_hash_ok(db, pid, page_hashes.get(pid) or ""):
+                page.wiki_dirty = False
+                page.wiki_compiled_content_hash = page_hashes.get(pid) or ""
+                page.wiki_last_error = None
+            else:
+                page.wiki_dirty = True
+                page.wiki_last_error = "input_changed_during_synthesis"
+                partial = True
+        else:
+            page.wiki_dirty = True
+            page.wiki_last_error = "wiki_synthesis_failed"
+            partial = True
+
+    if partial:
+        # 部分目标失败：不回填 output_revision_id（镜像单 Page partial_synthesis，
+        # retry 需重新 publish 未完成目标）。
+        outcome.update({
+            "applied": True,
+            "kept_dirty": 1,
+            "dirty_wiki_ids": sorted(set(dirty_wiki_ids)),
+            "archived_wiki_ids": sorted(set(archived_wiki_ids)),
+            "archived": len(archived_wiki_ids),
+            "revisions": revisions,
+            "wiki_page_ids": published_wiki_ids,
+            "output_revision_id": None,
+            "note": "partial_synthesis",
+        })
+        return {"ok": True, "metrics": {"stage": "publish_default", "note": "partial_synthesis",
+                                        "created": created, "updated": updated,
+                                        "revision_count": len(revisions)}}
+
+    output_revision_id = revisions[0] if len(revisions) == 1 else (revisions[-1] if revisions else None)
+    outcome.update({
+        "applied": True,
+        "created": created, "updated": updated,
+        "archived": len(archived_wiki_ids),
+        "archived_wiki_ids": sorted(set(archived_wiki_ids)),
+        "dirty_wiki_ids": sorted(set(dirty_wiki_ids)),
+        "revisions": revisions,
+        "wiki_page_ids": published_wiki_ids,
+        "output_revision_id": output_revision_id,
+    })
+    if revisions:
+        outcome["note"] = "published"
+    elif not_worthy_pids:
+        outcome["note"] = "not_worthy_cleanup"
+    else:
+        outcome["note"] = "noop_decision_batch"
+    return {
+        "ok": True,
+        "output_revision_id": output_revision_id,
+        "metrics": {"stage": "publish_default", "note": outcome["note"],
+                    "created": created, "updated": updated,
+                    "archived": len(archived_wiki_ids),
+                    "revision_count": len(revisions)},
+    }
+
+
 # ---------------------------------------------------------------------------
 # Stage 6: finalize_compile_outcome（Run 失败语义）
 # ---------------------------------------------------------------------------
@@ -1499,15 +2417,20 @@ def _read_manifest(db, run_id: str) -> dict | None:
 
 
 def _stage_schedule_graph(db, run, stage_row, ctx) -> dict:
-    """依据持久化 Publish Manifest 对全部 graph_target 同步真实重建图谱。
+    """依据持久化 Publish Manifest 对全部 graph_target 同步真实重建/清理图谱。
 
     publish 成功 → 读 Artifact manifest（重放 attempt 时 publish 幂等守卫未产新
-    manifest → 读上一 attempt 的）；对每个 target 用 graph_runner 真实构建：
-    {"kind": "wiki", "wiki_page_id"} → runner(wiki_page_id=...)；
-    {"kind": "page", "page_id"} → runner(page_id=...)。
+    manifest → 读上一 attempt 的）；对每个 target 用 graph_runner 真实执行：
+    - {"kind": "wiki", "wiki_page_id"} 且删除上下文（page_deleted）：
+      wiki 已 archived 或无剩余来源 → runner(wiki_page_id=..., remove_wiki=True)；
+      dirty/draft 且仍有剩余来源 → 跳过（stale_deferred，避免按旧 published
+      revision 内容重建复活被删页实体，留待 manual_rebuild 重建时清旧建新）；
+    - 非删除触发的 wiki target → runner(wiki_page_id=...)（原 rebuild 语义）；
+    - {"kind": "page_remove", "page_id"} → runner(page_id=..., remove_page=True)；
+    - {"kind": "page", "page_id"} → runner(page_id=...)（原 rebuild 语义）。
 
     任一目标抛异常 → ok=False GRAPH_BUILD_FAILED（retryable=True）→ Run failed，
-    不回滚已发布 Revision；全部完成 → ok=True（metrics 记录 rebuilt 目标数）。
+    不回滚已发布 Revision；全部完成 → ok=True（metrics 记录 rebuilt/skipped）。
     无 manifest / 无 target → ok=True skipped。
     """
     state = ctx.setdefault("state", {})
@@ -1521,11 +2444,26 @@ def _stage_schedule_graph(db, run, stage_row, ctx) -> dict:
 
     runner = _graph_runner(ctx)
     rebuilt: list[str] = []
+    skipped: list[str] = []
+    is_deletion = run.trigger_type == "page_deleted"
     try:
         for target in targets:
             if target.get("kind") == "wiki" and target.get("wiki_page_id"):
-                runner(wiki_page_id=target["wiki_page_id"])
-                rebuilt.append(f"wiki:{target['wiki_page_id']}")
+                wid = target["wiki_page_id"]
+                if is_deletion:
+                    wp = db.get(WikiPage, wid) if wid else None
+                    remaining = _parse_source_pages(wp.source_page_ids) if wp is not None else []
+                    if wp is not None and (wp.status == "archived" or not remaining):
+                        runner(wiki_page_id=wid, remove_wiki=True)
+                        rebuilt.append(f"wiki_remove:{wid}")
+                    else:
+                        skipped.append(f"wiki:{wid}:stale_deferred")
+                else:
+                    runner(wiki_page_id=wid)
+                    rebuilt.append(f"wiki:{wid}")
+            elif target.get("kind") == "page_remove" and target.get("page_id"):
+                runner(page_id=target["page_id"], remove_page=True)
+                rebuilt.append(f"page_remove:{target['page_id']}")
             elif target.get("kind") == "page" and target.get("page_id"):
                 runner(page_id=target["page_id"])
                 rebuilt.append(f"page:{target['page_id']}")
@@ -1534,7 +2472,10 @@ def _stage_schedule_graph(db, run, stage_row, ctx) -> dict:
         return {"ok": False, "error_code": "GRAPH_BUILD_FAILED", "retryable": True}
     return {
         "ok": True,
-        "metrics": {"stage": "schedule_graph", "rebuilt": rebuilt, "targets": len(rebuilt)},
+        "metrics": {
+            "stage": "schedule_graph",
+            "rebuilt": rebuilt, "skipped": skipped, "targets": len(rebuilt),
+        },
     }
 
 
@@ -1578,18 +2519,80 @@ def _stage_defs() -> list[StageDef]:
     return stages
 
 
-def register_default_pipeline() -> None:
-    """注册 wiki.default v1（allow_null_workspace=False）。
-
-    同 key+version 已注册 → registry 抛 PipelineError（拒绝静默覆盖）。
-    """
-    pipeline = PipelineDef(
+def _candidate_pipeline_def() -> PipelineDef:
+    """本地新构造的 wiki.default v1 完整定义（幂等比较基准，复用 _stage_defs）。"""
+    return PipelineDef(
         key=PIPELINE_KEY,
         version=PIPELINE_VERSION,
         stages=_stage_defs(),
         allow_null_workspace=False,
     )
-    register_pipeline(pipeline)
+
+
+def _stage_def_equal(a: StageDef, b: StageDef) -> bool:
+    """两个 StageDef 是否完全一致（key/version/flags/cache/transition/execute 身份）。"""
+    if a.key != b.key or a.version != b.version:
+        return False
+    if a.retryable != b.retryable or a.cachable != b.cachable:
+        return False
+    if a.allows_publish != b.allows_publish:
+        return False
+    if a.cache_type != b.cache_type or a.cache_schema_version != b.cache_schema_version:
+        return False
+    if a.failure_transition != b.failure_transition:
+        return False
+    if tuple(a.cache_key_stage_keys) != tuple(b.cache_key_stage_keys):
+        return False
+    if a.execute is not b.execute:
+        return False
+    return True
+
+
+def _pipeline_def_matches_existing(existing: PipelineDef, candidate: PipelineDef) -> bool:
+    """existing 与本地候选定义是否完全一致（不止比较 stage_keys）。
+
+    逐 stage 比较 key/version/retryable/cachable/allows_publish/cache_type/
+    cache_schema_version/failure_transition/cache_key_stage_keys/execute 身份与顺序，
+    外加 pipeline 级 allow_null_workspace。stage 序列相同但任一定义字段/顺序不同 →
+    False（注册方将 raise，拒绝静默覆盖）。
+    """
+    if existing.key != candidate.key or existing.version != candidate.version:
+        return False
+    if existing.allow_null_workspace != candidate.allow_null_workspace:
+        return False
+    existing_stages = existing.stages
+    candidate_stages = candidate.stages
+    if len(existing_stages) != len(candidate_stages):
+        return False
+    for a, b in zip(existing_stages, candidate_stages):
+        if not _stage_def_equal(a, b):
+            return False
+    return True
+
+
+def register_default_pipeline() -> None:
+    """注册 wiki.default v1（allow_null_workspace=False）。
+
+    注册幂等（契约十二，registry.py 冻结不改，幂等判定在注册方收敛）：
+    - 同 key+version 已注册且与本地候选定义**完全一致** → 幂等返回（不抛），no-op；
+    - 已注册但定义不一致（stage_keys 相同但 stage version/flag/顺序/execute 等任一
+      不同，或 allow_null_workspace 不同）→ PipelineError（拒绝静默覆盖，调用方
+      main.py 将 raise 中止启动）——禁止只比较 stage_keys；
+    - 未注册 → 交 registry 完整校验注册；真实错误（含 registry 校验）原样上抛。
+    """
+    existing = get_pipeline(PIPELINE_KEY, PIPELINE_VERSION)
+    candidate = _candidate_pipeline_def()
+    if existing is not None:
+        if _pipeline_def_matches_existing(existing, candidate):
+            logger.info("wiki.default pipeline already registered (idempotent)")
+            return
+        raise PipelineError(
+            f"pipeline_definition_conflict={PIPELINE_KEY}:{PIPELINE_VERSION} "
+            f"registered_stages={existing.stage_keys()} "
+            f"expected_keys={list(STAGE_KEYS)} "
+            "definition differs (stage version/flags/order/execute/allow_null_workspace)"
+        )
+    register_pipeline(candidate)
 
 
 def unregister_default_pipeline() -> None:

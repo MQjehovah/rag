@@ -1,14 +1,15 @@
 """Phase 5：wiki.default Pipeline 端到端输出 与 旧 Builder 直接编译输出 的产品语义等价。
 
 W3 交付。对**同一固定 seed**，在两张独立库上分别执行：
-- 旧路径：builder.build_wiki_from_pages / builder.rebuild_wiki_from_sources（fake async LLM）；
+- 旧路径：builder._legacy_build_wiki_from_pages / builder._legacy_rebuild_wiki_from_sources（fake async LLM）；
 - 新路径：注册 wiki.default → executor.create_run → execute_run（fake LLM 经
   configure_external_runners 注入，graph_runner 空实现，无真实 LLM / 无真实 DB / 无 HTTP）。
 
 断言方式：比较 DB 语义字段快照（WikiPage / current WikiRevision / WikiSections /
 WikiVersionSource / Page.wiki_dirty·hash·last_error），排除 id / 时间戳 / workspace uuid
 口径差异（workspace 归一为 key）。覆盖等价测试策略清单 1~6 中 wiki.default 支持的
-单 page / 单 wiki 驱动场景；多 Page 两阶段聚合（build_wiki_from_pages dedupe_synthesis）
+单 page / 单 wiki 驱动场景；多 Page 两阶段聚合（_legacy_build_wiki_from_pages
+dedupe_synthesis）
 本期 wiki.default 不承诺等价，Map-Reduce 触发不在单 page 触发下可达 —— 如实记录不入测试。
 
 真实差异风险点（topic 识别 / not_worthy / 删除 / dirty 终态 / 版本块保护）是断言重点，
@@ -224,13 +225,13 @@ def _async_llm(llm):
 
 
 def _run_old_build(db, pages, llm):
-    """旧路径：单页/增量 build_wiki_from_pages（len<=1 → 增量识别+合成）。"""
-    return asyncio.run(builder.build_wiki_from_pages(
+    """旧路径：单页/增量 _legacy_build_wiki_from_pages（len<=1 → 增量识别+合成）。"""
+    return asyncio.run(builder._legacy_build_wiki_from_pages(
         db, pages, llm_json=_async_llm(llm), commit=True))
 
 
 def _run_old_rebuild(db, wiki_id, llm):
-    return asyncio.run(builder.rebuild_wiki_from_sources(db, wiki_id, _async_llm(llm), commit=True))
+    return asyncio.run(builder._legacy_rebuild_wiki_from_sources(db, wiki_id, _async_llm(llm), commit=True))
 
 
 def _graph_noop(**kw):
@@ -598,7 +599,7 @@ def test_equiv_short_content_not_worthy(db, db_b, wiki_pipeline):
 
 
 # ---------------------------------------------------------------------------
-# 6. dirty Wiki 重建等价：manual_rebuild（新） vs rebuild_wiki_from_sources（旧）
+# 6. dirty Wiki 重建等价：manual_rebuild（新） vs _legacy_rebuild_wiki_from_sources（旧）
 # ---------------------------------------------------------------------------
 
 
@@ -639,7 +640,7 @@ def test_equiv_manual_rebuild_dirty_wiki(db, db_b, wiki_pipeline):
 
 # ---------------------------------------------------------------------------
 # 7. 多来源累积 + 聚合重建等价（两 Page 归并一篇 Wiki；Map-Reduce 两阶段
-#    build_wiki_from_pages 本期不迁移，此测试只覆盖单 page 触发累积语义）
+#    _legacy_build_wiki_from_pages 本期不迁移，此测试只覆盖单 page 触发累积语义）
 # ---------------------------------------------------------------------------
 
 

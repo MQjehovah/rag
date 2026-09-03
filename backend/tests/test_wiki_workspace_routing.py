@@ -253,7 +253,7 @@ def test_unbound_page_fail_closed_disabled_binding(db):
     db.add(NotebookWorkspaceBinding(id="b1", notebook_id="nb1", workspace_id="ws1", status="disabled"))
     p = _page(db, "p1", "nb1", "水箱", "水箱内容足够长")
     db.commit()
-    out = _run(builder.process_page_wiki(db, "p1", _mk_llm([{"action": "create", "title": "水箱", "content": "x", "summary": "s"}])))
+    out = _run(builder._legacy_process_page_wiki(db, "p1", _mk_llm([{"action": "create", "title": "水箱", "content": "x", "summary": "s"}])))
     assert out["status"] == "no_workspace"
     db.expire_all()
     fresh = db.get(Page, "p1")
@@ -267,7 +267,7 @@ def test_unbound_page_fail_closed_unknown_scope(db):
     db.add(NotebookGroup(notebook_id="nb1", group_name="engineering"))
     p = _page(db, "p1", "nb1", "水箱", "水箱内容足够长")
     db.commit()
-    out = _run(builder.process_page_wiki(db, "p1", _mk_llm([{"action": "create", "title": "水箱", "content": "x", "summary": "s"}])))
+    out = _run(builder._legacy_process_page_wiki(db, "p1", _mk_llm([{"action": "create", "title": "水箱", "content": "x", "summary": "s"}])))
     assert out["status"] == "no_workspace"
     db.expire_all()
     fresh = db.get(Page, "p1")
@@ -294,8 +294,8 @@ def test_explicit_binding_required_for_workspace_merge(db):
     db.commit()
 
     # 不绑定：各自默认 workspace，主题不合并（同标题各建各的）
-    _run(builder.build_wiki_from_pages(db, [p1], llm_json=_mk_llm([{"action": "create", "title": "水箱", "content": "A", "summary": "s"}])))
-    _run(builder.build_wiki_from_pages(db, [p2], llm_json=_mk_llm([{"action": "create", "title": "水箱", "content": "B", "summary": "s"}])))
+    _run(builder._legacy_build_wiki_from_pages(db, [p1], llm_json=_mk_llm([{"action": "create", "title": "水箱", "content": "A", "summary": "s"}])))
+    _run(builder._legacy_build_wiki_from_pages(db, [p2], llm_json=_mk_llm([{"action": "create", "title": "水箱", "content": "B", "summary": "s"}])))
     db.expire_all()
     assert db.query(WikiWorkspace).count() == 2  # 两个默认 workspace
     assert db.query(WikiPage).filter(
@@ -321,8 +321,8 @@ def test_explicit_binding_required_for_workspace_merge(db):
     p3 = _page(db, "p3", "nb1", "来源三", "第三个来源知识C足够长")
     p4 = _page(db, "p4", "nb2", "来源四", "第四个来源知识D足够长")
     db.commit()
-    _run(builder.build_wiki_from_pages(db, [p3], llm_json=_mk_llm([{"action": "create", "title": "共享水箱", "content": "C", "summary": "s"}])))
-    _run(builder.build_wiki_from_pages(db, [p4], llm_json=_mk_llm([{"action": "update", "title": "共享水箱", "content": "D", "summary": "s"}])))
+    _run(builder._legacy_build_wiki_from_pages(db, [p3], llm_json=_mk_llm([{"action": "create", "title": "共享水箱", "content": "C", "summary": "s"}])))
+    _run(builder._legacy_build_wiki_from_pages(db, [p4], llm_json=_mk_llm([{"action": "update", "title": "共享水箱", "content": "D", "summary": "s"}])))
     db.expire_all()
     merged = db.query(WikiPage).filter(WikiPage.workspace_id == eng_ws.id, WikiPage.title == "共享水箱").all()
     assert len(merged) == 1
@@ -341,8 +341,8 @@ def test_multi_notebook_explicit_binding_same_workspace_merges(db):
     p2 = _page(db, "p2", "nb2", "来源二", "第二个来源知识B")
     db.commit()
 
-    _run(builder.build_wiki_from_pages(db, [p1], llm_json=_mk_llm([{"action": "create", "title": "水箱", "content": "A", "summary": "s"}])))
-    _run(builder.build_wiki_from_pages(db, [p2], llm_json=_mk_llm([{"action": "update", "title": "水箱", "content": "B", "summary": "s"}])))
+    _run(builder._legacy_build_wiki_from_pages(db, [p1], llm_json=_mk_llm([{"action": "create", "title": "水箱", "content": "A", "summary": "s"}])))
+    _run(builder._legacy_build_wiki_from_pages(db, [p2], llm_json=_mk_llm([{"action": "update", "title": "水箱", "content": "B", "summary": "s"}])))
     db.expire_all()
 
     wikis = db.query(WikiPage).filter(WikiPage.acl_scope == '{"groups": ["engineering"]}').all()
@@ -355,7 +355,7 @@ def test_auto_created_wiki_has_workspace_id(db):
     nb = _notebook(db, "nb1", "engineering")
     p = _page(db, "p1", "nb1", "水箱", "水箱内容足够长")
     db.commit()
-    stats = _run(builder.build_wiki_from_pages(db, [p], llm_json=_mk_llm([{"action": "create", "title": "水箱", "content": "正文", "summary": "摘要"}])))
+    stats = _run(builder._legacy_build_wiki_from_pages(db, [p], llm_json=_mk_llm([{"action": "create", "title": "水箱", "content": "正文", "summary": "摘要"}])))
     assert stats["created"] == 1
     db.expire_all()
     wp = db.query(WikiPage).filter(WikiPage.title == "水箱").first()
@@ -380,8 +380,8 @@ def test_same_acl_different_workspace_isolation(db):
     p_b = _page(db, "pb", "nb-b", "工程主题B", "工程主题B的内容足够长")
     db.commit()
 
-    _run(builder.build_wiki_from_pages(db, [p_a], llm_json=_mk_llm([{"action": "create", "title": "主题A", "content": "a", "summary": "s"}])))
-    _run(builder.build_wiki_from_pages(db, [p_b], llm_json=_mk_llm([{"action": "create", "title": "主题B", "content": "b", "summary": "s"}])))
+    _run(builder._legacy_build_wiki_from_pages(db, [p_a], llm_json=_mk_llm([{"action": "create", "title": "主题A", "content": "a", "summary": "s"}])))
+    _run(builder._legacy_build_wiki_from_pages(db, [p_b], llm_json=_mk_llm([{"action": "create", "title": "主题B", "content": "b", "summary": "s"}])))
     db.expire_all()
 
     wa = db.query(WikiPage).filter(WikiPage.title == "主题A").first()
@@ -448,7 +448,7 @@ def test_unbind_does_not_silently_move_wiki(db):
     p = _page(db, "p1", "nb1", "水箱", "水箱内容足够长")
     db.commit()
 
-    _run(builder.build_wiki_from_pages(db, [p], llm_json=_mk_llm([{"action": "create", "title": "水箱", "content": "旧正文", "summary": "s"}])))
+    _run(builder._legacy_build_wiki_from_pages(db, [p], llm_json=_mk_llm([{"action": "create", "title": "水箱", "content": "旧正文", "summary": "s"}])))
     db.expire_all()
     old_wiki = db.query(WikiPage).filter(WikiPage.title == "水箱").first()
     assert old_wiki.workspace_id == "ws1"
@@ -458,7 +458,7 @@ def test_unbind_does_not_silently_move_wiki(db):
     service.bind_notebook(db, ws2, nb, created_by=None)
     db.commit()
 
-    _run(builder.build_wiki_from_pages(db, [p], llm_json=_mk_llm([{"action": "create", "title": "水箱", "content": "新正文", "summary": "s"}])))
+    _run(builder._legacy_build_wiki_from_pages(db, [p], llm_json=_mk_llm([{"action": "create", "title": "水箱", "content": "新正文", "summary": "s"}])))
     db.expire_all()
     old_wiki = db.query(WikiPage).filter(WikiPage.title == "水箱", WikiPage.workspace_id == "ws1").first()
     new_wiki = db.query(WikiPage).filter(WikiPage.title == "水箱", WikiPage.workspace_id == "ws2").first()
@@ -499,7 +499,7 @@ def test_archived_workspace_not_routable(db):
     assert routing.resolve_workspace_for_page(db, p) is None
     assert routing.ensure_notebook_workspace(db, nb) is None
     # Topic Router 级 fail closed：保持 dirty + no_workspace_binding
-    out = _run(builder.process_page_wiki(db, "p1", _mk_llm([{"action": "create", "title": "水箱", "content": "x", "summary": "s"}])))
+    out = _run(builder._legacy_process_page_wiki(db, "p1", _mk_llm([{"action": "create", "title": "水箱", "content": "x", "summary": "s"}])))
     assert out["status"] == "no_workspace"
     db.expire_all()
     fresh = db.get(Page, "p1")
@@ -519,7 +519,7 @@ def test_rebuild_workspace_mismatch_fails_closed(db):
     p = _page(db, "p1", "nb1", "水箱", "水箱内容足够长")
     db.commit()
 
-    _run(builder.build_wiki_from_pages(db, [p], llm_json=_mk_llm([{"action": "create", "title": "水箱", "content": "正文", "summary": "s"}])))
+    _run(builder._legacy_build_wiki_from_pages(db, [p], llm_json=_mk_llm([{"action": "create", "title": "水箱", "content": "正文", "summary": "s"}])))
     db.expire_all()
     wiki = db.query(WikiPage).filter(WikiPage.title == "水箱").first()
     assert wiki.workspace_id == "ws1"
@@ -530,7 +530,7 @@ def test_rebuild_workspace_mismatch_fails_closed(db):
     wiki.dirty = True
     db.commit()
 
-    out = _run(builder.rebuild_wiki_from_sources(db, wiki.id, _mk_llm(synthesis={"summary": "s", "content": "新"})))
+    out = _run(builder._legacy_rebuild_wiki_from_sources(db, wiki.id, _mk_llm(synthesis={"summary": "s", "content": "新"})))
     assert out["status"] == "stale_input"
     db.expire_all()
     wiki = db.get(WikiPage, wiki.id)
@@ -549,7 +549,7 @@ def test_rebuild_wiki_missing_workspace_id_archived(db):
                   status="draft", dirty=True, source_page_ids='["p1"]', workspace_id=None)
     db.add(wp)
     db.commit()
-    out = _run(builder.rebuild_wiki_from_sources(db, "legacy-ws", _mk_llm(synthesis={"summary": "s", "content": "x"})))
+    out = _run(builder._legacy_rebuild_wiki_from_sources(db, "legacy-ws", _mk_llm(synthesis={"summary": "s", "content": "x"})))
     assert out["status"] == "archived"
     db.expire_all()
     fresh = db.get(WikiPage, "legacy-ws")
@@ -558,7 +558,7 @@ def test_rebuild_wiki_missing_workspace_id_archived(db):
 
 
 def test_refresh_dirty_wikis_archives_missing_workspace_id(db):
-    """refresh_dirty_wikis 对 workspace_id 为 None 的 dirty wiki → archived。"""
+    """_legacy_refresh_dirty_wikis 对 workspace_id 为 None 的 dirty wiki → archived。"""
     ws1 = _create_ws(db, "ws1", "ws_key_1", '{"groups": ["engineering"]}', "group:engineering")
     nb = _notebook(db, "nb1", "engineering")
     service.bind_notebook(db, ws1, nb, created_by=None)
@@ -567,7 +567,7 @@ def test_refresh_dirty_wikis_archives_missing_workspace_id(db):
     db.add(WikiPage(id="legacy-ws2", title="旧", acl_scope='{"groups": ["engineering"]}',
                     status="draft", dirty=True, source_page_ids='["p1"]', workspace_id=None))
     db.commit()
-    out = _run(builder.refresh_dirty_wikis(db, llm_json=_mk_llm()))
+    out = _run(builder._legacy_refresh_dirty_wikis(db, llm_json=_mk_llm()))
     assert out["archived"] == 1
     db.expire_all()
     fresh = db.get(WikiPage, "legacy-ws2")
@@ -589,7 +589,7 @@ def test_refresh_dirty_wikis_archives_source_workspace_unresolvable(db):
     # 解绑（disabled）：来源 Page 不再解析到 ws1
     service.unbind_notebook(db, ws1, "nb1")
     db.commit()
-    out = _run(builder.refresh_dirty_wikis(db, llm_json=_mk_llm()))
+    out = _run(builder._legacy_refresh_dirty_wikis(db, llm_json=_mk_llm()))
     assert out["archived"] == 1
     db.expire_all()
     fresh = db.get(WikiPage, "w1")
@@ -614,8 +614,8 @@ def test_same_acl_cross_workspace_topic_isolation(db):
     p_b = _page(db, "pb", "nb-b", "工程来源B", "同标题知识B内容足够长")
     db.commit()
 
-    _run(builder.build_wiki_from_pages(db, [p_a], llm_json=_mk_llm([{"action": "create", "title": "同标题", "content": "A", "summary": "s"}])))
-    _run(builder.build_wiki_from_pages(db, [p_b], llm_json=_mk_llm([{"action": "create", "title": "同标题", "content": "B", "summary": "s"}])))
+    _run(builder._legacy_build_wiki_from_pages(db, [p_a], llm_json=_mk_llm([{"action": "create", "title": "同标题", "content": "A", "summary": "s"}])))
+    _run(builder._legacy_build_wiki_from_pages(db, [p_b], llm_json=_mk_llm([{"action": "create", "title": "同标题", "content": "B", "summary": "s"}])))
     db.expire_all()
     wa = db.query(WikiPage).filter(WikiPage.title == "同标题", WikiPage.workspace_id == "ws-a").first()
     wb = db.query(WikiPage).filter(WikiPage.title == "同标题", WikiPage.workspace_id == "ws-b").first()
@@ -629,7 +629,7 @@ def test_same_acl_cross_workspace_topic_isolation(db):
     p_b = db.get(Page, "pb")
     p_b.content = "同标题知识B更新后内容足够长"
     db.commit()
-    _run(builder.build_wiki_from_pages(db, [p_b], llm_json=_mk_llm([{"action": "update", "title": "同标题", "content": "B-new", "summary": "s"}])))
+    _run(builder._legacy_build_wiki_from_pages(db, [p_b], llm_json=_mk_llm([{"action": "update", "title": "同标题", "content": "B-new", "summary": "s"}])))
     db.expire_all()
     wa = db.query(WikiPage).filter(WikiPage.id == wa.id).first()
     wb = db.query(WikiPage).filter(WikiPage.id == wb.id).first()
@@ -662,7 +662,7 @@ def test_unbind_soft_disable_prevents_auto_reroute(db):
     # 下次 dirty Page 进入 Topic Router：不再自动重建（fail closed）
     p = _page(db, "p1", "nb1", "水箱", "水箱内容足够长")
     db.commit()
-    out = _run(builder.process_page_wiki(db, "p1", _mk_llm([{"action": "create", "title": "水箱", "content": "x", "summary": "s"}])))
+    out = _run(builder._legacy_process_page_wiki(db, "p1", _mk_llm([{"action": "create", "title": "水箱", "content": "x", "summary": "s"}])))
     assert out["status"] == "no_workspace"
     db.expire_all()
     assert db.query(NotebookWorkspaceBinding).filter(
