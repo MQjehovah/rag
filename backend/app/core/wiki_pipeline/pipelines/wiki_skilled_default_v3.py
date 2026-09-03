@@ -1,10 +1,10 @@
-"""Phase 7C.3-A：wiki.default version 3 单目标发布闭环（默认 Skill + API Reference）。
+"""Phase 7C.3-A/3-B：wiki.default version 3 单目标发布闭环（默认 Skill + API Reference + 迁移）。
 
 Stage 顺序：
     resolve_context → topic_route → skill_route → synthesize_by_skill →
     validate_by_skill → publish_by_skill → finalize_compile_outcome → schedule_graph
 
-本轮范围（封板）：
+Phase 7C.3-A 范围（封板）：
 - pipeline key 仍为 wiki.default、version="3"，只支持单目标（一个 Wiki / 一个
   Workspace）：page_changed / manual_rebuild；
 - default 分支复用 v1/v2 已有实现（不复制默认 Wiki 编译逻辑）；
@@ -17,9 +17,18 @@ Stage 顺序：
 - 不支持的 Skill/版本/触发类型 fail closed（固定安全错误码），不静默回退 default；
 - 不调用 _legacy_*、不自行 commit/rollback、不获取底层 Connection。
 
+Phase 7C.3-B 范围（封板）：
+- migration_proposed 显式目标契约（proposed_skill/proposed_version）；
+- default → api_reference 单目标 shadow compile（失败零产品写，Run failed）；
+- protected/manual Section 复制保留与冲突规则（key 冲突 protected 胜出；NULL key
+  全保留；order_index 连续重排；历史 Binding 快照复制）；
+- shadow compile + validate 通过后在 publish_by_skill 内原子切换 Skill
+  （selected_by=migration；reason_code=MIGRATION_APPLIED；原 proposal 保留在
+  skill_decision Artifact，不覆盖审计历史）。
+
 未实现（本轮明确不支持，遇即受控 not-supported/failed）：
-- batch_rebuild / mixed batch；migration_proposed 自动切换；page_deleted；
-- protected/manual Section 的"复制保留 + 冲突规则"（当前 fail closed）;
+- batch_rebuild / mixed batch；page_deleted；
+- api_reference → default 及任意未知方向迁移（MIGRATION_DIRECTION_NOT_SUPPORTED）；
 - 生产 startup 注册（不修改 main.py；active 仍为 v2）；前端修改。
 """
 from __future__ import annotations
@@ -327,6 +336,11 @@ def _build_v3_plan(db, run, ctx) -> tuple[dict | None, dict | None]:
                     "page_ids": [], "decision": None}, None
         return None, _safe_error("SKILL_DECISION_MISSING")
 
+    status = decision.status or ""
+    if status == "migration_proposed":
+        # Phase 7C.3-B：显式迁移契约（只读校验，产物写留到 publish）。
+        return _resolve_migration_plan(db, plan, decision)
+
     skill = decision.selected_skill
     if skill not in ("default", "api_reference"):
         return None, _safe_error("SKILL_NOT_SUPPORTED")
@@ -337,6 +351,64 @@ def _build_v3_plan(db, run, ctx) -> tuple[dict | None, dict | None]:
         return None, _safe_error("SKILL_NOT_SUPPORTED")
 
     plan["branch"] = skill
+    plan["migration"] = False
+    plan["proposed_skill"] = None
+    plan["proposed_version"] = None
+    plan["decision"] = decision.to_dict()
+    return plan, None
+
+
+def _proposal_in_candidates(decision: SkillDecision) -> bool:
+    """proposed 精确组合必须存在于本次 candidates（不猜测）。"""
+    from collections.abc import Mapping
+
+    if not decision.proposed_skill or not decision.proposed_version:
+        return False
+    for c in decision.candidates:
+        if not isinstance(c, Mapping):
+            continue
+        if c.get("skill_key") == decision.proposed_skill and \
+                c.get("skill_version") == decision.proposed_version:
+            return True
+    return False
+
+
+def _resolve_migration_plan(db, plan: dict, decision: SkillDecision):
+    """migration_proposed → 校验显式迁移契约（只读）。
+
+    fail closed：缺显式目标 / 目标与当前相同 / 目标未注册 / 目标不在 candidates /
+    方向非 default→api_reference / locked / DB 当前 Skill 与 selected 不一致。
+    """
+    from app.core.wiki_skills import registry as skill_registry
+
+    if not decision.proposed_skill or not decision.proposed_version:
+        return None, _safe_error("MIGRATION_TARGET_MISSING")
+    if (decision.proposed_skill == decision.selected_skill and
+            decision.proposed_version == decision.selected_version):
+        return None, _safe_error("MIGRATION_TARGET_INVALID")
+    if decision.selected_skill != "default" or decision.proposed_skill != "api_reference":
+        # 本轮只支持 default 精确版本 → api_reference 精确版本；其它方向 fail closed。
+        return None, _safe_error("MIGRATION_DIRECTION_NOT_SUPPORTED")
+    if not skill_registry.has(decision.proposed_skill, decision.proposed_version):
+        return None, _safe_error("MIGRATION_TARGET_INVALID")
+    if not _proposal_in_candidates(decision):
+        return None, _safe_error("MIGRATION_TARGET_INVALID")
+    if decision.locked:
+        return None, _safe_error("MIGRATION_DIRECTION_NOT_SUPPORTED")
+
+    wiki = db.get(WikiPage, plan.get("wiki_id")) if plan.get("wiki_id") else None
+    if wiki is None:
+        return None, _safe_error("MIGRATION_TARGET_INVALID")
+    if bool(wiki.skill_locked):
+        return None, _safe_error("MIGRATION_DIRECTION_NOT_SUPPORTED")
+    if (wiki.content_skill or None) != decision.selected_skill or \
+            (wiki.skill_version or None) != decision.selected_version:
+        return None, _safe_error("MIGRATION_TARGET_INVALID")
+
+    plan["branch"] = decision.proposed_skill
+    plan["migration"] = True
+    plan["proposed_skill"] = decision.proposed_skill
+    plan["proposed_version"] = decision.proposed_version
     plan["decision"] = decision.to_dict()
     return plan, None
 
@@ -523,8 +595,9 @@ def _stage_validate_v3(db, run, stage_row, ctx) -> dict:
     """validate_by_skill：default 复用 v1；api_reference 依据编译校验结果。
 
     api_reference 仅在 compiled.publishable=True 时通过；否则（校验未 pass /
-    存在阻断 issue / 来源集合不完整）真实返回 VALIDATION_FAILED，publish stage
-    不执行（由 executor 级联 skipped）。
+    存在阻断 issue / 来源集合不完整）真实失败并让 publish stage 级联 skipped：
+    - 迁移（plan.migration=True）→ MIGRATION_VALIDATION_FAILED；
+    - 普通 api 更新/重建 → VALIDATION_FAILED。
     """
     state = ctx.setdefault("state", {})
     plan, error = _load_or_build_plan(db, run, ctx)
@@ -535,12 +608,15 @@ def _stage_validate_v3(db, run, stage_row, ctx) -> dict:
         if not compiled:
             return _safe_error("VALIDATION_FAILED")
         if compiled.get("publishable") is not True:
+            if plan.get("migration"):
+                return _safe_error("MIGRATION_VALIDATION_FAILED")
             return _safe_error("VALIDATION_FAILED")
         return {
             "ok": True,
             "metrics": {
                 "stage": "validate_by_skill",
                 "branch": "api_reference",
+                "migration": bool(plan.get("migration")),
                 "publishable": bool(compiled.get("publishable")),
                 "validation_status": compiled.get("validation_status"),
                 "source_set_complete": compiled.get("source_set_complete"),
@@ -606,20 +682,73 @@ def _reverify_api_publish(db, run, context, plan, compiled) -> str | None:
     return None
 
 
-def _has_protected_manual_section(db, wiki: WikiPage) -> bool:
-    """目标 Wiki 当前 Revision 是否含人工保护 Section（fail closed 依据）。"""
-    cur_rev = wiki.current_revision_id
-    if not cur_rev:
-        return False
-    rows = (
-        db.query(WikiSection)
-        .filter(WikiSection.revision_id == cur_rev)
-        .all()
+def _protected_section(sec) -> bool:
+    """protected/manual Section 判定（与既有阻断判定同一三条件）。"""
+    return sec.merge_policy == "protected" or bool(sec.locked) or sec.content_origin == "manual"
+
+
+def _load_protected_snapshot(db, revision_id: str) -> list[dict]:
+    """读取旧 Revision 中需保留的 protected/manual Section（含历史 Binding 快照）。
+
+    按 (order_index, section_key or "", id) 稳定排序；输入查询顺序变化不影响结果。
+    只返回仍存在的 Binding（Evidence 物理删除已被 FK CASCADE 清空，不伪造恢复）。
+    """
+    if not revision_id:
+        return []
+    rows = db.query(WikiSection).filter(WikiSection.revision_id == revision_id).all()
+    ordered = sorted(
+        rows,
+        key=lambda s: (s.order_index or 0, s.section_key or "", s.id or ""),
     )
-    for sec in rows:
-        if sec.merge_policy == "protected" or sec.locked or sec.content_origin == "manual":
-            return True
-    return False
+    out: list[dict] = []
+    for sec in ordered:
+        if not _protected_section(sec):
+            continue
+        binds = db.query(WikiSectionEvidenceBinding).filter(
+            WikiSectionEvidenceBinding.section_id == sec.id).all()
+        binds = sorted(binds, key=lambda b: (b.id or ""))
+        out.append({
+            "sec": sec,
+            "key": sec.section_key or "",
+            "bindings": binds,
+        })
+    return out
+
+
+def _compose_merged_sections(auto_sections: list[dict],
+                             protected_entries: list[dict]) -> list[dict]:
+    """protected 与新生成 Section 的冲突合并（确定性）。
+
+    - 自动 Section 按 Blueprint 位置排序；
+    - key 相同 → protected 胜出（占据新 Blueprint 对应位置），自动不写入；
+    - 无对应新 key 的 protected / section_key=NULL 的全部追加在自动 Section 后，
+      保持旧相对顺序；
+    - 最终 order_index 由调用方从 0 连续重排。
+    """
+    autos = sorted(
+        list(auto_sections or []),
+        key=lambda a: int(a.get("order_index") or 0),
+    )
+    by_key: dict[str, dict] = {}
+    for entry in protected_entries:
+        if entry.get("key"):
+            by_key.setdefault(entry["key"], entry)
+    used: set[str] = set()
+    merged: list[dict] = []
+    for item in autos:
+        key = item.get("section_key") or ""
+        entry = by_key.get(key)
+        if key and entry is not None and key not in used:
+            merged.append({"kind": "protected", "entry": entry})
+            used.add(key)
+        else:
+            merged.append({"kind": "auto", "item": item})
+    for entry in protected_entries:
+        key = entry.get("key") or ""
+        if key and key in used:
+            continue
+        merged.append({"kind": "protected", "entry": entry})
+    return merged
 
 
 # ---------------------------------------------------------------------------
@@ -627,24 +756,134 @@ def _has_protected_manual_section(db, wiki: WikiPage) -> bool:
 # ---------------------------------------------------------------------------
 
 
+def _write_auto_section(db, new_rev_id: str, item: dict, order_index: int,
+                        skill_key: str, skill_version: str,
+                        evidence_snapshot: dict) -> WikiSection:
+    """写入一条新生成的 API Section 及其字段级 Binding。"""
+    structure_text = json.dumps(
+        item.get("structure") or {},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    section = WikiSection(
+        id=str(uuid.uuid4()),
+        revision_id=new_rev_id,
+        section_type="facts",
+        heading=(item.get("heading") or "")[:255] or None,
+        content=item.get("content") or "",
+        order_index=order_index,
+        locked=False,
+        version_label=None,
+        version_sort_key=None,
+        is_common=False,
+        content_origin="auto",
+        merge_policy="auto",
+        version_confidence=None,
+        version_status=None,
+        diff_notice=None,
+        section_key=item.get("section_key"),
+        skill_key=skill_key,
+        skill_version=skill_version,
+        content_hash=item.get("content_hash"),
+        validation_status="pass",
+        structure_json=structure_text,
+    )
+    db.add(section)
+    db.flush()
+    for field_path, usage_type, evidence_id in item.get("bindings") or ():
+        snap = evidence_snapshot.get(evidence_id) or {}
+        ev_hash = snap.get("content_hash") or ""
+        if not _is_hash64(ev_hash):
+            raise ValueError("binding evidence snapshot missing")
+        db.add(WikiSectionEvidenceBinding(
+            id=str(uuid.uuid4()),
+            section_id=section.id,
+            evidence_id=evidence_id,
+            field_path=str(field_path)[:255],
+            usage_type=usage_type,
+            evidence_content_hash=ev_hash,
+        ))
+    return section
+
+
+def _write_protected_section(db, new_rev_id: str, entry: dict,
+                             order_index: int) -> WikiSection:
+    """原样复制 protected/manual Section（新 ID）并复制历史 Binding 快照。"""
+    sec = entry["sec"]
+    content = sec.content or ""
+    content_hash = sec.content_hash
+    if not _is_hash64(content_hash):
+        content_hash = _hash_text(content)
+    new_sec = WikiSection(
+        id=str(uuid.uuid4()),
+        revision_id=new_rev_id,
+        section_type=sec.section_type or "facts",
+        heading=sec.heading,
+        content=content,
+        order_index=order_index,
+        locked=bool(sec.locked),
+        version_label=sec.version_label,
+        version_sort_key=sec.version_sort_key,
+        is_common=sec.is_common,
+        content_origin=sec.content_origin or "auto",
+        merge_policy=sec.merge_policy or "auto",
+        version_confidence=sec.version_confidence,
+        version_status=sec.version_status,
+        diff_notice=sec.diff_notice,
+        section_key=sec.section_key,
+        skill_key=sec.skill_key,
+        skill_version=sec.skill_version,
+        content_hash=content_hash,
+        validation_status=sec.validation_status,
+        structure_json=sec.structure_json,
+    )
+    db.add(new_sec)
+    db.flush()
+    for b in entry["bindings"]:
+        # Evidence 仍存在才可能有该行（FK CASCADE 已清掉物理删除的引用）。
+        db.add(WikiSectionEvidenceBinding(
+            id=str(uuid.uuid4()),
+            section_id=new_sec.id,
+            evidence_id=b.evidence_id,
+            field_path=b.field_path,
+            usage_type=b.usage_type,
+            evidence_content_hash=b.evidence_content_hash,
+        ))
+    return new_sec
+
+
 def _persist_api_revision(db, context, plan, compiled, wiki: WikiPage,
                           skill_key: str, skill_version: str,
                           revision_id: str) -> WikiRevision:
-    """在 stage 事务内追加 API Revision + 全部 Section + 字段级 Binding。"""
-    sections = compiled.get("sections") or []
+    """在 stage 事务内追加 API Revision：自动 Sections + protected 复制合并 + Bindings。
+
+    - 新 Wiki 无旧 Revision → 只有自动 Sections；
+    - 更新/重建/迁移 → 复用同一 protected 合并函数（避免两套规则）；
+    - order_index 从 0 连续重排；非空 section_key 仍唯一（冲突时 protected 胜出）。
+    """
+    auto_sections = compiled.get("sections") or []
     evidence_snapshot = compiled.get("evidence_snapshot") or {}
-    if not sections:
+    old_revision_id = wiki.current_revision_id
+    protected = (_load_protected_snapshot(db, old_revision_id)
+                 if old_revision_id else [])
+    merged = _compose_merged_sections(auto_sections, protected)
+    if not merged:
         raise ValueError("no sections to persist")
 
-    parent_id = wiki.current_revision_id
-    content_joined = "\x1f".join(s.get("content") or "" for s in sections)
+    contents = []
+    for row in merged:
+        if row["kind"] == "auto":
+            contents.append(row["item"].get("content") or "")
+        else:
+            contents.append(row["entry"]["sec"].content or "")
     new_rev = WikiRevision(
         id=revision_id,
         wiki_page_id=wiki.id,
-        parent_revision_id=parent_id,
+        parent_revision_id=old_revision_id,
         title=wiki.title or "",
         summary="",
-        source_hash=_hash_text(content_joined),
+        source_hash=_hash_text("\x1f".join(contents)),
         status="published",
         edit_type="auto",
         updated_by=None,
@@ -652,52 +891,12 @@ def _persist_api_revision(db, context, plan, compiled, wiki: WikiPage,
     db.add(new_rev)
     db.flush()
 
-    for item in sections:
-        structure_text = json.dumps(
-            item.get("structure") or {},
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-        section = WikiSection(
-            id=str(uuid.uuid4()),
-            revision_id=new_rev.id,
-            section_type="facts",
-            heading=(item.get("heading") or "")[:255] or None,
-            content=item.get("content") or "",
-            order_index=int(item.get("order_index") or 0),
-            locked=False,
-            version_label=None,
-            version_sort_key=None,
-            is_common=False,
-            content_origin="auto",
-            merge_policy="auto",
-            version_confidence=None,
-            version_status=None,
-            diff_notice=None,
-            section_key=item.get("section_key"),
-            skill_key=skill_key,
-            skill_version=skill_version,
-            content_hash=item.get("content_hash"),
-            validation_status="pass",
-            structure_json=structure_text,
-        )
-        db.add(section)
-        db.flush()
-
-        for field_path, usage_type, evidence_id in item.get("bindings") or ():
-            snap = evidence_snapshot.get(evidence_id) or {}
-            ev_hash = snap.get("content_hash") or ""
-            if not _is_hash64(ev_hash):
-                raise ValueError("binding evidence snapshot missing")
-            db.add(WikiSectionEvidenceBinding(
-                id=str(uuid.uuid4()),
-                section_id=section.id,
-                evidence_id=evidence_id,
-                field_path=str(field_path)[:255],
-                usage_type=usage_type,
-                evidence_content_hash=ev_hash,
-            ))
+    for idx, row in enumerate(merged):
+        if row["kind"] == "auto":
+            _write_auto_section(db, new_rev.id, row["item"], idx,
+                                skill_key, skill_version, evidence_snapshot)
+        else:
+            _write_protected_section(db, new_rev.id, row["entry"], idx)
     return new_rev
 
 
@@ -723,6 +922,51 @@ def _api_publish_manifest_skill(decision: SkillDecision) -> dict:
     }
 
 
+def _migration_applied_decision(proposal: SkillDecision, wiki: WikiPage) -> SkillDecision:
+    """迁移已应用的 SkillDecision（写 wiki.skill_decision_json）。
+
+    selected=proposed；previous=原当前值；selected_by=migration；status=selected；
+    reason_code=MIGRATION_APPLIED。不含 proposed 字段（status != migration_proposed）。
+    """
+    return SkillDecision(
+        target_key=proposal.target_key or (wiki.id if wiki else ""),
+        wiki_page_id=proposal.wiki_page_id or (wiki.id if wiki else None),
+        selected_skill=proposal.proposed_skill,
+        selected_version=proposal.proposed_version,
+        selected_by="migration",
+        confidence=proposal.confidence,
+        status="selected",
+        reason_code="MIGRATION_APPLIED",
+        matched_signals=proposal.matched_signals,
+        candidates=proposal.candidates,
+        previous_skill=proposal.previous_skill or proposal.selected_skill,
+        previous_version=proposal.previous_version or proposal.selected_version,
+        locked=False,
+    )
+
+
+def _migration_manifest_skill(proposal: SkillDecision, wiki: WikiPage) -> dict:
+    """迁移成功 Manifest 的 skill 摘要（previous/skill/migration_applied/reason）。"""
+    return {
+        "previous_skill": proposal.previous_skill or proposal.selected_skill,
+        "previous_version": proposal.previous_version or proposal.selected_version,
+        "skill_key": proposal.proposed_skill,
+        "skill_version": proposal.proposed_version,
+        "migration_applied": True,
+        "reason": proposal.reason_code or "MIGRATION_PROPOSED",
+    }
+
+
+def _reverify_migration_state(db, wiki: WikiPage, proposal: SkillDecision) -> str | None:
+    """迁移发布前复验：DB 当前 Skill 与 proposal 的 selected 仍一致、未锁定。"""
+    if bool(wiki.skill_locked):
+        return "MIGRATION_DIRECTION_NOT_SUPPORTED"
+    if (wiki.content_skill or None) != proposal.selected_skill or \
+            (wiki.skill_version or None) != proposal.selected_version:
+        return "MIGRATION_TARGET_INVALID"
+    return None
+
+
 def _stage_publish_v3(db, run, stage_row, ctx) -> dict:
     """publish_by_skill：唯一产品写。
 
@@ -738,18 +982,31 @@ def _stage_publish_v3(db, run, stage_row, ctx) -> dict:
     if plan["branch"] == "default":
         return _V2_STAGE_PUBLISH_SKILLED(db, run, stage_row, ctx)
 
-    # ---- api_reference 分支 ----
+    # ---- api_reference 分支（含 migration 原子切换）----
     context = state.get("context") or {}
     compiled = (state.get("v3") or {}).get("api") or {}
     decision = _decode_decision(plan.get("decision"))
     if decision is None or not compiled:
         return _safe_error("SKILL_DECISION_MISSING")
-    skill_key = decision.selected_skill or ""
-    skill_version = decision.selected_version or ""
-    if skill_key != "api_reference" or not skill_version:
-        return _safe_error("SKILL_NOT_SUPPORTED")
+
+    migration = bool(plan.get("migration"))
+    if migration:
+        # 迁移：发布用 proposed（api_reference）Skill；决策为原 proposal。
+        skill_key = plan.get("proposed_skill") or ""
+        skill_version = plan.get("proposed_version") or ""
+        if skill_key != "api_reference" or not skill_version:
+            return _safe_error("MIGRATION_TARGET_INVALID")
+    else:
+        skill_key = decision.selected_skill or ""
+        skill_version = decision.selected_version or ""
+        if skill_key != "api_reference" or not skill_version:
+            return _safe_error("SKILL_NOT_SUPPORTED")
+
     # 编译结果不可发布（诊断/校验失败/无事实内容）→ 零发布，保持 dirty。
+    # （正常流程 validate 已拦截；此处为发布侧防御。）
     if not compiled.get("publishable"):
+        if migration:
+            return _safe_error("MIGRATION_VALIDATION_FAILED")
         return _safe_error("VALIDATION_FAILED")
 
     trigger = plan.get("trigger") or run.trigger_type
@@ -774,14 +1031,18 @@ def _stage_publish_v3(db, run, stage_row, ctx) -> dict:
         # 零发布：不创建 Revision/不清理 dirty/不写 Manifest；固定安全错误码。
         return _safe_error(stale_code, retryable=(stale_code in ("PAGE_STALE", "EVIDENCE_STALE", "WORKER_LOST")))
 
-    # 人工保护 Section：不得覆盖（fail closed）。
     wiki_id = plan.get("wiki_id")
     wiki = db.get(WikiPage, wiki_id) if wiki_id else None
-    if plan["mode"] == "rebuild" or wiki is not None:
+    if migration:
+        # 迁移必须基于既有 wiki 且状态一致（零写校验）。
+        if wiki is None:
+            return _safe_error("MIGRATION_TARGET_INVALID")
+        state_code = _reverify_migration_state(db, wiki, decision)
+        if state_code is not None:
+            return _safe_error(state_code)
+    elif plan["mode"] == "rebuild" or wiki is not None:
         if wiki is None:
             return _safe_error("PAGE_STALE")
-        if _has_protected_manual_section(db, wiki):
-            return _safe_error("API_PROTECTED_SECTION_REQUIRES_MIGRATION")
     if plan["mode"] == "rebuild" and not wiki.dirty:
         outcome["note"] = "wiki_not_dirty_no_write"
         return {"ok": True, "metrics": {"stage": "publish_by_skill",
@@ -818,7 +1079,11 @@ def _stage_publish_v3(db, run, stage_row, ctx) -> dict:
         wiki.dirty = False
         wiki.source_page_ids = json.dumps(page_ids, ensure_ascii=False)
         wiki.acl_scope = context.get("scope_acl_json") or wiki.acl_scope
-        _apply_skill_fields(db, wiki, decision)
+        if migration:
+            applied = _migration_applied_decision(decision, wiki)
+            _apply_skill_fields(db, wiki, applied)
+        else:
+            _apply_skill_fields(db, wiki, decision)
 
         # 按现有规则清理触发 Page 的 dirty（镜像 default create_update 成功语义）。
         if trigger == "page_changed" and context.get("page_id"):
@@ -849,6 +1114,7 @@ def _stage_publish_v3(db, run, stage_row, ctx) -> dict:
             "stage": "publish_by_skill",
             "branch": "api_reference",
             "mode": plan.get("mode"),
+            "migration": migration,
             "note": outcome["note"],
             "wiki_page_ids": [wiki.id],
             "revision_count": len(outcome["revisions"]),
@@ -856,7 +1122,10 @@ def _stage_publish_v3(db, run, stage_row, ctx) -> dict:
     }
     enriched = _finish_publish(ctx, result)
     # Manifest 附加 skill 信息（JSON-safe；graph/finalize 只读既有字段）。
-    enriched["payload"]["skill"] = _api_publish_manifest_skill(decision)
+    if migration:
+        enriched["payload"]["skill"] = _migration_manifest_skill(decision, wiki)
+    else:
+        enriched["payload"]["skill"] = _api_publish_manifest_skill(decision)
     return enriched
 
 

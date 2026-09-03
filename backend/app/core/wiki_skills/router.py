@@ -477,7 +477,24 @@ def route(
         margin = float(_cfg("wiki_skill_switch_margin") or 0.15)
         if best is not None and best.combined_score - current_score >= margin:
             # 新候选（相对当前 0 分或命中分）明显更优 → migration_proposed
-            # （Phase 6 仍沿用当前 Skill，不实际切换）。
+            # （Phase 7C.3-B：显式目标由 best 给出，Pipeline 不再从 candidates[0] 猜；
+            #   selected 仍表示当前沿用 Skill）。
+            if best.skill_key == cur_key and best.skill_version == cur_version:
+                # 防御：best 与当前相同不可能满足 margin，仍不切换（sticky）。
+                return SkillDecision(
+                    target_key=context.target_key,
+                    wiki_page_id=context.wiki_page_id,
+                    selected_skill=cur_key,
+                    selected_version=cur_version,
+                    selected_by="sticky",
+                    confidence=current_score,
+                    status="sticky",
+                    reason_code="SKILL_STICKY_CURRENT",
+                    candidates=tuple(c.to_dict() for c in candidates),
+                    previous_skill=cur_key,
+                    previous_version=cur_version,
+                    locked=False,
+                )
             return SkillDecision(
                 target_key=context.target_key,
                 wiki_page_id=context.wiki_page_id,
@@ -491,6 +508,8 @@ def route(
                 previous_skill=cur_key,
                 previous_version=cur_version,
                 locked=False,
+                proposed_skill=best.skill_key,
+                proposed_version=best.skill_version,
             )
         # 优势不足 → 保持当前（sticky）。
         return SkillDecision(

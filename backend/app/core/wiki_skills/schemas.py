@@ -309,7 +309,15 @@ class SkillCandidate:
 
 @dataclass(frozen=True)
 class SkillDecision:
-    """skill_route 输出（skill-decision/v1）。"""
+    """skill_route 输出（skill-decision/v1）。
+
+    proposed_skill/proposed_version（Phase 7C.3-B）：status=migration_proposed 时的
+    显式迁移目标（由 Router 给出，Pipeline 不得再从 candidates[0] 猜测）。两字段必须
+    同空或同有；非 migration_proposed 状态不得携带非空 proposed。
+    注意：DTO 只做"成对/状态互斥"格式校验。"migration_proposed 必须有显式目标 /
+    目标 ∈ candidates / 与当前不同 / 方向受支持"属语义校验，由 Router 生产侧与
+    v3 Pipeline 边界强制（旧 Artifact 缺 proposed 保持可读兼容，由 v3 fail closed）。
+    """
 
     schema_version: str = SKILL_DECISION_SCHEMA
     target_key: str = ""
@@ -325,6 +333,8 @@ class SkillDecision:
     previous_skill: str | None = None
     previous_version: str | None = None
     locked: bool = False
+    proposed_skill: str | None = None
+    proposed_version: str | None = None
 
     def __post_init__(self) -> None:
         if self.schema_version != SKILL_DECISION_SCHEMA:
@@ -346,6 +356,20 @@ class SkillDecision:
             _validate_key(self.selected_skill, "selected_skill")
         if self.selected_version is not None:
             _validate_version(self.selected_version, "selected_version")
+        # proposed 字段：格式 + 成对 + 与状态互斥（格式层；语义校验在 Router/v3）。
+        if self.proposed_skill is not None:
+            object.__setattr__(self, "proposed_skill", self.proposed_skill.strip())
+            _validate_key(self.proposed_skill, "proposed_skill")
+        if self.proposed_version is not None:
+            object.__setattr__(self, "proposed_version", self.proposed_version.strip())
+            _validate_version(self.proposed_version, "proposed_version")
+        if (self.proposed_skill is None) != (self.proposed_version is None):
+            raise ValueError(
+                "proposed_skill and proposed_version must be both set or both empty")
+        if self.status != "migration_proposed":
+            if self.proposed_skill is not None or self.proposed_version is not None:
+                raise ValueError(
+                    "proposed_skill/proposed_version only allowed for migration_proposed")
 
     def to_dict(self) -> dict:
         return {
@@ -363,6 +387,8 @@ class SkillDecision:
             "previous_skill": self.previous_skill,
             "previous_version": self.previous_version,
             "locked": self.locked,
+            "proposed_skill": self.proposed_skill,
+            "proposed_version": self.proposed_version,
         }
 
     @classmethod
@@ -371,7 +397,7 @@ class SkillDecision:
             "schema_version", "target_key", "wiki_page_id", "selected_skill",
             "selected_version", "selected_by", "confidence", "status", "reason_code",
             "matched_signals", "candidates", "previous_skill", "previous_version",
-            "locked",
+            "locked", "proposed_skill", "proposed_version",
         }
         unknown = set(data.keys()) - allowed
         if unknown:
@@ -391,6 +417,8 @@ class SkillDecision:
             previous_skill=data.get("previous_skill"),
             previous_version=data.get("previous_version"),
             locked=bool(data.get("locked", False)),
+            proposed_skill=data.get("proposed_skill"),
+            proposed_version=data.get("proposed_version"),
         )
 
 

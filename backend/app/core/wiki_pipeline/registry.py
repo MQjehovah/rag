@@ -362,6 +362,11 @@ _STAGE_SAFE_MESSAGES = {
         "知识编译失败：当前修订含人工保护 Section，需迁移后才能由 API Reference 覆盖"
     ),
     "API_PERSIST_FAILED": "知识编译失败：API Reference 发布写入失败（不可自动重试）",
+    # Phase 7C.3-B：Skill 迁移受控失败码（固定文案，不落内部细节）。
+    "MIGRATION_TARGET_MISSING": "知识编译失败：迁移建议缺少显式目标 Skill（禁止猜测）",
+    "MIGRATION_TARGET_INVALID": "知识编译失败：迁移目标与当前 Skill 不一致或目标无效",
+    "MIGRATION_DIRECTION_NOT_SUPPORTED": "知识编译失败：当前迁移方向不受支持",
+    "MIGRATION_VALIDATION_FAILED": "知识编译失败：迁移 shadow compile 未通过校验",
 }
 
 

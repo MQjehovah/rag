@@ -728,29 +728,43 @@ def _add_plain_revision(db, wiki):
     db.flush()
 
 
-def test_protected_manual_section_fails_closed(db):
+def test_protected_manual_section_copied_into_new_revision(db):
+    """旧 Revision 含 protected/manual Section → API 发布复制保留（不再 fail closed）。"""
     _bootstrap_builtin()
     ws = _mk_ws(db)
     page = _mk_page(db, ws, "p1")
     _mk_evidence(db, page, "ev1")
-    wiki = _mk_wiki(db, ws, "wk1", page_ids=["p1"], dirty=True)
+    wiki = _mk_wiki(db, ws, "wk1", page_ids=["p1"], dirty=True,
+                    content_skill="api_reference", skill_version="1",
+                    skill_locked=True)
     _add_manual_section_revision(db, wiki)
     db.commit()
-    before = _counts_for_wiki(db, wiki)
     run = _new_queued_run(db, ws, wiki)
     decision = _decision(wiki.id, wiki.id)
     _write_decision_artifact(db, run.id, [decision])
     db.commit()
     ctx = _api_stage_state(db, run, wiki, ["p1"], None)
     res = v3mod._stage_publish_v3(db, run, None, ctx)
-    assert res.get("ok") is False
-    assert res["error_code"] == "API_PROTECTED_SECTION_REQUIRES_MIGRATION"
-    db.refresh(wiki)
-    assert wiki.current_revision_id == "rev-prot"
-    assert _counts_for_wiki(db, wiki) == before
-    # 人工 Section 仍在。
+    assert res.get("ok") is True, res
+    # 新 current revision 已切换（同一 session 内对象已更新）；旧 Revision 仍保留。
+    assert wiki.current_revision_id is not None
+    assert wiki.current_revision_id != "rev-prot"
+    new_rev = wiki.current_revision_id
+    new_secs = db.query(WikiSection).filter(
+        WikiSection.revision_id == new_rev).all()
+    # 人工 Section 被复制到新 Revision（原样保留标志与内容）。
+    copied = [s for s in new_secs if s.content == "人工内容不能覆盖"]
+    assert len(copied) == 1
+    cop = copied[0]
+    assert cop.merge_policy == "protected"
+    assert cop.content_origin == "manual"
+    assert cop.locked is True
+    # 旧人工 Section 未被删除。
     manual = db.get(WikiSection, "sec-prot")
     assert manual is not None and manual.content == "人工内容不能覆盖"
+    # order_index 连续。
+    indexes = sorted(s.order_index for s in new_secs)
+    assert indexes == list(range(len(new_secs)))
 
 
 # ---------------------------------------------------------------------------
@@ -841,14 +855,16 @@ def test_batch_rebuild_not_supported_zero_publish(db):
 # ---------------------------------------------------------------------------
 
 
-def test_migration_proposed_does_not_switch(db):
+def test_locked_wiki_migration_proposal_does_not_switch(db):
+    """locked Wiki：来源内容再像 API 也不迁移（locked 精确沿用当前 default）。"""
     _bootstrap_builtin()
     ws = _mk_ws(db)
-    # 目标 wiki 当前 skill=default；来源内容 API 信号很强（migration 候选）。
+    # 目标 wiki 当前 skill=default 且锁定；来源内容 API 信号很强。
     page = _mk_page(db, ws, "p1", title="用户 API")
     _mk_evidence(db, page, "ev1")
     wiki = _mk_wiki(db, ws, "wk1", page_ids=["p1"], dirty=True,
-                    content_skill="default", skill_version="1")
+                    content_skill="default", skill_version="1",
+                    skill_locked=True)
     db.commit()
     executor.configure_external_runners(llm_runner=_mk_llm(), graph_runner=_graph_noop)
     run = executor.create_run(
@@ -860,9 +876,9 @@ def test_migration_proposed_does_not_switch(db):
     executed = executor.execute_run(db, run.id)
     db.refresh(executed)
     db.refresh(wiki)
-    # router 只建议迁移（migration_proposed），不实际切换 → selected 仍 default。
+    # locked → router 恒 locked（无 proposed），不产生迁移。
     assert wiki.content_skill == "default"
-    # 未产生任何 API Reference Section / Binding。
+    assert wiki.skill_locked is True
     api_secs = db.query(WikiSection).filter(
         WikiSection.revision_id == wiki.current_revision_id,
         WikiSection.skill_key == "api_reference").count()
