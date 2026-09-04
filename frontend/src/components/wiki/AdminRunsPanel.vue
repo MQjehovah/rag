@@ -217,6 +217,10 @@ const stageErrorMap = ref<Record<string, string>>({})
 const stagesMap = ref<Record<string, CompileStageRun[]>>({})
 const busyId = ref<string | null>(null)
 const ctxGen = ref(0)
+// 同一 run 的 getRun 请求序号：收起→重开时第二次请求可覆盖第一次在途结果，旧响应不得改写新 Stage。
+const stageSeqMap = ref<Record<string, number>>({})
+// action（retry/cancel）完成时 listRuns 已在途 → 标记待刷新，当前请求结束后补一次（不重叠、ctx 失效即清除）。
+const pendingRefresh = ref(false)
 
 let pollTimer: ReturnType<typeof setTimeout> | null = null
 let alive = true
@@ -275,10 +279,12 @@ function resetContext() {
   page.value = 1
   loading.value = false
   fetching.value = false
+  pendingRefresh.value = false
   expandedId.value = ''
   stageLoading.value = ''
   stagesMap.value = {}
   stageErrorMap.value = {}
+  stageSeqMap.value = {}
   loadError.value = ''
   pollError.value = ''
 }
@@ -287,7 +293,8 @@ async function loadPage(origin: 'manual' | 'poll' | 'action' | 'open' | 'page') 
   const ws = props.workspaceId
   if (!ws || !panelOpen()) return
   if (fetching.value) {
-    // 同一 ctx 内请求不重叠（含手动刷新与轮询）；完成后由 finally 统一安排下一轮
+    // 同一 ctx 内请求不重叠（含手动刷新与轮询）；action 请求需补一次最终刷新
+    if (origin === 'action') pendingRefresh.value = true
     return
   }
   const ctx = ctxGen.value
@@ -307,7 +314,10 @@ async function loadPage(origin: 'manual' | 'poll' | 'action' | 'open' | 'page') 
     // 已消失的 run 清掉展开/缓存，避免陈旧阶段
     const liveIds = new Set(runs.value.map((r) => r.id))
     for (const rid of Object.keys(stagesMap.value)) {
-      if (!liveIds.has(rid)) delete stagesMap.value[rid]
+      if (!liveIds.has(rid)) {
+        delete stagesMap.value[rid]
+        delete stageSeqMap.value[rid]
+      }
     }
     if (expandedId.value && !liveIds.has(expandedId.value)) {
       expandedId.value = ''
@@ -327,6 +337,12 @@ async function loadPage(origin: 'manual' | 'poll' | 'action' | 'open' | 'page') 
     if (alive && ctx === ctxGen.value && ws === props.workspaceId) {
       loading.value = false
       fetching.value = false
+      if (pendingRefresh.value) {
+        // 操作后的必要刷新被在途请求吞掉 → 补一次（不重叠；此时 fetching 已复位）
+        pendingRefresh.value = false
+        void loadPage('action')
+        return
+      }
       scheduleNext()
     }
   }
@@ -345,35 +361,44 @@ async function toggleExpand(run: CompileRunSummary) {
   if (expandedId.value === run.id) {
     expandedId.value = ''
     stageLoading.value = ''
+    stageSeqMap.value[run.id] = (stageSeqMap.value[run.id] || 0) + 1
     return
   }
   expandedId.value = run.id
   stageErrorMap.value[run.id] = ''
-  // 再次展开一律重新请求（不允许永久命中旧缓存）
+  // 再次展开一律重新请求（不允许永久命中旧缓存；序号使旧在途 getRun 失效）
   await fetchStages(run)
 }
 
 async function fetchStages(run: CompileRunSummary) {
   const ctx = ctxGen.value
   const ws = props.workspaceId
-  if (stageLoading.value === run.id) return
+  if (!alive || !panelOpen()) return
+  // 序号：新请求可覆盖同一 run 的旧在途请求；旧响应/其 finally 不得改写新 Stage/loading。
+  const seq = (stageSeqMap.value[run.id] || 0) + 1
+  stageSeqMap.value[run.id] = seq
   stageLoading.value = run.id
   try {
     const detail = await wikiCompileApi.getRun(run.id)
-    // getRun 结果校验 workspace/run/ctxGen：旧详情不覆盖新工作区
+    // getRun 结果校验 workspace/run/ctxGen/请求序号：旧详情不覆盖新工作区或新 Stage。
     if (
       !alive ||
       ctx !== ctxGen.value ||
       ws !== props.workspaceId ||
-      expandedId.value !== run.id
+      expandedId.value !== run.id ||
+      stageSeqMap.value[run.id] !== seq
     ) return
     if (detail.workspace_id !== ws) return
     applyStageDetail(detail)
   } catch (e: any) {
-    if (!alive || ctx !== ctxGen.value || ws !== props.workspaceId || expandedId.value !== run.id) return
+    if (
+      !alive || ctx !== ctxGen.value || ws !== props.workspaceId ||
+      expandedId.value !== run.id || stageSeqMap.value[run.id] !== seq
+    ) return
     stageErrorMap.value[run.id] = e?.response?.data?.detail || '阶段信息加载失败'
   } finally {
-    if (alive && ctx === ctxGen.value && ws === props.workspaceId && stageLoading.value === run.id) {
+    if (alive && ctx === ctxGen.value && ws === props.workspaceId &&
+        stageSeqMap.value[run.id] === seq) {
       stageLoading.value = ''
     }
   }
@@ -443,6 +468,7 @@ function goPage(delta: number) {
   stageLoading.value = ''
   stagesMap.value = {}
   stageErrorMap.value = {}
+  stageSeqMap.value = {}
   void loadPage('page')
 }
 
@@ -452,19 +478,23 @@ function toggleCollapse() {
     // 收起：停止轮询并失效在途请求（不永久命中旧 fetching）
     stopPolling()
     ctxGen.value++
+    pendingRefresh.value = false
     expandedId.value = ''
     stageLoading.value = ''
     runs.value = []
     stagesMap.value = {}
     stageErrorMap.value = {}
+    stageSeqMap.value = {}
   } else {
     // 展开：旧 fetching 不得阻塞新上下文
     stopPolling()
     ctxGen.value++
+    pendingRefresh.value = false
     loading.value = false
     fetching.value = false
     expandedId.value = ''
     stageLoading.value = ''
+    stageSeqMap.value = {}
     loadError.value = ''
     pollError.value = ''
     void loadPage('open')

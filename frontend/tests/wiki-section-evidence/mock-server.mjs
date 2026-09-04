@@ -484,6 +484,8 @@ const control = {
   slowDiagRevision: '',
   slowDiagMs: 1500,
   errorDiagRevision: '',
+  slowRunDetailOnceRun: '',
+  slowRunDetailMs: 1600,
   runStates: {},
 }
 const requestLog = []
@@ -705,6 +707,13 @@ async function handle(req, res) {
     if (!user.is_admin) return json(res, 403, { detail: '仅管理员可查看编译任务' })
     const run = effectiveRun(m[1])
     if (!run) return json(res, 404, { detail: '编译任务不存在' })
+    if (control.slowRunDetailOnceRun === m[1]) {
+      control.slowRunDetailOnceRun = ''
+      // 先快照再延迟返回：模拟“旧响应最后到达”，供收起/重开的时序反例。
+      const snapshot = { ...serializeRun(run), stages: stagesOf(run), artifacts: [] }
+      await delay(control.slowRunDetailMs > 0 ? control.slowRunDetailMs : 1600)
+      return json(res, 200, snapshot)
+    }
     return json(res, 200, { ...serializeRun(run), stages: stagesOf(run), artifacts: [] })
   }
 

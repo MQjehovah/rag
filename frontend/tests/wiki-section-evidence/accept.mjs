@@ -390,7 +390,7 @@ async function mockControl(patch) {
   await fetch(`http://127.0.0.1:${MOCK_PORT}/__control`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) })
 }
 async function resetControl() {
-  await mockControl({ errorWorkspaces: false, detailTamper: {}, slowEvidenceSection: '', errorEvidenceSection: '', slowRunsMs: 0, slowRunsWs: '', retry409: false, slowRetryMs: 0, slowDiagRevision: '', errorDiagRevision: '', slowDiagMs: 1500 })
+  await mockControl({ errorWorkspaces: false, detailTamper: {}, slowEvidenceSection: '', errorEvidenceSection: '', slowRunsMs: 0, slowRunsWs: '', retry409: false, slowRetryMs: 0, slowDiagRevision: '', errorDiagRevision: '', slowDiagMs: 1500, slowRunDetailOnceRun: '', slowRunDetailMs: 1600 })
 }
 async function requestLog() {
   const r = await fetch(`http://127.0.0.1:${MOCK_PORT}/__log`)
@@ -952,6 +952,58 @@ async function main() {
       `rect=${JSON.stringify(rect320 && { left: Math.round(rect320.left), right: Math.round(rect320.right), vw: rect320.vw })} scrollH=${scrollRes.scrollH}/${scrollRes.clientH} desk=${v6ShotDesk.split(path.sep).pop()} full=${v6ShotFull.split(path.sep).pop()} el=${v6ShotEl.split(path.sep).pop()}`)
     await closeDrawer(cdp)
     await clearViewport(cdp)
+
+    // ===== RA1：同一 run 的旧 getRun 迟到不得覆盖新 Stage/status/attempt =====
+    await resetControl()
+    await resetLog()
+    await setToken(cdp, 'tok-admin')
+    await goto(cdp, P_MAIN, '第一节', 15000)
+    await waitForCss(cdp, '.compile-run-row[data-run-id="cr-poll"]', 8000)
+    // 用动态派生 stage 的 cr-poll；先固定为 failed/attempt1（其它 run 全终态避免轮询干扰）
+    await mockControl({ runStates: { 'cr-poll': { status: 'failed', cancel_requested: false, attempt: 1, current_stage: null }, 'cr-fail': { status: 'succeeded', cancel_requested: false, attempt: 1, current_stage: null }, 'cr-retry': { status: 'succeeded', cancel_requested: false, attempt: 1, current_stage: null } } })
+    await clickPanelRefresh(cdp)
+    ok = await waitRunRowText(cdp, 'cr-poll', 'attempt 1', 8000)
+    // 第一次展开：getRun 先快照(failed/attempt1) 再慢返；收起→重开后第二次请求（成功/attempt3）先到
+    await mockControl({ slowRunDetailOnceRun: 'cr-poll', slowRunDetailMs: 1800 })
+    const ra1a = await expandRunRow(cdp, 'cr-poll')
+    await sleep(250)
+    await expandRunRow(cdp, 'cr-poll') // 收起（期间第一次 getRun 仍在途）
+    await mockControl({ runStates: { 'cr-poll': { status: 'succeeded', cancel_requested: false, attempt: 3, current_stage: null } } })
+    const ra1b = await expandRunRow(cdp, 'cr-poll') // 重开：第二次 getRun 快
+    ok = ok && ra1a === 'ok' && ra1b === 'ok' && (await waitRunRowText(cdp, 'cr-poll', 'attempt 3', 8000))
+    ok = ok && (await waitRunRowText(cdp, 'cr-poll', '成功', 8000))
+    await sleep(2100) // 等第一次（旧 failed 快照）迟到返回
+    const ra1After = await runRowText(cdp, 'cr-poll')
+    ok = ok && ra1After.includes('attempt 3') && !ra1After.includes('attempt 1')
+      && !ra1After.includes('失败') && !ra1After.includes('加载阶段信息')
+    record('RA1 旧 getRun 迟到不覆盖新 Stage/status/attempt（收起重开+可控顺序）', ok,
+      `attempt3=${ra1After.includes('attempt 3')} staleFailed=${ra1After.includes('失败')} stuckLoading=${ra1After.includes('加载阶段信息')}`)
+    await mockControl({ runStates: {}, slowRunsMs: 0, slowRunDetailOnceRun: '' })
+
+    // ===== RA2：retry 完成时 listRuns 已在途 → 必须补一次操作后刷新 =====
+    await resetControl()
+    await resetLog()
+    await setToken(cdp, 'tok-admin')
+    await goto(cdp, P_MAIN, '第一节', 15000)
+    await waitForCss(cdp, '.compile-run-row[data-run-id="cr-fail"]', 8000)
+    // 显式置 failed/attempt1 并先确认处于可重试态
+    await mockControl({ runStates: { 'cr-fail': { status: 'failed', cancel_requested: false, attempt: 1, current_stage: null }, 'cr-poll': { status: 'succeeded', cancel_requested: false, attempt: 1, current_stage: null } } })
+    await clickPanelRefresh(cdp)
+    ok = await waitRunRowText(cdp, 'cr-fail', '失败', 8000)
+    // 手动刷新启动一次慢 listRuns（在途），随后点击 retry（POST 快）
+    await mockControl({ slowRunsMs: 2200, slowRunsWs: 'ws-eng', runStates: { 'cr-fail': { status: 'failed', cancel_requested: false, attempt: 1, current_stage: null } } })
+    ok = ok && (await clickPanelRefresh(cdp))
+    await sleep(200)
+    ok = ok && (await clickRunBtn(cdp, 'cr-fail', '.run-retry-btn')) === 'ok'
+    const ra2Queued = await waitRunRowText(cdp, 'cr-fail', '排队中', 12000)
+    ok = ok && ra2Queued && (await waitRunRowText(cdp, 'cr-fail', 'attempt 2', 12000))
+    const ra2Log = await requestLog()
+    const ra2Lists = ra2Log.filter((e) => e.path === '/api/wiki-compile/runs')
+    const ra2After = await runRowText(cdp, 'cr-fail')
+    ok = ok && ra2Lists.length >= 2 && ra2After.includes('attempt 2') && ra2After.includes('排队中')
+    record('RA2 retry 完成时 listRuns 在途 → 结束后补一次刷新（最终为操作后状态）', ok,
+      `listCalls=${ra2Lists.length} queued=${ra2After.includes('排队中')} attempt2=${ra2After.includes('attempt 2')}`)
+    await mockControl({ slowRunsMs: 0, runStates: {} })
 
     // ===== T11：门禁回归 =====
     const badCount = results.filter((r) => !r.ok).length
