@@ -20,7 +20,7 @@
       <p v-if="display.endpoint.summary" class="api-summary">{{ display.endpoint.summary }}</p>
       <p class="api-desc">{{ display.endpoint.description || '未提供' }}</p>
 
-      <!-- 参数表：位置 / 名称 / 必填 / 说明（不虚构类型/默认值列） -->
+      <!-- 参数表：位置 / 名称 / 类型 / 必填 / 说明（类型只读显式声明；缺省→未提供，不虚构） -->
       <div class="api-part">
         <div class="api-part-title">参数</div>
         <template v-if="display.parameters.length">
@@ -30,6 +30,7 @@
                 <tr>
                   <th scope="col">位置</th>
                   <th scope="col">名称</th>
+                  <th scope="col">类型</th>
                   <th scope="col">必填</th>
                   <th scope="col">说明</th>
                 </tr>
@@ -38,6 +39,7 @@
                 <tr v-for="p in display.parameters" :key="p.location + ':' + p.name">
                   <td>{{ p.location }}</td>
                   <td class="api-cell-name">{{ p.name }}</td>
+                  <td class="api-cell-type">{{ p.type || '未提供' }}</td>
                   <td>{{ p.required ? '是' : '否' }}</td>
                   <td>{{ p.description || '未提供' }}</td>
                 </tr>
@@ -62,31 +64,33 @@
               :key="mt.media_type"
               class="api-media"
             >
-              {{ mt.media_type }} · {{ mt.schema_present ? '含Schema' : '无Schema' }}
+              {{ mt.media_type }} · {{ schemaLabel(mt) }}
             </div>
           </div>
         </template>
         <p v-else class="api-empty-tip">未提供请求体</p>
       </div>
 
-      <!-- 响应分区 -->
+      <!-- 响应分区：每个媒体类型保留为独立行；schema 只做保守判定 -->
       <div class="api-part">
         <div class="api-part-title">响应</div>
-        <template v-if="display.responses.length">
+        <template v-if="responseRows.length">
           <div class="api-table-scroll">
             <table class="api-table api-responses-table">
               <thead>
                 <tr>
                   <th scope="col">状态码</th>
+                  <th scope="col">媒体类型</th>
+                  <th scope="col">结构</th>
                   <th scope="col">说明</th>
-                  <th scope="col">含Schema</th>
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="r in display.responses" :key="r.status_code">
-                  <td class="api-cell-code">{{ r.status_code }}</td>
-                  <td>{{ r.description || '未提供' }}</td>
-                  <td>{{ r.schema_present ? '含Schema' : '无Schema' }}</td>
+                <tr v-for="row in responseRows" :key="row.key">
+                  <td class="api-cell-code">{{ row.status_code }}</td>
+                  <td class="api-cell-type">{{ row.media_type }}</td>
+                  <td>{{ row.schema_label }}</td>
+                  <td>{{ row.description }}</td>
                 </tr>
               </tbody>
             </table>
@@ -131,6 +135,7 @@
               <span class="api-example-title">{{ ex.title || '示例' }}</span>
               <span v-if="ex.media_type" class="api-example-type">{{ ex.media_type }}</span>
             </div>
+            <p v-if="ex.description" class="api-example-desc">{{ ex.description }}</p>
             <pre class="api-example-pre">{{ exampleText(ex.content) }}</pre>
           </div>
         </template>
@@ -186,7 +191,7 @@ const collapsedBySection = new Map<string, boolean>()
 
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import type { ApiSectionDisplay } from '../../api/wiki'
+import type { ApiMediaType, ApiSectionDisplay } from '../../api/wiki'
 
 const props = defineProps<{
   sectionId: string
@@ -203,6 +208,50 @@ function toggle() {
 const versionLabel = computed(() => {
   const v = (props.display.version_scope || '').trim()
   return v || 'unversioned'
+})
+
+function schemaLabel(media: ApiMediaType): string {
+  // present：媒体确有具体 schema；unspecified：无法区分缺失与显式空 → 保守文案。
+  return media.schema_status === 'present' ? '含Schema' : '未提供具体结构'
+}
+
+interface ResponseRowView {
+  key: string
+  status_code: string
+  media_type: string
+  schema_label: string
+  description: string
+}
+
+// 把每个响应按媒体类型平铺为行：无 content 的响应仍保留一行（媒体类型=未提供），
+// 原正文展示过的媒体类型名称不被丢弃。
+const responseRows = computed<ResponseRowView[]>(() => {
+  const out: ResponseRowView[] = []
+  const responses = props.display.responses || []
+  for (const r of responses) {
+    const media = Array.isArray(r.media_types) ? r.media_types : []
+    const desc = r.description || '未提供'
+    if (media.length === 0) {
+      out.push({
+        key: r.status_code + ':none',
+        status_code: r.status_code,
+        media_type: '未提供',
+        schema_label: '未提供',
+        description: desc,
+      })
+      continue
+    }
+    for (const m of media) {
+      out.push({
+        key: r.status_code + ':' + m.media_type,
+        status_code: r.status_code,
+        media_type: m.media_type,
+        schema_label: schemaLabel(m),
+        description: desc,
+      })
+    }
+  }
+  return out
 })
 
 function exampleText(content: unknown): string {
@@ -335,9 +384,14 @@ table.api-table {
   font-weight: 600;
 }
 .api-cell-name,
-.api-cell-code {
+.api-cell-code,
+.api-cell-type {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12px;
+}
+.api-cell-type {
+  white-space: normal;
+  word-break: break-all;
 }
 .api-reqbody {
   display: flex;
@@ -385,11 +439,19 @@ table.api-table {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   color: #6b7280;
 }
+.api-example-desc {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: #6b7280;
+  overflow-wrap: anywhere;
+}
 pre.api-example-pre {
   margin: 0;
   max-width: 100%;
+  max-height: 280px;
   padding: 8px 10px;
   overflow-x: auto;
+  overflow-y: auto;
   border-radius: 6px;
   background: #1f2937;
   color: #e5e7eb;

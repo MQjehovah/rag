@@ -275,7 +275,7 @@ def test_endpoint_display_exact_stable_and_parameter_order(api_env):
     assert d is not None
     # 与 compile 侧 build_section_display 精确一致（sanitize 是白名单无损重建）。
     assert d == b.display
-    assert d["schema_version"] == "api-section-display/v1"
+    assert d["schema_version"] == "api-section-display/v2"
     assert d["content_hash"] == _hash(b.content)
     assert d["section_role"] == "endpoint"
     assert d["version_scope"] == "v1"
@@ -288,11 +288,12 @@ def test_endpoint_display_exact_stable_and_parameter_order(api_env):
     assert [p["name"] for p in d["parameters"]] == ["page", "page_size", "X-Request-Id"]
     assert d["parameters"][0]["required"] is False
     assert d["parameters"][1]["required"] is True
-    # 响应分区与 schema_present。
+    # 响应分区保留每个媒体类型名称；schema_status 只做保守判定。
     assert {resp["status_code"] for resp in d["responses"]} == {"200", "404"}
     by_code = {resp["status_code"]: resp for resp in d["responses"]}
-    assert by_code["200"]["schema_present"] is True
-    assert by_code["404"]["schema_present"] is False
+    assert by_code["200"]["media_types"] == [
+        {"media_type": "application/json", "schema_status": "present"}]
+    assert by_code["404"]["media_types"] == []
     # 错误码：http_status 原样（业务码不并入）。
     assert d["error_codes"] == [{"code": "E_PERM", "description": "无权限",
                                  "http_status": "403"}]
@@ -345,11 +346,13 @@ def test_path_query_header_parameter_order_and_request_body(api_env):
     assert [p["location"] for p in display["parameters"]] == ["path", "query", "header"]
     assert [p["name"] for p in display["parameters"]] == ["user_id", "page", "X-Request-Id"]
     assert display["parameters"][0]["required"] is True
-    # request_body 形态。
+    # request_body 形态（媒体类型逐项保留 + 保守 schema_status）。
     assert display["request_body"] == {
         "required": True, "description": "用户对象",
-        "media_types": [{"media_type": "application/json", "schema_present": True},
-                        {"media_type": "text/plain", "schema_present": False}],
+        "media_types": [
+            {"media_type": "application/json", "schema_status": "present"},
+            {"media_type": "text/plain", "schema_status": "unspecified"},
+        ],
     }
 
     # 经 DB + API 往返仍一致。
@@ -823,3 +826,253 @@ def test_publish_rollback_leaves_no_section(api_env):
         WikiSection.revision_id == "rev-fail").count() == 0
     assert db.query(WikiSectionEvidenceBinding).count() == 0
     db.close()
+
+
+# ---------------------------------------------------------------------------
+# 13. Phase 8B.1：参数类型只读显式声明（不猜测）
+# ---------------------------------------------------------------------------
+
+
+def test_declared_param_type_read_only_not_guessed(api_env):
+    from app.core.wiki_skills.api_reference.schemas import (
+        ApiDocumentIR,
+        ApiEndpoint,
+        ApiParameter,
+    )
+
+    params = (
+        ApiParameter(name="id", location="path", required=True,
+                     description="用户ID", schema={"type": "integer"}),
+        ApiParameter(name="name", location="query", required=False,
+                     description="名称", schema={"type": "string"}),
+        # 显式多类型（OpenAPI 3.1 风格）→ 约定展示；不推测。
+        ApiParameter(name="tags", location="query", required=False,
+                     description="标签", schema={"type": ["string", "null"]}),
+        # 只有 example / format / default，无 type → 绝不猜。
+        ApiParameter(name="ts", location="query", required=False,
+                     description="时间", schema={"example": "2026-01-01",
+                                                 "format": "date-time"}),
+        ApiParameter(name="bare", location="query", required=False,
+                     description="无schema", schema={}),
+    )
+    ep = ApiEndpoint(method="GET", path="/p", version_scope="v1",
+                     summary="", description="",
+                     path_parameters=(params[0],), query_parameters=params[1:],
+                     headers=(), responses=(), error_codes=(), examples=())
+    ir = ApiDocumentIR(endpoints=(ep,))
+    from app.core.wiki_skills.api_reference.blueprint import plan_document
+    from app.core.wiki_skills.api_reference.display import build_section_display
+    spec = next(s for s in plan_document(ir).sections
+                if s.section_role == "endpoint")
+    display = build_section_display(ir, spec, _hash("# p"))
+    assert display is not None
+    by_name = {p["name"]: p for p in display["parameters"]}
+    assert by_name["id"]["type"] == "integer"
+    assert by_name["name"]["type"] == "string"
+    assert by_name["tags"]["type"] == "string | null"
+    assert by_name["ts"]["type"] == ""  # example/format 不用于猜测
+    assert by_name["bare"]["type"] == ""
+
+
+# ---------------------------------------------------------------------------
+# 14. 响应/请求体媒体类型保留 + 空 schema 保守判定
+# ---------------------------------------------------------------------------
+
+
+def test_response_media_types_preserved_and_empty_schema_conservative(api_env):
+    from app.core.wiki_skills.api_reference.schemas import (
+        ApiDocumentIR,
+        ApiEndpoint,
+        ApiResponse,
+    )
+
+    responses = (
+        # 两个媒体类型都保留；json 有 schema；text/plain 为显式空 → unspecified。
+        ApiResponse(status_code="200", description="成功",
+                    content={"application/json": {"type": "object"},
+                             "text/plain": {}}),
+        # 无 content → 无媒体类型（不虚构）。
+        ApiResponse(status_code="404", description="不存在", content={}),
+        # content 只有空 schema 字典 → 不得误称具有具体 Schema。
+        ApiResponse(status_code="500", description="内部错误",
+                    content={"application/problem+json": {}}),
+    )
+    ep = ApiEndpoint(method="GET", path="/r", version_scope="v1",
+                     summary="", description="", query_parameters=(),
+                     headers=(), path_parameters=(), responses=responses,
+                     error_codes=(), examples=())
+    ir = ApiDocumentIR(endpoints=(ep,))
+    from app.core.wiki_skills.api_reference.blueprint import plan_document
+    from app.core.wiki_skills.api_reference.display import build_section_display
+    spec = next(s for s in plan_document(ir).sections
+                if s.section_role == "endpoint")
+    display = build_section_display(ir, spec, _hash("# r"))
+    assert display is not None
+    by_code = {resp["status_code"]: resp for resp in display["responses"]}
+    # 两个媒体类型均保留名称（原正文会展示的信息不丢）。
+    assert {m["media_type"] for m in by_code["200"]["media_types"]} == {
+        "application/json", "text/plain"}
+    assert by_code["200"]["media_types"] == [
+        {"media_type": "application/json", "schema_status": "present"},
+        {"media_type": "text/plain", "schema_status": "unspecified"},
+    ]
+    assert by_code["404"]["media_types"] == []
+    # content={"media": {}} 不得标为 present（无法区分缺失与显式空）。
+    assert by_code["500"]["media_types"] == [
+        {"media_type": "application/problem+json",
+         "schema_status": "unspecified"}]
+
+
+def test_request_body_media_types_same_semantics(api_env):
+    from app.core.wiki_skills.api_reference.schemas import (
+        ApiDocumentIR,
+        ApiEndpoint,
+        ApiRequestBody,
+        ApiResponse,
+    )
+
+    ep = ApiEndpoint(
+        method="POST", path="/rb", version_scope="v1",
+        summary="", description="",
+        request_body=ApiRequestBody(
+            required=True, description="体",
+            content={"application/json": {"type": "object"},
+                     "application/x-www-form-urlencoded": {}}),
+        query_parameters=(), headers=(), path_parameters=(),
+        responses=(ApiResponse(status_code="200", description="ok",
+                               content={}),),
+        error_codes=(), examples=())
+    ir = ApiDocumentIR(endpoints=(ep,))
+    from app.core.wiki_skills.api_reference.blueprint import plan_document
+    from app.core.wiki_skills.api_reference.display import build_section_display
+    spec = next(s for s in plan_document(ir).sections
+                if s.section_role == "endpoint")
+    display = build_section_display(ir, spec, _hash("# rb"))
+    assert display is not None
+    assert display["request_body"]["media_types"] == [
+        {"media_type": "application/json", "schema_status": "present"},
+        {"media_type": "application/x-www-form-urlencoded",
+         "schema_status": "unspecified"},
+    ]
+
+
+# ---------------------------------------------------------------------------
+# 15. example.description 可见（投影已含 → 保持到 DTO）
+# ---------------------------------------------------------------------------
+
+
+def test_example_description_preserved(api_env):
+    from app.core.wiki_skills.api_reference.schemas import (
+        ApiDocumentIR,
+        ApiEndpoint,
+        ApiExample,
+        ApiResponse,
+    )
+
+    ep = ApiEndpoint(
+        method="GET", path="/ex", version_scope="v1",
+        summary="", description="",
+        examples=(ApiExample(title="示例A", description="示例A说明",
+                             media_type="application/json",
+                             content={"ok": True}),),
+        query_parameters=(), headers=(), path_parameters=(),
+        responses=(ApiResponse(status_code="200", description="ok",
+                               content={}),),
+        error_codes=())
+    ir = ApiDocumentIR(endpoints=(ep,))
+    from app.core.wiki_skills.api_reference.blueprint import plan_document
+    from app.core.wiki_skills.api_reference.display import build_section_display
+    spec = next(s for s in plan_document(ir).sections
+                if s.section_role == "endpoint")
+    display = build_section_display(ir, spec, _hash("# ex"))
+    assert display is not None
+    assert display["examples"][0]["description"] == "示例A说明"
+    # 经 DB + API 往返仍保留。
+    engine = _engine_of(api_env)
+    _seed_wiki(engine)
+    structure = spec.to_dict()
+    structure["display"] = display
+    structure_json = json.dumps(structure, ensure_ascii=False, sort_keys=True)
+    _seed_revision(engine, "w1", "rev1", [
+        _row(SimpleNamespace(content="# ex", content_hash=_hash("# ex"),
+                             structure_json=structure_json),
+             "sec-ex", structure_json=structure_json,
+             section_key=spec.section_key),
+    ])
+    _override(ADMIN)
+    r = api_env[0].get("/api/wiki/w1")
+    assert r.status_code == 200
+    sec = r.json()["sections"][0]
+    assert sec["display"] == display
+    assert sec["display"]["examples"][0]["description"] == "示例A说明"
+
+
+# ---------------------------------------------------------------------------
+# 16. 旧 display（v1 / 缺新增字段）→ 降级 Markdown（不回填猜测值）
+# ---------------------------------------------------------------------------
+
+
+def test_old_v1_and_missing_fields_degrade(api_env):
+    from app.core.wiki_skills.api_reference import display as disp_mod
+    client, engine = api_env
+    b = _built("v1", content="# 老内容")
+    # v1：版本不符 → 降级。
+    old_v1 = dict(b.display, schema_version="api-section-display/v1")
+    assert disp_mod.sanitize_section_display(old_v1) is None
+    # v2 但 parameters 缺 type（新增必需字段）→ 降级，不补猜测值。
+    missing_type = json.loads(json.dumps(b.display))
+    del missing_type["parameters"][0]["type"]
+    assert disp_mod.sanitize_section_display(missing_type) is None
+    # v2 但 responses 缺 media_types → 降级。
+    missing_media = json.loads(json.dumps(b.display))
+    missing_media["responses"][0].pop("media_types", None)
+    assert disp_mod.sanitize_section_display(missing_media) is None
+
+    # API 读侧：v1 display 落库 → role endpoint、display None，正文可读不 500。
+    structure = b.spec.to_dict()
+    structure["display"] = old_v1
+    _seed_wiki(engine)
+    _seed_revision(engine, "w1", "rev1", [
+        _row(b, "sec-v1", structure_json=json.dumps(
+            structure, ensure_ascii=False, sort_keys=True),
+             section_key=b.section_key),
+    ])
+    _override(ADMIN)
+    r = client.get("/api/wiki/w1")
+    assert r.status_code == 200
+    sec = r.json()["sections"][0]
+    assert sec["section_role"] == "endpoint"
+    assert sec["display"] is None
+    assert sec["content"] == b.content
+
+
+# ---------------------------------------------------------------------------
+# 17. 读取边界：超大 structure_json 直接安全降级，不完整解析
+# ---------------------------------------------------------------------------
+
+
+def test_structure_json_length_guard(monkeypatch):
+    from app.core.wiki_skills.api_reference import display as disp_mod
+
+    def build_chars(n: int, ch: str = "x") -> str:
+        return ch * n
+
+    # 字符长度超上限（廉价判断先行）。
+    role, display = disp_mod.section_api_view(
+        build_chars(disp_mod.STRUCTURE_JSON_MAX_CHARS + 1), "# x")
+    assert (role, display) == (None, None)
+
+    # 字符未超、但 UTF-8 字节超上限 → 同样安全降级（不解析）。
+    wide = build_chars(int(disp_mod.STRUCTURE_JSON_MAX_CHARS * 0.9), "✓")
+    assert len(wide) <= disp_mod.STRUCTURE_JSON_MAX_CHARS
+    role2, display2 = disp_mod.section_api_view(wide, "# x")
+    assert (role2, display2) == (None, None)
+
+    # 正常结构不受影响。
+    b = _built("v1", content="# 正常")
+    role3, display3 = disp_mod.section_api_view(
+        b.structure_json, b.content,
+        content_origin="auto", merge_policy="auto",
+        locked=False, validation_status="pass")
+    assert role3 == "endpoint"
+    assert display3 is not None

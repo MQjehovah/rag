@@ -22,12 +22,22 @@ from typing import Any
 
 from app.core.wiki_skills.api_reference.blueprint import SECTION_ROLES
 
-# display 的 schema 版本（契约 §2 冻结值）。
-API_SECTION_DISPLAY_SCHEMA = "api-section-display/v1"
+# display 的 schema 版本（契约 §2 冻结值）。v2：参数增加显式 type、
+# 请求体/响应逐媒体类型保留并给出保守 schema_status（present/unspecified）。
+API_SECTION_DISPLAY_SCHEMA = "api-section-display/v2"
 
 # 展示边界：序列化字节上限与嵌套深度上限（超出 → display=null，绝不截断冒充完整）。
 DISPLAY_MAX_BYTES = 100_000
 DISPLAY_MAX_DEPTH = 12
+
+# structure_json 读取边界：先做廉价字符长度上限，再在有限输入上确认 UTF-8 字节数；
+# 超限直接安全降级（不解析巨大的 JSON，不把此修正扩成通用 JSON 框架）。
+STRUCTURE_JSON_MAX_CHARS = 300_000
+STRUCTURE_JSON_MAX_BYTES = 500_000
+
+# 逐媒体类型的 schema 保守语义：无法区分“缺失 Schema”与“显式空 Schema”时，
+# 一律标为 unspecified（UI 用“未提供具体结构”，不宣称“无 Schema”）。
+SCHEMA_STATUS_VALUES = ("present", "unspecified")
 
 # 顶层 structure 里合法的 section_role 集合（read 侧 role 只认这个集合）。
 KNOWN_SECTION_ROLES: frozenset[str] = frozenset(SECTION_ROLES)
@@ -117,6 +127,24 @@ def _within_bounds(obj: Any) -> bool:
 # ---------------------------------------------------------------------------
 
 
+def _declared_type(schema: Any) -> str:
+    """只读 schema.type 的显式声明：字符串或类型数组；其余一律 ''（UI 显示未提供）。
+
+    绝不根据 name / example / format / 默认值猜测类型。schema 非 dict、
+    type 缺失、type 非 str 且非全字符串数组、数组为空 → ''。
+    """
+    if not isinstance(schema, Mapping):
+        return ""
+    raw = schema.get("type")
+    if isinstance(raw, str):
+        return raw.strip()
+    # 冻结容器会把列表转 tuple；str/非全字符串项忽略。
+    if isinstance(raw, (list, tuple)):
+        parts = [str(t).strip() for t in raw if isinstance(t, str) and t.strip()]
+        return " | ".join(parts)
+    return ""
+
+
 def _param_item(param) -> dict:
     """单个参数 → 展示项。location 以 DTO 字段为准（path/query/header）。"""
     return {
@@ -124,16 +152,25 @@ def _param_item(param) -> dict:
         "name": param.name,
         "required": bool(param.required),
         "description": param.description or "",
+        # Phase 8B.1：只读 schema.type 显式类型；未声明 → ''（不推测）。
+        "type": _declared_type(getattr(param, "schema", None)),
     }
 
 
-def _media_items(content: Mapping) -> list[dict]:
-    """request_body 的 media_types：media_type + schema_present（该 media 值非空）。"""
+def _media_items(content: Any) -> list[dict]:
+    """{media_type: schema-dict} → 展示列表（保留每个媒体类型名称）。
+
+    schema_status：schema dict 非空 → present；为空/无法区分缺失与显式空 →
+    unspecified（UI 用保守文案，不宣称“无 Schema”）。
+    """
     items = []
     for media_type in sorted((content or {}).keys()):
+        schema = (content or {}).get(media_type)
+        # IR 冻结容器为 MappingProxyType（不是 dict），统一按 Mapping 判断。
+        present = isinstance(schema, Mapping) and bool(schema)
         items.append({
             "media_type": str(media_type),
-            "schema_present": bool((content or {}).get(media_type)),
+            "schema_status": "present" if present else "unspecified",
         })
     return items
 
@@ -175,7 +212,7 @@ def build_section_display(ir, spec, content_hash: str) -> dict | None:
         responses = sorted(
             ({"status_code": r.status_code,
               "description": r.description or "",
-              "schema_present": bool(getattr(r, "content", None))}
+              "media_types": _media_items(getattr(r, "content", None))}
              for r in (getattr(ep, "responses", ()) or ())),
             key=lambda item: item["status_code"],
         )
@@ -273,6 +310,28 @@ def _sanitize_parameters(raw: Any) -> list[dict]:
             "required": _need_bool(item.get("required"), "parameters.required"),
             "description": _need_str(item.get("description"),
                                      "parameters.description"),
+            "type": _need_str(item.get("type"), "parameters.type"),
+        })
+    return out
+
+
+def _sanitize_media_items(raw: Any, ctx: str) -> list[dict]:
+    """media_types 白名单：media_type 字符串 + schema_status ∈ present/unspecified。
+
+    仅保留这两个键；旧版 schema_present 布尔语义已废弃（v2）。
+    """
+    if not isinstance(raw, list):
+        raise TypeError(f"{ctx} must be a list")
+    out = []
+    for item in raw:
+        if not isinstance(item, dict):
+            raise TypeError(f"{ctx} item must be an object")
+        status = _need_str(item.get("schema_status"), f"{ctx}.schema_status")
+        if status not in SCHEMA_STATUS_VALUES:
+            raise TypeError(f"{ctx}.schema_status must be present/unspecified")
+        out.append({
+            "media_type": _need_str(item.get("media_type"), f"{ctx}.media_type"),
+            "schema_status": status,
         })
     return out
 
@@ -282,24 +341,12 @@ def _sanitize_request_body(raw: Any) -> dict | None:
         return None
     if not isinstance(raw, dict):
         raise TypeError("request_body must be object or null")
-    media_types = raw.get("media_types")
-    if not isinstance(media_types, list):
-        raise TypeError("request_body.media_types must be a list")
-    items = []
-    for item in media_types:
-        if not isinstance(item, dict):
-            raise TypeError("request_body.media_types item must be an object")
-        items.append({
-            "media_type": _need_str(item.get("media_type"),
-                                    "request_body.media_type"),
-            "schema_present": _need_bool(item.get("schema_present"),
-                                         "request_body.schema_present"),
-        })
     return {
         "required": _need_bool(raw.get("required"), "request_body.required"),
         "description": _need_str(raw.get("description"),
                                  "request_body.description"),
-        "media_types": items,
+        "media_types": _sanitize_media_items(
+            raw.get("media_types"), "request_body.media_types"),
     }
 
 
@@ -315,8 +362,8 @@ def _sanitize_responses(raw: Any) -> list[dict]:
                                      "responses.status_code"),
             "description": _need_str(item.get("description"),
                                      "responses.description"),
-            "schema_present": _need_bool(item.get("schema_present"),
-                                         "responses.schema_present"),
+            "media_types": _sanitize_media_items(
+                item.get("media_types"), "responses.media_types"),
         })
     return out
 
@@ -461,6 +508,15 @@ def section_api_view(
     role: str | None = None
     parsed: dict | None = None
     if structure_json:
+        # 读取边界：先廉价字符长度上限，再在有限输入上确认 UTF-8 字节数；
+        # 超限直接安全降级，不完整解析巨大的 JSON。
+        if len(structure_json) > STRUCTURE_JSON_MAX_CHARS:
+            return (None, None)
+        try:
+            if len(structure_json.encode("utf-8")) > STRUCTURE_JSON_MAX_BYTES:
+                return (None, None)
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            return (None, None)
         try:
             loaded = json.loads(structure_json)
         except Exception:  # noqa: BLE001

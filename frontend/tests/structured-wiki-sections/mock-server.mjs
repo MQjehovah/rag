@@ -43,10 +43,10 @@ function makeSection({ id, section_type, heading, content, display, locked = fal
   return s
 }
 
-// —— 契约展示 DTO 构造（字段名与 DISPLAY_CONTRACT.md 白名单一致） ——
+// —— 契约展示 DTO 构造（字段名与 DISPLAY_CONTRACT.md v2 白名单一致） ——
 function makeDisplay({ version_scope, method, path, summary, description, parameters = [], request_body = null, responses = [], error_codes = [], examples = [], version_notes = [], knowledge_gaps = [], conflicts = [] }) {
   return {
-    schema_version: 'api-section-display/v1',
+    schema_version: 'api-section-display/v2',
     content_hash: null, // 由该 section content 计算后回填
     section_role: 'endpoint',
     version_scope,
@@ -60,6 +60,9 @@ function makeDisplay({ version_scope, method, path, summary, description, parame
     knowledge_gaps,
     conflicts,
   }
+}
+function media(media_type, schema_status) {
+  return { media_type, schema_status }
 }
 
 // ===================== pageA：用户接口手册 =====================
@@ -96,20 +99,22 @@ const sUsersGetDisplay = makeDisplay({
   summary: '获取用户列表',
   description: '分页返回用户列表，可按名称过滤。',
   parameters: [
-    { location: 'query', name: 'page', required: false, description: '页码，从 1 开始。' },
-    { location: 'query', name: 'page_size', required: false, description: '每页条数。' },
+    { location: 'query', name: 'page', required: false, description: '页码，从 1 开始。', type: 'integer' },
+    { location: 'query', name: 'page_size', required: false, description: '每页条数。', type: 'integer' },
   ],
   request_body: null,
   responses: [
-    { status_code: '200', description: '成功返回用户列表', schema_present: true },
-    { status_code: '401', description: '未认证', schema_present: false },
+    { status_code: '200', description: '成功返回用户列表',
+      media_types: [media('application/json', 'present')] },
+    { status_code: '401', description: '未认证',
+      media_types: [media('application/problem+json', 'unspecified')] },
   ],
   error_codes: [
     { code: 'TOKEN_EXPIRED', description: '访问令牌已过期', http_status: '401' },
     { code: 'RATE_LIMITED', description: '请求过于频繁', http_status: '' },
   ],
   examples: [
-    { title: '分页查询示例', description: '', media_type: 'application/json', content: { page: 1, page_size: 20, items: [{ id: 1, name: '张三' }] } },
+    { title: '分页查询示例', description: '返回第一页用户列表（示例字段演示）。', media_type: 'application/json', content: { page: 1, page_size: 20, items: [{ id: 1, name: '张三' }] } },
   ],
   version_notes: [{ version_scope: 'v1', note: 'v1 起采用分页返回用户列表。' }],
   knowledge_gaps: [{ gap_type: 'missing_responses', description: '部分 4xx 响应体结构未知。' }],
@@ -125,23 +130,25 @@ const sUsersPostDisplay = makeDisplay({
   summary: '创建用户',
   description: '',
   parameters: [
-    { location: 'header', name: 'Content-Type', required: true, description: '请求媒体类型，固定 application/json。' },
+    { location: 'header', name: 'Content-Type', required: true, description: '请求媒体类型，固定 application/json。', type: 'string' },
   ],
   request_body: {
     required: true,
     description: '新用户信息',
-    media_types: [{ media_type: 'application/json', schema_present: true }],
+    media_types: [media('application/json', 'present')],
   },
   responses: [
-    { status_code: '200', description: '创建成功', schema_present: true },
-    { status_code: '400', description: '请求体校验失败', schema_present: false },
+    { status_code: '200', description: '创建成功',
+      media_types: [media('application/json', 'present')] },
+    { status_code: '400', description: '请求体校验失败',
+      media_types: [media('application/problem+json', 'unspecified')] },
   ],
   error_codes: [
     { code: 'INVALID_BODY', description: '请求体校验未通过', http_status: '400' },
     { code: 'USERNAME_TAKEN', description: '用户名已存在', http_status: '' },
   ],
   examples: [
-    { title: '创建用户请求', description: '', media_type: 'application/json', content: { name: '李四', email: 'li@example.com' } },
+    { title: '创建用户请求', description: '请求体示例：必填姓名与邮箱。', media_type: 'application/json', content: { name: '李四', email: 'li@example.com' } },
   ],
   version_notes: [{ version_scope: 'v1', note: 'v1 要求 Content-Type 请求头。' }],
   knowledge_gaps: [{ gap_type: 'missing_error_responses', description: '用户名规范未验证。' }],
@@ -157,12 +164,14 @@ const sUsersGetIdDisplay = makeDisplay({
   summary: '获取单个用户详情',
   description: '返回指定用户的详情。<img id="xss-leak" src=x onerror="window.__xss=1"> 该占位文本应始终以纯文本展示，绝不作为 HTML 注入。',
   parameters: [
-    { location: 'path', name: 'userId', required: true, description: '用户唯一标识。' },
+    { location: 'path', name: 'userId', required: true, description: '用户唯一标识。', type: 'string' },
   ],
   request_body: null,
   responses: [
-    { status_code: '200', description: '成功返回用户详情', schema_present: true },
-    { status_code: '404', description: '用户不存在', schema_present: false },
+    { status_code: '200', description: '成功返回用户详情',
+      media_types: [media('application/json', 'present')] },
+    { status_code: '404', description: '用户不存在',
+      media_types: [media('application/json', 'unspecified')] },
   ],
   error_codes: [
     { code: 'USER_NOT_FOUND', description: '用户不存在', http_status: '404' },
@@ -229,18 +238,20 @@ const sOrdersGetDisplay = makeDisplay({
   summary: '获取订单列表',
   description: '分页返回订单列表，可按状态过滤。',
   parameters: [
-    { location: 'query', name: 'status', required: false, description: '订单状态过滤。' },
+    { location: 'query', name: 'status', required: false, description: '订单状态过滤。', type: 'string' },
   ],
   request_body: null,
   responses: [
-    { status_code: '200', description: '成功返回订单列表', schema_present: true },
-    { status_code: '401', description: '未认证', schema_present: false },
+    { status_code: '200', description: '成功返回订单列表',
+      media_types: [media('application/json', 'present')] },
+    { status_code: '401', description: '未认证',
+      media_types: [media('application/json', 'unspecified')] },
   ],
   error_codes: [
     { code: 'ORDER_NOT_FOUND', description: '订单不存在', http_status: '404' },
   ],
   examples: [
-    { title: '按状态查询', description: '', media_type: 'application/json', content: { status: 'paid', items: [{ id: 9, total: 120 }] } },
+    { title: '按状态查询', description: '示例：仅返回已支付订单。', media_type: 'application/json', content: { status: 'paid', items: [{ id: 9, total: 120 }] } },
   ],
   version_notes: [{ version_scope: 'v1', note: 'v1 初始版本。' }],
   knowledge_gaps: [{ gap_type: 'missing_responses', description: '分页总数语义待补。' }],
@@ -293,7 +304,110 @@ const sPlainSteps = makeSection({
 })
 pPlain.sections = [sPlainSummary, sPlainSteps]
 
-const wikiDb = { 'ws-eng': [pUsers, pOrders, pPlain] }
+// ===================== p-boundary：保真 + 运行时降级反例 =====================
+const pBoundary = {
+  id: 'p-boundary', workspace_id: 'ws-eng', title: '接口边界样例', summary: '展示类型/媒体保真与非法展示降级。', status: 'published', category: '接口边界', keywords: ['boundary'], locked: false, latest_version: 'v1', current_revision_id: 'r1', preview_revision_id: null, has_preview: false, updated_at: '2026-09-04T09:00:00',
+}
+
+// 保真样例：显式类型、双媒体、空 schema 媒体、example.description
+const sBValidContent = '## GET /x/{id}（v1）\n\n字段保真样例。\n'
+const sBValidDisplay = makeDisplay({
+  version_scope: 'v1', method: 'GET', path: '/x/{id}',
+  summary: '字段保真样例',
+  description: '校验类型只读、媒体类型保留与保守 schema 文案。',
+  parameters: [
+    { location: 'path', name: 'id', required: true, description: '资源 ID。', type: 'integer' },
+    { location: 'query', name: 'kind', required: false, description: '种类。', type: 'string' },
+    { location: 'query', name: 'raw', required: false, description: '仅提供 example，无 type。', type: '' },
+  ],
+  request_body: null,
+  responses: [
+    { status_code: '200', description: '成功',
+      media_types: [media('application/json', 'present'), media('text/plain', 'present')] },
+    { status_code: '401', description: '未认证',
+      media_types: [media('application/json', 'unspecified')] },
+  ],
+  error_codes: [
+    { code: 'E_NO_PERM', description: '无权限', http_status: '' },
+  ],
+  examples: [
+    { title: '边界样例', description: '这是示例的描述文本，应当展示。', media_type: 'application/json', content: { id: 7, kind: 'a' } },
+  ],
+  version_notes: [{ version_scope: 'v1', note: '保真样例版本说明。' }],
+  knowledge_gaps: [],
+  conflicts: [],
+})
+const sBValid = makeSection({ id: 's-b-valid', section_type: 'endpoint', heading: 'GET /x/{id}（v1）', version_label: 'v1', content: sBValidContent, section_role: 'endpoint' })
+sBValid.display = { ...sBValidDisplay, content_hash: hashOf(sBValidContent) }
+
+// 反例 1：未知/旧版本
+const sBVerContent = '## GET /badver（反例）\n\n版本反例原文：schema_version 未知时应整节回退 Markdown。\n'
+const sBVer = makeSection({ id: 's-b-ver', section_type: 'endpoint', heading: 'GET /badver（反例-版本）', version_label: 'v1', content: sBVerContent, section_role: 'endpoint' })
+sBVer.display = { ...makeDisplay({ version_scope: 'v1', method: 'GET', path: '/badver', summary: 's', description: 'd', parameters: [], request_body: null, responses: [], error_codes: [], examples: [], version_notes: [], knowledge_gaps: [], conflicts: [] }), schema_version: 'api-section-display/v1', content_hash: hashOf(sBVerContent) }
+
+// 反例 2：缺 endpoint
+const sBNoEpContent = '## GET /noep（反例）\n\n缺 endpoint 反例原文：不得部分渲染。\n'
+const sBNoEpDisplay = makeDisplay({ version_scope: 'v1', method: 'GET', path: '/noep', summary: 's', description: 'd', parameters: [], request_body: null, responses: [], error_codes: [], examples: [], version_notes: [], knowledge_gaps: [], conflicts: [] })
+delete sBNoEpDisplay.endpoint
+const sBNoEp = makeSection({ id: 's-b-noep', section_type: 'endpoint', heading: 'GET /noep（反例-缺endpoint）', version_label: 'v1', content: sBNoEpContent, section_role: 'endpoint' })
+sBNoEp.display = { ...sBNoEpDisplay, content_hash: hashOf(sBNoEpContent) }
+
+// 反例 3：parameters 非数组
+const sBParamsContent = '## GET /badparams（反例）\n\nparameters 非数组反例原文。\n'
+const sBParamsDisplay = makeDisplay({ version_scope: 'v1', method: 'GET', path: '/badparams', summary: 's', description: 'd', parameters: 'NOT-AN-ARRAY', request_body: null, responses: [], error_codes: [], examples: [], version_notes: [], knowledge_gaps: [], conflicts: [] })
+const sBParams = makeSection({ id: 's-b-params', section_type: 'endpoint', heading: 'GET /badparams（反例-非数组）', version_label: 'v1', content: sBParamsContent, section_role: 'endpoint' })
+sBParams.display = { ...sBParamsDisplay, content_hash: hashOf(sBParamsContent) }
+
+// 反例 4：required 为字符串（非真 bool）
+const sBReqContent = '## GET /badreq（反例）\n\nrequired="false" 反例原文。\n'
+const sBReqDisplay = makeDisplay({
+  version_scope: 'v1', method: 'GET', path: '/badreq', summary: 's', description: 'd',
+  parameters: [{ location: 'query', name: 'flag', required: 'false', description: '非 bool', type: 'boolean' }],
+  request_body: null, responses: [], error_codes: [], examples: [], version_notes: [], knowledge_gaps: [], conflicts: [],
+})
+const sBReq = makeSection({ id: 's-b-req', section_type: 'endpoint', heading: 'GET /badreq（反例-required串）', version_label: 'v1', content: sBReqContent, section_role: 'endpoint' })
+sBReq.display = { ...sBReqDisplay, content_hash: hashOf(sBReqContent) }
+
+const sBOverview = makeSection({ id: 's-b-ov', section_type: 'overview', heading: '主题概览', content: '# 接口边界样例\n\n合法展示与非法展示并存的页面。\n' })
+pBoundary.sections = [sBOverview, sBValid, sBVer, sBNoEp, sBParams, sBReq]
+
+// ===================== p-long：320px 视觉（长路径/多列参数/长示例） =====================
+const pLong = {
+  id: 'p-long', workspace_id: 'ws-eng', title: '长路径接口样例', summary: '长路径与长示例视觉校验。', status: 'published', category: '接口长样例', keywords: ['long'], locked: false, latest_version: 'v1', current_revision_id: 'r1', preview_revision_id: null, has_preview: false, updated_at: '2026-09-04T09:00:00',
+}
+const sLongContent = '## GET /api/v1/enterprise/workspaces/{workspaceId}/memberships/{membershipId}/roles（v1）\n\n长路径样例。\n'
+const sLongDisplay = makeDisplay({
+  version_scope: 'v1', method: 'GET',
+  path: '/api/v1/enterprise/workspaces/{workspaceId}/memberships/{membershipId}/roles',
+  summary: '列出成员在指定工作区的全部角色',
+  description: '路径很长；参数较多，320px 下应局部滚动或折行。',
+  parameters: [
+    { location: 'path', name: 'workspaceId', required: true, description: '工作区标识（UUID）。', type: 'string' },
+    { location: 'path', name: 'membershipId', required: true, description: '成员关系标识（UUID）。', type: 'string' },
+    { location: 'query', name: 'includeInherited', required: false, description: '是否包含继承角色。', type: 'boolean' },
+    { location: 'query', name: 'depth', required: false, description: '未提供 type 的参数（example 驱动）。', type: '' },
+  ],
+  request_body: null,
+  responses: [
+    { status_code: '200', description: '成功返回角色列表',
+      media_types: [media('application/json', 'present'), media('text/plain', 'unspecified')] },
+  ],
+  error_codes: [
+    { code: 'ROLE_SCOPE_UNKNOWN', description: '角色作用域未知', http_status: '404' },
+  ],
+  examples: [
+    { title: '角色示例', description: '超长示例用于验证组件内滚动且不整页溢出。', media_type: 'application/json', content: { workspaceId: 'ws-1234-5678-abcd', roles: [{ name: 'viewer', scopes: ['read:page', 'read:asset', 'read:member', 'read:audit', 'read:metrics', 'read:report'] }, { name: 'editor', scopes: ['write:page', 'write:asset', 'write:member'] }], inherited: false } },
+  ],
+  version_notes: [{ version_scope: 'v1', note: 'v1 长路径样例。' }],
+  knowledge_gaps: [],
+  conflicts: [],
+})
+const sLong = makeSection({ id: 's-long', section_type: 'endpoint', heading: 'GET /api/v1/enterprise/workspaces/{workspaceId}/memberships/{membershipId}/roles（v1）', version_label: 'v1', content: sLongContent, section_role: 'endpoint' })
+sLong.display = { ...sLongDisplay, content_hash: hashOf(sLongContent) }
+const sLongOverview = makeSection({ id: 's-long-ov', section_type: 'overview', heading: '主题概览', content: '# 长路径接口样例\n\n用于 320px 视觉验收。\n' })
+pLong.sections = [sLongOverview, sLong]
+
+const wikiDb = { 'ws-eng': [pUsers, pOrders, pPlain, pBoundary, pLong] }
 
 const revisionsDb = {
   'p-users': [

@@ -323,6 +323,36 @@ async function clickEvidenceChip(cdp) {
   })()`)
 }
 
+// 打开目录并点击指定页面，等待详情出现期望文本。
+async function openPageByName(cdp, title, expectText) {
+  await goto(cdp, `${FRONT}/knowledge/wiki?workspace_id=ws-eng`, title, 15000)
+  const clicked = await clickCatalogItem(cdp, title)
+  return { clicked, okText: await waitForText(cdp, expectText, 10000) }
+}
+
+// 元素截图：滚动到视口后再按元素包围盒 clip 截图（避免只拍页面顶部）。
+async function shotElement(cdp, selector, name) {
+  const rect = await evaluate(cdp, `(() => {
+    const el = document.querySelector(${JSON.stringify(selector)});
+    if (!el) return null;
+    el.scrollIntoView({ block: 'center', inline: 'center' });
+    const r = el.getBoundingClientRect();
+    return { x: Math.max(0, r.left), y: Math.max(0, r.top), width: r.width, height: r.height, vw: window.innerWidth, vh: window.innerHeight };
+  })()`)
+  if (!rect) return 'no-element:' + selector
+  const clip = {
+    x: rect.x, y: rect.y,
+    width: Math.min(rect.width, rect.vw - rect.x),
+    height: Math.min(rect.height, rect.vh - rect.y),
+    scale: 1,
+  }
+  if (clip.width <= 0 || clip.height <= 0) return 'empty-clip:' + selector
+  const r = await cdp.send('Page.captureScreenshot', { format: 'png', clip, captureBeyondViewport: false })
+  const file = path.join(SHOTS, name + '.png')
+  fs.writeFileSync(file, Buffer.from(r.data, 'base64'))
+  return file
+}
+
 async function main() {
   let mockChild = null
   let chrome = null
@@ -387,18 +417,21 @@ async function main() {
     // ===== T2：参数/响应/错误码表数据准确，无虚构列 =====
     const t2 = await toggleState(cdp, 'GET', '/users')
     const pageRow = (t2.paramsRows || []).find((r) => r[1] === 'page')
-    const paramRowPageOk = !!pageRow && pageRow[0] === 'query' && pageRow[2] === '否' && (pageRow[3] || '').length > 0
-    const headersOk = t2.ths.includes('位置') && t2.ths.includes('名称') && t2.ths.includes('必填') && t2.ths.includes('说明')
+    // 参数行列：位置/名称/类型/必填/说明（v2）
+    const paramRowPageOk = !!pageRow && pageRow[0] === 'query' && pageRow[2] === 'integer'
+      && pageRow[3] === '否' && (pageRow[4] || '').length > 0
+    const headersOk = t2.ths.includes('位置') && t2.ths.includes('名称') && t2.ths.includes('类型')
+      && t2.ths.includes('必填') && t2.ths.includes('说明')
     const responsesOk = t2.responsesText.includes('200') && t2.responsesText.includes('401')
     const rateRow = (t2.errorsRows || []).find((r) => r[0] === 'RATE_LIMITED')
     const errorsOk = (t2.errorsText.includes('TOKEN_EXPIRED') || (t2.errorsRows || []).some((r) => r[0] === 'TOKEN_EXPIRED'))
       && !!rateRow && rateRow[2] === '未提供'
-    const noFakeCols = !t2.ths.some((h) => h.includes('默认') || h.includes('类型'))
+    const noFakeCols = !t2.ths.some((h) => h.includes('默认'))
     const reqBodyNull = t2.sectionText.includes('未提供请求体')
     ok = paramRowPageOk && headersOk && responsesOk && errorsOk && noFakeCols && reqBodyNull
       && t2.sectionText.includes('业务错误码不等于 HTTP 状态')
-    record('T2a GET /users 参数表（位置/名称/必填/说明，page=query+否）与请求体“未提供”', paramRowPageOk && headersOk && reqBodyNull, `pageRow=${JSON.stringify(pageRow)} headers=${JSON.stringify(t2.ths)}`)
-    record('T2b 响应 200/401 + 错误码（RATE_LIMITED HTTP 未提供 + 提示 + 无虚构列）', responsesOk && errorsOk && noFakeCols && t2.sectionText.includes('业务错误码不等于 HTTP 状态'), JSON.stringify({ responsesOk, errorsOk, noFakeCols, rateRow }))
+    record('T2a GET /users 参数表（位置/名称/类型/必填/说明，page=integer+否）与请求体“未提供”', paramRowPageOk && headersOk && reqBodyNull, `pageRow=${JSON.stringify(pageRow)} headers=${JSON.stringify(t2.ths)}`)
+    record('T2b 响应 200/401 + 错误码（RATE_LIMITED HTTP 未提供 + 提示 + 无默认值列）', responsesOk && errorsOk && noFakeCols && t2.sectionText.includes('业务错误码不等于 HTTP 状态'), JSON.stringify({ responsesOk, errorsOk, noFakeCols, rateRow }))
     const t2p = await toggleState(cdp, 'POST', '/users')
     ok = t2p.found && t2p.sectionText.includes('必填：是') && t2p.sectionText.includes('application/json') && t2p.sectionText.includes('含Schema')
       && t2p.sectionText.includes('USERNAME_TAKEN')
@@ -408,7 +441,7 @@ async function main() {
     const t3v1 = await toggleState(cdp, 'GET', '/users')
     const t3v2 = await toggleState(cdp, 'GET', '/users/{id}')
     const userIdRow = (t3v2.paramsRows || []).find((r) => r[1] === 'userId')
-    const v2HasUserIdPath = !!userIdRow && userIdRow[0] === 'path' && userIdRow[2] === '是' && (userIdRow[3] || '').length > 0
+    const v2HasUserIdPath = !!userIdRow && userIdRow[0] === 'path' && userIdRow[3] === '是' && userIdRow[2] === 'string' && (userIdRow[4] || '').length > 0
     const v1NoUserId = !(t3v1.paramsRows || []).some((r) => r[1] === 'userId')
     const versionDistinct = (t3v1.ver === 'v1' || t3v1.ver.includes('v1')) && (t3v2.ver === 'v2' || t3v2.ver.includes('v2')) && t3v1.ver !== t3v2.ver
     const pathDistinct = t3v1.path === '/users' && t3v2.path === '/users/{id}'
@@ -555,6 +588,87 @@ async function main() {
     // ===== T12：退出码门禁回归 =====
     const badCount = results.filter((r) => !r.ok).length
     record('T12 门禁回归：上述全部通过', badCount === 0, `badBefore=${badCount}`)
+
+    // ===== T13：8B.1 字段保真 + 运行时降级反例 =====
+    await openPageByName(cdp, '接口边界样例', 'GET /x/{id}（v1）')
+    await sleep(300)
+    const tb = await toggleState(cdp, 'GET', '/x/{id}')
+    const rawParam = (tb.paramsRows || []).find((r) => r[1] === 'raw')
+    const idParam = (tb.paramsRows || []).find((r) => r[1] === 'id')
+    const kindParam = (tb.paramsRows || []).find((r) => r[1] === 'kind')
+    const bMediaRows = await evaluate(cdp, `(() => [...document.querySelectorAll('table.api-responses-table tbody tr')].map(tr => [...tr.children].map(td => td.textContent.trim())))()`)
+    const bMediaText = bMediaRows.map((r) => r.join('|')).join('\n')
+    const twoMedia = bMediaText.includes('text/plain') && bMediaText.includes('application/json')
+    const emptyMediaConservative = !bMediaText.includes('无Schema') && tb.sectionText.includes('未提供具体结构')
+    const exampleDescShown = tb.sectionText.includes('这是示例的描述文本，应当展示。')
+    ok = !!rawParam && rawParam[2] === '未提供' && !!idParam && idParam[2] === 'integer' && idParam[3] === '是'
+      && !!kindParam && kindParam[2] === 'string' && twoMedia && emptyMediaConservative && exampleDescShown
+    record('T13a 类型只读展示/双媒体保留/空 schema 保守/example.description 可见', ok,
+      JSON.stringify({ idParam, kindParam, rawParam, twoMedia, emptyMediaConservative, exampleDescShown, bMediaRows }))
+
+    const negCases = [
+      ['GET /badver（反例-版本）', '版本反例原文'],
+      ['GET /noep（反例-缺endpoint）', '缺 endpoint 反例原文'],
+      ['GET /badparams（反例-非数组）', 'parameters 非数组反例原文'],
+      ['GET /badreq（反例-required串）', 'required="false" 反例原文'],
+    ]
+    for (const [heading, marker] of negCases) {
+      const neg = await sectionByHeading(cdp, heading)
+      ok = neg.found && neg.hasMarkdown && !neg.hasApi && neg.apiTables === 0 && neg.text.includes(marker)
+      record(`T13b 非法 display（${heading}）整节回退 Markdown`, ok,
+        `found=${neg.found} hasMd=${neg.hasMarkdown} hasApi=${neg.hasApi} tables=${neg.apiTables}`)
+    }
+    const validCount = await countSelector(cdp, '.api-endpoint-section')
+    ok = validCount >= 1
+    record('T13c 同一页其他合法章节不受非法展示影响', ok, `apiSections=${validCount}`)
+
+    // ===== T14：实际内容视觉截图（参数表/响应表/长路径/长示例，桌面与 320） =====
+    await setViewport(cdp, 1400, 900, false)
+    await openPageByName(cdp, '长路径接口样例', 'GET /api/v1/enterprise/workspaces/{workspaceId}/memberships/{membershipId}/roles（v1）')
+    await waitForCss(cdp, 'table.api-responses-table', 8000)
+    await sleep(300)
+    const longDesktopOk = await evaluate(cdp, `(() => {
+      const pt = document.querySelector('table.api-params-table');
+      const rt = document.querySelector('table.api-responses-table');
+      return {
+        params: pt ? pt.innerText.includes('类型') && pt.innerText.includes('workspaceId') : false,
+        responses: rt ? rt.innerText.includes('text/plain') && rt.innerText.includes('application/json') : false,
+        mediaColumn: rt ? rt.innerText.includes('媒体类型') : false,
+      };
+    })()`)
+    const dShot1 = await shotElement(cdp, 'table.api-params-table', 't14-desktop-param-table')
+    const dShot2 = await shotElement(cdp, 'table.api-responses-table', 't14-desktop-response-table')
+    ok = longDesktopOk.params && longDesktopOk.responses && longDesktopOk.mediaColumn
+    record('T14a 桌面展开后参数表与响应表可见（长路径+双媒体）', ok, JSON.stringify(longDesktopOk))
+    LOG('T14a 截图（参数表）: ' + dShot1)
+    LOG('T14a 截图（响应表）: ' + dShot2)
+
+    await setViewport(cdp, 320, 800, false)
+    await openPageByName(cdp, '长路径接口样例', 'GET /api/v1/enterprise/workspaces/{workspaceId}/memberships/{membershipId}/roles（v1）')
+    await waitForCss(cdp, 'table.api-responses-table', 8000)
+    await sleep(400)
+    const long320 = await evaluate(cdp, `(() => {
+      const pre = document.querySelector('pre.api-example-pre');
+      const rt = document.querySelector('table.api-responses-table');
+      return {
+        docScrollW: document.documentElement.scrollWidth,
+        innerW: window.innerWidth,
+        hasParamsTable: !!document.querySelector('table.api-params-table'),
+        hasResponsesTable: !!rt,
+        mediaShown: rt ? rt.innerText.includes('text/plain') && rt.innerText.includes('未提供具体结构') : false,
+        exampleInternalScroll: !!pre && pre.scrollHeight > pre.clientHeight,
+      };
+    })()`)
+    const nShot1 = await shotElement(cdp, 'table.api-params-table', 't14-narrow-320-param-table')
+    const nShot2 = await shotElement(cdp, 'table.api-responses-table', 't14-narrow-320-response-table')
+    const nShot3 = await shotElement(cdp, 'pre.api-example-pre', 't14-narrow-320-example-scroll')
+    ok = long320.docScrollW <= long320.innerW + 2 && long320.hasParamsTable && long320.hasResponsesTable
+      && long320.mediaShown && long320.exampleInternalScroll
+    record('T14b 320px 长路径参数/双媒体/长示例局部处理且无整页横向溢出', ok, JSON.stringify(long320))
+    LOG('T14b 截图（320 参数表）: ' + nShot1)
+    LOG('T14b 截图（320 响应表）: ' + nShot2)
+    LOG('T14b 截图（320 示例滚动）: ' + nShot3)
+    await clearViewport(cdp)
   } catch (e) {
     LOG('driver error: ' + (e && e.stack ? e.stack : String(e)))
     driverFailed = true

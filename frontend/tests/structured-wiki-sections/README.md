@@ -53,8 +53,8 @@ NEG_ERROR=1  node frontend/tests/structured-wiki-sections/accept.mjs; echo $?
 ## 覆盖场景
 
 - T1 打开 pageA：3 个 endpoint 结构化章节（GET/POST `/users`、GET `/users/{id}`）+ overview Markdown
-- T2 参数/响应/错误码表数据准确；`http_status` 空 → “未提供”；无“默认值/类型”虚构列
-- T3 v1 与 v2 可区分：版本标签不同，v2 有 path 参数 `userId`、v1 无
+- T2 参数表（位置/名称/类型/必填/说明）数据准确；类型只读显式声明；`http_status` 空 → “未提供”；无虚构“默认值”列
+- T3 v1 与 v2 可区分：版本标签不同，v2 有 path 参数 `userId`（string）、v1 无
 - T4 折叠/展开按钮（click）与键盘 Enter（`aria-expanded`）
 - T5 role=null 历史 endpoint 回退 Markdown 原文（无结构化表格元素）
 - T6 人工编辑保存后 refreshDetail 重读服务端 DTO：结构消失、新正文出现
@@ -64,6 +64,10 @@ NEG_ERROR=1  node frontend/tests/structured-wiki-sections/accept.mjs; echo $?
 - T10 含 `<img id="xss-leak" onerror>` 的 display 字段安全（纯文本，不执行）
 - T11 1400px 与 320px 截图（打印实际路径）；320 表格局部滚动、无整页横向溢出
 - T12 退出码门禁回归
+- T13 8B.1：参数类型只读、响应双媒体保留、空 schema 保守文案（“未提供具体结构”，不宣称“无 Schema”）、
+  example.description 可见；未知版本/缺 endpoint/parameters 非数组/required 字符串 → 整节回退 Markdown
+  且同页其它合法章节正常
+- T14 桌面与 320px 的“参数表 / 响应表”元素截图（长路径、双媒体），320px 长示例组件内滚动、无整页溢出
 
 ## 文件
 

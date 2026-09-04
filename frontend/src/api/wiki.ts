@@ -78,6 +78,8 @@ export interface ApiEndpointParam {
   name: string
   required: boolean
   description: string
+  /** schema.type 的显式声明（字符串或多类型按 “a | b”）；空串 = 未提供（不推测）。 */
+  type: string
 }
 
 export interface ApiRequestBody {
@@ -86,15 +88,16 @@ export interface ApiRequestBody {
   media_types: ApiMediaType[]
 }
 
+/** 逐媒体类型保留名称；schema_status 保守语义（present/unspecified），无布尔断言。 */
 export interface ApiMediaType {
   media_type: string
-  schema_present: boolean
+  schema_status: 'present' | 'unspecified'
 }
 
 export interface ApiResponseRow {
   status_code: string
   description: string
-  schema_present: boolean
+  media_types: ApiMediaType[]
 }
 
 export interface ApiErrorCodeRow {
