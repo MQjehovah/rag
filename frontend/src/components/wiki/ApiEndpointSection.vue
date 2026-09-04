@@ -362,12 +362,24 @@ function exampleText(content: unknown): string {
   border: 1px solid #eef2f7;
   border-radius: 6px;
 }
+/* 窄屏可读性：表格给足内容宽度，由外层 .api-table-scroll 横向滚动；
+   短字段（状态码/位置/类型/必填等）不逐字母断行，说明列自然换行。
+   不用 overflow:hidden 裁列，不隐藏任何事实；桌面宽度充足时自动填满不额外滚动。 */
 table.api-table {
   width: 100%;
-  min-width: 0;
+  table-layout: auto;
   border-collapse: collapse;
   font-size: 12px;
   color: #4b5563;
+}
+table.api-params-table {
+  min-width: 560px;
+}
+table.api-responses-table {
+  min-width: 620px;
+}
+table.api-errors-table {
+  min-width: 460px;
 }
 .api-table th,
 .api-table td {
@@ -375,13 +387,33 @@ table.api-table {
   border: 1px solid #e5e7eb;
   text-align: left;
   vertical-align: top;
-  overflow-wrap: anywhere;
-  white-space: normal;
 }
 .api-table th {
   background: #f1f5f9;
   color: #374151;
   font-weight: 600;
+  white-space: nowrap;
+}
+/* 说明/长文本列：允许自然换行 */
+.api-table td {
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+/* 参数表：位置/名称/类型/必填为短字段（不逐字母断行）；说明自然换行 */
+table.api-params-table td:nth-child(-n+4) {
+  white-space: nowrap;
+  overflow-wrap: normal;
+}
+/* 响应表：状态码/媒体类型/结构为短字段；说明自然换行 */
+table.api-responses-table td:nth-child(-n+3) {
+  white-space: nowrap;
+  overflow-wrap: normal;
+}
+/* 错误码表：业务码/HTTP 状态为短字段；说明自然换行 */
+table.api-errors-table td:nth-child(1),
+table.api-errors-table td:nth-child(3) {
+  white-space: nowrap;
+  overflow-wrap: normal;
 }
 .api-cell-name,
 .api-cell-code,
@@ -390,8 +422,8 @@ table.api-table {
   font-size: 12px;
 }
 .api-cell-type {
-  white-space: normal;
-  word-break: break-all;
+  white-space: nowrap;
+  overflow-wrap: normal;
 }
 .api-reqbody {
   display: flex;

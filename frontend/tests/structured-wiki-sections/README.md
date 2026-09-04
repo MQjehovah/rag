@@ -68,6 +68,8 @@ NEG_ERROR=1  node frontend/tests/structured-wiki-sections/accept.mjs; echo $?
   example.description 可见；未知版本/缺 endpoint/parameters 非数组/required 字符串 → 整节回退 Markdown
   且同页其它合法章节正常
 - T14 桌面与 320px 的“参数表 / 响应表”元素截图（长路径、双媒体），320px 长示例组件内滚动、无整页溢出
+- T15 320px 表格可读性：参数名称/类型单行不逐字母竖排，容器可横向滚动且能看到末列“说明”，
+  document 无整页溢出；桌面不引入不必要的横向滚动；保存滚动前/后 320 参数表元素截图
 
 ## 文件
 

@@ -669,6 +669,71 @@ async function main() {
     LOG('T14b 截图（320 响应表）: ' + nShot2)
     LOG('T14b 截图（320 示例滚动）: ' + nShot3)
     await clearViewport(cdp)
+
+    // ===== T15：320px 表格可读性（列不逐字母竖排、可横向滚动看末列、无整页溢出） =====
+    const paramScrollExpr = `(() => {
+      const tbl = document.querySelector('table.api-params-table');
+      if (!tbl) return null;
+      const wrap = tbl.closest('.api-table-scroll');
+      const nameCell = [...tbl.querySelectorAll('tbody td')].find(td => (td.textContent || '').trim() === 'workspaceId');
+      const typeCell = (nameCell && nameCell.nextElementSibling) ? nameCell.nextElementSibling : null;
+      return {
+        hasTable: !!tbl,
+        wrapClient: wrap ? wrap.clientWidth : 0,
+        wrapScroll: wrap ? wrap.scrollWidth : 0,
+        nameText: nameCell ? nameCell.textContent.trim() : '',
+        nameSingleLine: nameCell ? nameCell.getClientRects().length === 1 : false,
+        typeText: typeCell ? typeCell.textContent.trim() : '',
+        typeSingleLine: typeCell ? typeCell.getClientRects().length === 1 : false,
+        docScrollW: document.documentElement.scrollWidth,
+        innerW: window.innerWidth,
+      };
+    })()`
+    const scrollForLastCol = `(() => {
+      const tbl = document.querySelector('table.api-params-table');
+      if (!tbl) return { ok: false };
+      const wrap = tbl.closest('.api-table-scroll');
+      wrap.scrollLeft = wrap.scrollWidth;
+      const headers = [...tbl.querySelectorAll('thead th')];
+      const last = headers[headers.length - 1];
+      const wr = wrap.getBoundingClientRect();
+      const hr = last.getBoundingClientRect();
+      return { scrollLeft: wrap.scrollLeft, lastHeader: last.textContent.trim(), lastVisible: hr.right <= wr.right + 1, scrollable: wrap.scrollWidth > wrap.clientWidth + 1 };
+    })()`
+
+    // 320px
+    await setViewport(cdp, 320, 800, false)
+    await openPageByName(cdp, '长路径接口样例', 'GET /api/v1/enterprise/workspaces/{workspaceId}/memberships/{membershipId}/roles（v1）')
+    await waitForCss(cdp, 'table.api-params-table', 8000)
+    await sleep(400)
+    const p320 = await evaluate(cdp, paramScrollExpr)
+    ok = !!p320 && p320.hasTable && p320.nameText === 'workspaceId' && p320.nameSingleLine
+      && p320.typeText === 'string' && p320.typeSingleLine
+      && p320.wrapScroll > p320.wrapClient && p320.docScrollW <= p320.innerW + 2
+    record('T15a 320px 参数表名称/类型单行不竖排，容器可横向滚动且无整页溢出', ok, JSON.stringify(p320))
+    const t15Before = await shotElement(cdp, 'table.api-params-table', 't15-narrow-320-param-before-scroll')
+    const scrollState = await evaluate(cdp, scrollForLastCol)
+    const t15After = await shotElement(cdp, 'table.api-params-table', 't15-narrow-320-param-after-scroll')
+    ok = scrollState.scrollable && scrollState.lastHeader === '说明' && scrollState.lastVisible
+    record('T15b 滚动后能看到末列“说明”', ok, JSON.stringify(scrollState))
+    LOG('T15 截图（320 参数表-滚动前）: ' + t15Before)
+    LOG('T15 截图（320 参数表-滚动后）: ' + t15After)
+    await clearViewport(cdp)
+
+    // 桌面：不引入不必要的横向滚动，列正常可读
+    await setViewport(cdp, 1400, 900, false)
+    await openPageByName(cdp, '长路径接口样例', 'GET /api/v1/enterprise/workspaces/{workspaceId}/memberships/{membershipId}/roles（v1）')
+    await waitForCss(cdp, 'table.api-params-table', 8000)
+    await sleep(300)
+    const pDesk = await evaluate(cdp, `(() => {
+      const tbl = document.querySelector('table.api-params-table');
+      const wrap = tbl ? tbl.closest('.api-table-scroll') : null;
+      const nameCell = tbl ? [...tbl.querySelectorAll('tbody td')].find(td => (td.textContent || '').trim() === 'workspaceId') : null;
+      return { hasTable: !!tbl, wrapScroll: wrap ? wrap.scrollWidth : 0, wrapClient: wrap ? wrap.clientWidth : 0, nameSingleLine: nameCell ? nameCell.getClientRects().length === 1 : false, typeText: nameCell && nameCell.nextElementSibling ? nameCell.nextElementSibling.textContent.trim() : '' };
+    })()`)
+    ok = pDesk.hasTable && pDesk.nameSingleLine && pDesk.typeText === 'string' && pDesk.wrapScroll <= pDesk.wrapClient + 1
+    record('T15c 桌面参数表不产生不必要的横向滚动且可读', ok, JSON.stringify(pDesk))
+    await clearViewport(cdp)
   } catch (e) {
     LOG('driver error: ' + (e && e.stack ? e.stack : String(e)))
     driverFailed = true
