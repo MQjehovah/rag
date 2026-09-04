@@ -21,7 +21,7 @@ Pipeline/发布/图谱 → 隔离临时 SQLite（真实 alembic upgrade head）�
 | `backend/phase9a/server.py` | 隔离后端：模型替身（含调用记录/故障注入）+ worker 泵 + uvicorn |
 | `backend/phase9a/fixtures.py` | 冻结常量 + recorder/runner + seed 实现 |
 | `backend/tests/test_phase9a_integration.py` | pytest 后端链路（alembic + 真实路由 + 真实 v3 pipeline） |
-| `backend/tests/fixtures/api_reference/phase9a_users_api.json` | API OpenAPI fixture（/v1、/v2 两版本端点） |
+| `backend/tests/fixtures/api_reference/phase9a_users_api.json` | API OpenAPI fixture（/v1、/v2 不同路径 Endpoint） |
 | `frontend/src/components/wiki/AdminRunsPanel.vue` | 慢详情最小修复：同 run getRun 在途去重 + 待刷新标记 |
 | `frontend/tests/wiki-section-evidence/` | 新增 RA3（慢详情持续反例）；RA1/RA2 保持 |
 | `frontend/tests/live9a/` | 真实后端浏览器联调（CDP，无 mock） |
@@ -30,15 +30,24 @@ Pipeline/发布/图谱 → 隔离临时 SQLite（真实 alembic upgrade head）�
 
 | 门禁 | 命令 | 结果 |
 |---|---|---|
-| 后端集成测试 | `backend\.venv\Scripts\python.exe -m pytest tests/test_phase9a_integration.py -q` | 7 passed，退出码 0（复跑稳定） |
+| 后端集成测试 | `backend\.venv\Scripts\python.exe -m pytest tests/test_phase9a_integration.py tests/test_phase9a_startup.py -q` | 10 passed（7 集成 + 3 启动闭环），退出码 0 |
 | 受影响 mock 套件（含 RA3） | `npm run dev:acceptance` + `node frontend/tests/wiki-section-evidence/accept.mjs` | 44/44 passed，退出码 0 |
 | 前端构建 | `npm run build`（vue-tsc + vite） | 成功，退出码 0 |
 | 真实后端浏览器联调 | `phase9a/run-live.ps1`（live9a） | 15/15 passed，退出码 0 |
 
 说明：
-- 首次跑受影响套件曾出现 V4c/V4d 时序抖动失败（fresh vite 首编），重跑 44/44 全绿，判定非回归。
-- 隔离后端启动发现既有 main.py startup 的 `logging` 局部名 UnboundLocalError（被自身 except
-  吞掉导致 `start_worker()` 不执行）——server.py 先显式启动幂等 worker 泵，未改既有源码，已上报。
+- 首次跑受影响套件时 V4c/V4d 曾出现失败：状态记为「出现过、原因未证实」；后续重跑通过
+  不构成「非回归」的证明，仅作为可重复通过记录，不改写为已定性结论。
+- 生产启动缺陷修复：`app/main.py` 曾因函数内局部 `import logging` 遮蔽模块名，使正常路径
+  在 `start_worker()` 前抛 `UnboundLocalError` 并被自身 except 吞掉（worker 泵永不启动）。
+  已做最小修复（模块级 `import logging` + 移除函数内遮蔽 import），启动顺序不变。
+  同时删除 `backend/phase9a/server.py` 原先「提前直接 `start_worker()`」的测试绕过——
+  隔离测试后端现经真实应用 startup 启动 worker（由新增启动闭环测试与 live9a 验证）。
+- 本轮源码修改范围：`backend/app/main.py`（启动缺陷最小修复）、`backend/phase9a/server.py`
+  （删除绕过）、`backend/tests/test_phase9a_startup.py`（新增）、
+  `backend/tests/test_phase9a_integration.py`（仅口径/命名调整）及本文档。
+- API 版本展示口径：见 CONTRACT §4.1——本轮验证的是 `/v1`、`/v2`「不同路径 Endpoint 展示」；
+  「同一 Endpoint 的 version_scope 隔离」在生产执行链尚未验证，留待 9B 审定。
 
 ## 复用同一会话重新跑浏览器验收
 

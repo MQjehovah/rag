@@ -78,7 +78,7 @@ server env：`LDAP_GROUP_MAP_WIKI_EDITOR=editors`、`LDAP_GROUP_MAP_ADMIN=`（�
 | Page | notebook | 内容要点 | Evidence(active, source_doc_hash=page.content_hash, content_hash 64hex, locator `{"section":"all"}`) |
 |---|---|---|---|
 | `p-default` | nb-eng | 纯中文长文（≥400 字，**不含语义版本号/数字点**，介绍“Phase9A 编译使用说明”） | 不需要 |
-| `p-api` | nb-eng | 内容 = OpenAPI 3 JSON fixture（见 §4.1，含两版本端点/参数/media/错误码） | `ev-api` |
+| `p-api` | nb-eng | 内容 = OpenAPI 3 JSON fixture（见 §4.1，/v1、/v2 不同路径 Endpoint + 参数 + media + 错误码） | `ev-api` |
 | `p-hidden` | nb-hidden | OpenAPI 3 JSON（单端点 `GET /v2/audit`） | `ev-hidden` |
 | `p-fail` | nb-eng | 含标记 `PHASE9A_FAIL_MARKER` 的长文本 | 不需要 |
 | `p-sales` | nb-sales | 纯中文长文（“Phase9A 销售报价流程”） | 不需要 |
@@ -109,10 +109,13 @@ server env：`LDAP_GROUP_MAP_WIKI_EDITOR=editors`、`LDAP_GROUP_MAP_ADMIN=`（�
   `application/json` schema、`401/403/404` 等 ≥400 响应作为业务错误码、`components/schemas`）。
 - 经真实 v3 api_reference 编译发布后，wiki `w-eng-api` 的 published Revision Sections 须包含
   `api_endpoint|get|/v1/users|unversioned` 与 `api_endpoint|get|/v2/users|unversioned`
-  （section_key 含 `/v1`、`/v2`，标题含两版本），每条 endpoint Section `validation_status="pass"`，
-  `structure_json` 含 `display.endpoint.parameters/responses.media_types/error_codes` 白名单投影。
-  （如实注明：单目标真实 executor 的 db_adapter 恒 `version_scope=""→unversioned`，两版本以
-  `/v1`、`/v2` 路径维度体现；这不构成 mock。）
+  （/v1、/v2 为**不同路径 Endpoint 展示**，各自成节；标题含对应路径），每条 endpoint
+  Section `validation_status="pass"`，`structure_json` 含
+  `display.endpoint.parameters/responses.media_types/error_codes` 白名单投影。
+  口径：真实 executor 链路的 `db_adapter` 当前把 `ApiSourceDocument.version_scope` 恒置为
+  `""` → 归一 `unversioned`，因此「同一 Endpoint 的 version_scope 隔离」在生产执行链上
+  尚未被本链路验证、不作为本轮覆盖项；本轮不新增版本推断规则，版本相关能力留待 9B
+  按原计划审定（本契约仅记录 /v1、/v2 路径维度的展示验证）。
 - 图谱：run 的 Manifest `graph_targets` 含 `{"kind":"wiki","wiki_page_id":...}`；publish 后
   schedule_graph stage 以真实图谱实现同步建图；图谱 API（`/api/v4/graph/subgraph`）按对应身份
   可查到与 wiki 目标相关的节点/边（不能只停留在“已调度”）。

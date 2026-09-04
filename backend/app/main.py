@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -75,11 +77,9 @@ def _start_scheduler():
         recover_dirty_pages()
     except SchemaNotReadyError:
         # schema 未就绪必须阻止应用以错误 schema 启动，不能静默继续。
-        import logging
         logging.getLogger(__name__).exception("schema not ready, aborting startup")
         raise
     except Exception:
-        import logging
         logging.getLogger(__name__).exception("failed to initialize database on startup")
     start_scheduler()
     start_daily_scheduler()
@@ -92,7 +92,6 @@ def _start_scheduler():
         logging.getLogger(__name__).info("wiki compile recovery: %s", _compile_recovery)
         start_worker()
     except Exception:
-        import logging
         logging.getLogger(__name__).exception("failed to start wiki compile worker")
 
 

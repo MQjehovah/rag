@@ -93,17 +93,8 @@ def main() -> int:
     )
     print(f"[phase9a] recorder -> {Path(record_file).resolve()}")
 
-    # 显式启动 worker 泵：app.main 的 startup 里 run_startup_recovery 成功路径会先踩到
-    # 局部名 `logging` 未绑定（UnboundLocalError）而被自身 except 吞掉，start_worker()
-    # 永远不被调用（预存缺陷，不改既有源码；见最终报告）。此处先行启动泵线程，
-    # 之后 lifespan 内再次 start_worker() 因幂等而返回 False，不重复启动。
-    from app.core.wiki_pipeline import worker as wiki_worker
-
-    if not wiki_worker.worker_running():
-        wiki_worker.start_worker()
-        print("[phase9a] wiki compile worker pump started (by phase9a/server)")
-
-    # ---- 真实 lifespan 启动 ----
+    # ---- 真实 lifespan 启动（worker 泵由 app.main startup 经 run_startup_recovery
+    #      后启动；本进程不再提前 start_worker）----
     import uvicorn
 
     from app.main import app

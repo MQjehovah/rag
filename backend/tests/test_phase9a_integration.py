@@ -6,8 +6,12 @@
   （w-eng-default/w-eng-api/w-sales-default succeeded；w-fail fault 开首轮 failed，
   关 flag 后真实 HTTP retry → succeeded）；每步刷新 DB 断言
   Revision/Section/Binding/WikiPage current_revision_id/dirty/Manifest 落库；
-- B：api wiki 两版本 endpoint section key / validation pass / structure display /
-  binding 行与 evidence 关联；
+- B：api wiki「不同路径 Endpoint 展示」——/v1 与 /v2 路径分别成节（section_key 含
+  /v1、/v2 路径），validation pass / structure display / binding 行与 evidence 关联。
+  说明：真实 executor 链路（db_adapter）当前将 ApiSourceDocument.version_scope 恒置为
+  "" → 归一 "unversioned"，故「同一 Endpoint 的 version_scope 隔离」在真实执行链上
+  尚未被本链路验证，不当作已覆盖；不同路径 Endpoint 展示与 version 相关能力留待 9B
+  按原计划审定，本轮不新增版本推断规则；
 - C：真实图谱（graph_rec 委托 _default_graph_runner）后 V4GraphEntity/V4GraphRelation
   含目标 wiki 相关行，并经 /api/v4/graph/subgraph 返回相关节点；
 - D：权限/隔离全矩阵（三个真实 token 走生产鉴权链路）；
@@ -424,11 +428,12 @@ def test_compile_fail_and_retry_with_records(env: Env):
 
 
 # ---------------------------------------------------------------------------
-# B：api wiki 两版本 sections / binding / evidence 关联
+# B：api wiki「不同路径 Endpoint 展示」（/v1、/v2 路径）+ binding / evidence 关联
+#    （非「同一 Endpoint 的 version_scope 隔离」——真实链路恒 unversioned，见文件头）
 # ---------------------------------------------------------------------------
 
 
-def test_api_wiki_two_versions_sections_and_binding(env: Env):
+def test_api_wiki_distinct_path_endpoint_sections_and_binding(env: Env):
     runs = refresh_and_collect_runs(env, wiki_ids=[fixtures.WIKI_API_ID])
     run = env.drive_run(runs[fixtures.WIKI_API_ID].id)
     assert run.status == "succeeded", (run.safe_error_code, run.safe_error_message)

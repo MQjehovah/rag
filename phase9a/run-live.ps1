@@ -50,12 +50,12 @@ function FailExit([string]$msg, [int]$code) {
 
 # ---------- 1) alembic upgrade head（真实迁移，含路径守卫） ----------
 Write-Output '== [1/8] alembic upgrade head ...'
-& $Py 'phase9a\bootstrap_db.py' --db $DbPath
+& $Py (Join-Path $Backend 'phase9a\bootstrap_db.py') --db $DbPath
 if ($LASTEXITCODE -ne 0) { FailExit 'bootstrap_db 失败' $LASTEXITCODE }
 
 # ---------- 2) seed 冻结数据 ----------
 Write-Output '== [2/8] seed frozen fixtures ...'
-& $Py 'phase9a\seed.py' --db $DbPath
+& $Py (Join-Path $Backend 'phase9a\seed.py') --db $DbPath
 if ($LASTEXITCODE -ne 0) { FailExit 'seed 失败' $LASTEXITCODE }
 
 # ---------- 3) 启动隔离后端（fault flag ON：w-fail 首次编译失败） ----------
