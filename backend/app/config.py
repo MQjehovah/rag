@@ -158,4 +158,13 @@ class Settings(BaseSettings):
     # Phase 7D：wiki.default 生产 active pipeline version（只允许 "2"/"3"；未知值启动失败）。
     wiki_pipeline_active_version: str = "3"
 
+    # Phase 9B：KnowledgeCompileRun worker lease/heartbeat/poll/renew 时长接线
+    # （纯配置，默认值=现值 300/300/2.0/30.0，生产行为不变）。跨进程故障恢复测试
+    # 经这些 env 注入短 lease 以加速 stale 判定。executor.claim_by_id 与
+    # worker.heartbeat 必须同源读 wiki_pipeline_lease_seconds（不得不同步）。
+    wiki_pipeline_lease_seconds: int = 300
+    wiki_pipeline_heartbeat_timeout_seconds: int = 300
+    wiki_pipeline_poll_interval_seconds: float = 2.0
+    wiki_pipeline_lease_renew_interval_seconds: float = 30.0
+
 settings = Settings()

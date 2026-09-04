@@ -28,6 +28,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.wiki_pipeline.executor import (
     _close_unfinished_stages,
+    _lease_seconds,  # Phase 9B：claim 到期长度同源（settings 覆盖优先，默认 300）
     claim_by_id,
     execute_run,
 )
@@ -46,6 +47,41 @@ POLL_INTERVAL_SECONDS = 2.0
 # 独立续租周期：min(30, LEASE_SECONDS // 5)。测试可显式传更短 interval。
 DEFAULT_LEASE_RENEW_INTERVAL = min(30, LEASE_SECONDS // 5)
 _MAX_CONCURRENT = 1  # 进程内并发拉取上限（信号量）；DB queued 行才是持久队列
+
+
+def _setting_float(field: str, default: float) -> float:
+    """运行时读 settings 覆盖项（Phase 9B 接线）；导入期/缺字段回退默认。"""
+    try:
+        from app.config import settings
+        return float(getattr(settings, field, default))
+    except Exception:  # noqa: BLE001 - 导入期缺配置仍回退模块常量
+        return default
+
+
+def _renew_interval_default() -> float:
+    """LeaseRenewer 未显式传 interval 时的默认续租间隔（settings 优先）。"""
+    return _setting_float(
+        "wiki_pipeline_lease_renew_interval_seconds", DEFAULT_LEASE_RENEW_INTERVAL)
+
+
+def _poll_interval() -> float:
+    """worker 泵空队列轮询间隔（settings 优先，默认 2.0s）。"""
+    return _setting_float("wiki_pipeline_poll_interval_seconds", POLL_INTERVAL_SECONDS)
+
+
+def _heartbeat_timeout_default() -> int:
+    """requeue_stale_runs 未显式传 timeout 时的 stale 判定窗口。
+
+    说明：stale 判定是 OR（heartbeat 超时 或 lease_expires_at 已过期）。短 lease
+    场景由 lease_expires_at 分支即可触发，heartbeat 窗口读同一 heartbeat 字段
+    （默认 300）保持可注入且不弱化原有语义。
+    """
+    try:
+        from app.config import settings
+        return int(getattr(
+            settings, "wiki_pipeline_heartbeat_timeout_seconds", HEARTBEAT_TIMEOUT_SECONDS))
+    except Exception:  # noqa: BLE001
+        return HEARTBEAT_TIMEOUT_SECONDS
 
 _worker_executor: ThreadPoolExecutor | None = None
 _worker_lock = threading.Lock()
@@ -130,7 +166,7 @@ def heartbeat(
     供独立续租线程使用独立 session 调用。
     """
     now = _now()
-    expires = now + timedelta(seconds=LEASE_SECONDS)
+    expires = now + timedelta(seconds=_lease_seconds())
     res = db.execute(
         update(CompileRun)
         .where(
@@ -169,7 +205,8 @@ class LeaseRenewer:
         self._run_id = run_id
         self._lease_token = lease_token
         self._worker_id = worker_id
-        self._interval = lease_interval or DEFAULT_LEASE_RENEW_INTERVAL
+        # Phase 9B：未显式传 interval → 读 settings renew 字段（默认 30s）。
+        self._interval = lease_interval or _renew_interval_default()
         self._session_factory = sessionmaker(bind=engine)
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -262,7 +299,7 @@ def _close_recovered_stages(db: Session, run: CompileRun) -> None:
 
 def requeue_stale_runs(
     db: Session,
-    timeout_seconds: int = HEARTBEAT_TIMEOUT_SECONDS,
+    timeout_seconds: int | None = None,
 ) -> int:
     """lease/心跳过期的 running run 恢复（幂等）。
 
@@ -272,7 +309,13 @@ def requeue_stale_runs(
     3. 否则 run：attempt<max → queued（不加 attempt，清 lease，下次 claim +1）；
        attempt>=max → failed(retry_exhausted)，不再 requeue。
     返回重新入队（→ queued）数量。
+
+    timeout_seconds：默认 None → 运行时读 settings
+    wiki_pipeline_heartbeat_timeout_seconds（默认 300）；显式传值仍优先
+    （既有测试全部显式传值，行为不变）。
     """
+    if timeout_seconds is None:
+        timeout_seconds = _heartbeat_timeout_default()
     now = _now()
     cutoff = now - timedelta(seconds=timeout_seconds)
     stale = (
@@ -431,8 +474,8 @@ def _pump_loop(
                 finally:
                     db.close()
                     _get_semaphore().release()
-            # 无任务也要睡一轮：稳态空队列下每 POLL_INTERVAL_SECONDS 轮询一次。
-            _stop_event.wait(POLL_INTERVAL_SECONDS)
+            # 无任务也要睡一轮：稳态空队列下每 poll 秒轮询一次（settings 可注入）。
+            _stop_event.wait(_poll_interval())
     finally:
         engine.dispose()
         logger.info("wiki compile pump thread stopped")
