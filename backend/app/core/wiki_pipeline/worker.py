@@ -28,7 +28,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.wiki_pipeline.executor import (
     _close_unfinished_stages,
-    _lease_seconds,  # Phase 9B：claim 到期长度同源（settings 覆盖优先，默认 300）
+    _lease_seconds,  # Phase 9B：claim/heartbeat 到期长度同源（读同一 settings 字段）
     claim_by_id,
     execute_run,
 )
@@ -41,32 +41,21 @@ from app.models.database import (
 
 logger = logging.getLogger(__name__)
 
-HEARTBEAT_TIMEOUT_SECONDS = 300
-LEASE_SECONDS = 300
-POLL_INTERVAL_SECONDS = 2.0
-# 独立续租周期：min(30, LEASE_SECONDS // 5)。测试可显式传更短 interval。
-DEFAULT_LEASE_RENEW_INTERVAL = min(30, LEASE_SECONDS // 5)
 _MAX_CONCURRENT = 1  # 进程内并发拉取上限（信号量）；DB queued 行才是持久队列
 
 
-def _setting_float(field: str, default: float) -> float:
-    """运行时读 settings 覆盖项（Phase 9B 接线）；导入期/缺字段回退默认。"""
-    try:
-        from app.config import settings
-        return float(getattr(settings, field, default))
-    except Exception:  # noqa: BLE001 - 导入期缺配置仍回退模块常量
-        return default
-
-
 def _renew_interval_default() -> float:
-    """LeaseRenewer 未显式传 interval 时的默认续租间隔（settings 优先）。"""
-    return _setting_float(
-        "wiki_pipeline_lease_renew_interval_seconds", DEFAULT_LEASE_RENEW_INTERVAL)
+    """LeaseRenewer 未显式传 interval 时的默认续租间隔（读 settings，默认 30.0）。"""
+    from app.config import settings
+
+    return float(settings.wiki_pipeline_lease_renew_interval_seconds)
 
 
 def _poll_interval() -> float:
-    """worker 泵空队列轮询间隔（settings 优先，默认 2.0s）。"""
-    return _setting_float("wiki_pipeline_poll_interval_seconds", POLL_INTERVAL_SECONDS)
+    """worker 泵空队列轮询间隔（读 settings，默认 2.0s）。"""
+    from app.config import settings
+
+    return float(settings.wiki_pipeline_poll_interval_seconds)
 
 
 def _heartbeat_timeout_default() -> int:
@@ -76,12 +65,9 @@ def _heartbeat_timeout_default() -> int:
     场景由 lease_expires_at 分支即可触发，heartbeat 窗口读同一 heartbeat 字段
     （默认 300）保持可注入且不弱化原有语义。
     """
-    try:
-        from app.config import settings
-        return int(getattr(
-            settings, "wiki_pipeline_heartbeat_timeout_seconds", HEARTBEAT_TIMEOUT_SECONDS))
-    except Exception:  # noqa: BLE001
-        return HEARTBEAT_TIMEOUT_SECONDS
+    from app.config import settings
+
+    return int(settings.wiki_pipeline_heartbeat_timeout_seconds)
 
 _worker_executor: ThreadPoolExecutor | None = None
 _worker_lock = threading.Lock()

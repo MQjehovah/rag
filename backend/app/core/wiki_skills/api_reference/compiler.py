@@ -507,6 +507,10 @@ def extract_source(
                 diagnostics.extend(llm_diags)
                 if note:
                     notes.append(note)
+    except parser_mod.ApiVersionScopeError as exc:
+        # 版本声明非法 / 内部参数冲突：来源级受控失败（固定 code；不泄露原始内容）。
+        diagnostics.append(exc.issue_code)
+        return None, tuple(diagnostics)
     except Exception:  # noqa: BLE001 - 单文件失败隔离；不外泄原始异常文本
         logger.exception("api_reference source extraction failed")
         diagnostics.append(SAFE_SOURCE_EXTRACTION_FAILED)

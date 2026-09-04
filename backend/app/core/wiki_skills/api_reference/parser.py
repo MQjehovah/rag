@@ -63,6 +63,30 @@ class ApiReferenceParseError(ValueError):
     """根级解析失败（结构性违法；items 级问题走 knowledge_gaps 诊断）。"""
 
 
+# 项目专用 OpenAPI 顶层扩展字段名（非标准 API 版本字段）。
+VERSION_SCOPE_FIELD = "x-wiki-version-scope"
+
+# 版本作用域受控失败的固定 issue code（对外不携带来源内容/原始异常文本）。
+VERSION_SCOPE_ISSUE_INVALID = "VERSION_SCOPE_DECLARATION_INVALID"
+VERSION_SCOPE_ISSUE_CONFLICT = "VERSION_SCOPE_CONFLICT"
+
+# 区分「键缺失」（→ unversioned）与「键存在但值为 null」（→ 受控失败）。
+_MISSING = object()
+
+
+class ApiVersionScopeError(ApiReferenceParseError):
+    """顶层 x-wiki-version-scope 声明 / 内部参数冲突的受控失败。
+
+    issue_code 为固定 token（VERSION_SCOPE_DECLARATION_INVALID /
+    VERSION_SCOPE_CONFLICT）；message 只用于定位，编译链只取 issue_code，
+    不把原始输入/异常文本写入 diagnostics 或渲染正文。
+    """
+
+    def __init__(self, issue_code: str, message: str = "") -> None:
+        super().__init__(message)
+        self.issue_code = issue_code
+
+
 def _safe_token(value: Any, default: str = "item") -> str:
     """把任意 label 清洗成 field_path 安全 token（不改写原值语义，仅转义）。"""
     text = str(value)
@@ -692,6 +716,67 @@ def _build_endpoint(operation: dict, method: str, path: str,
 
 
 # ---------------------------------------------------------------------------
+# 顶层版本声明（x-wiki-version-scope）读取与接线
+# ---------------------------------------------------------------------------
+
+
+def _read_declared_version_scope(document: Mapping[str, Any],
+                                 source: str) -> str | None:
+    """顶层解析后一次读取扩展字段（键缺失→None；非法声明→受控失败）。
+
+    - 缺失 → None（语义 = 未明示版本 → unversioned）；
+    - null / 非字符串 / 空白 → ApiVersionScopeError（来源级阻断）；
+    - 合法字符串 → identity.normalize_version_scope 规范化后返回；
+    不读取 URL / 文件名 / 标题 / openapi / info.version 推断版本。
+    """
+    raw = document.get(VERSION_SCOPE_FIELD, _MISSING)
+    if raw is _MISSING:
+        return None
+    if raw is None:
+        raise ApiVersionScopeError(
+            VERSION_SCOPE_ISSUE_INVALID,
+            f"{source}: {VERSION_SCOPE_FIELD!r} must be a non-blank string "
+            f"(found null)")
+    if not isinstance(raw, str):
+        raise ApiVersionScopeError(
+            VERSION_SCOPE_ISSUE_INVALID,
+            f"{source}: {VERSION_SCOPE_FIELD!r} must be a non-blank string "
+            f"(found {type(raw).__name__})")
+    if not raw.strip():
+        raise ApiVersionScopeError(
+            VERSION_SCOPE_ISSUE_INVALID,
+            f"{source}: {VERSION_SCOPE_FIELD!r} must be a non-blank string")
+    try:
+        return normalize_version_scope(raw)
+    except ValueError as exc:
+        raise ApiVersionScopeError(
+            VERSION_SCOPE_ISSUE_INVALID,
+            f"{source}: invalid {VERSION_SCOPE_FIELD!r}: {exc}") from exc
+
+
+def _resolve_document_version_scope(param: str | None, declared: str | None,
+                                    source: str) -> str:
+    """内部显式 version_scope 参数 × 文档声明 → 生效 scope（均已规范化）。
+
+    - 参数空/缺省 → 用文档声明（再缺省 → unversioned）；
+    - 双方都明确指定 → 规范化后相同接受、不同受控失败；
+    - 均缺失 → unversioned。
+    """
+    explicit_param = param is not None and bool(str(param).strip())
+    if declared is None:
+        return normalize_version_scope(param)
+    if not explicit_param:
+        return declared
+    norm_param = normalize_version_scope(param)
+    if norm_param != declared:
+        raise ApiVersionScopeError(
+            VERSION_SCOPE_ISSUE_CONFLICT,
+            f"{source}: internal version_scope {param!r} conflicts with "
+            f"declared {VERSION_SCOPE_FIELD!r} {declared!r}")
+    return declared
+
+
+# ---------------------------------------------------------------------------
 # 公共解析入口
 # ---------------------------------------------------------------------------
 
@@ -705,7 +790,12 @@ def parse_openapi(
     max_bytes: int = MAX_OPENAPI_BYTES,
     source: str = "openapi",
 ) -> ApiDocumentIR:
-    """OpenAPI 3 JSON/YAML → ApiDocumentIR（纯函数，只读输入）。"""
+    """OpenAPI 3 JSON/YAML → ApiDocumentIR（纯函数，只读输入）。
+
+    顶层解析后一次读取 x-wiki-version-scope（若存在）：该文档内全部 Endpoint
+    使用同一生效 scope；非法声明/与内部 version_scope 冲突 → ApiVersionScopeError
+    （来源级受控失败）。缺省（无声明且无内部参数）→ unversioned。
+    """
     document = _load_document(text, format, max_bytes, source)
     gaps: list[ApiKnowledgeGap] = []
 
@@ -724,7 +814,9 @@ def parse_openapi(
             f"{source}: 'paths' must be a mapping (found "
             f"{type(paths).__name__ if paths is not None else 'missing'})")
 
-    version_scope = normalize_version_scope(version_scope)
+    declared_scope = _read_declared_version_scope(document, source)
+    version_scope = _resolve_document_version_scope(
+        version_scope, declared_scope, source)
     raw_refs = tuple(build_evidence_ref(r) for r in (evidence or ()))
     active = tuple(r for r in raw_refs if r.status == "active")
 

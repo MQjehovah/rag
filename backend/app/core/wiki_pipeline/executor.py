@@ -84,19 +84,16 @@ ERROR_SUMMARY_TRUNCATE = 300
 SAFE_ERROR_TRUNCATE = 200
 STAGE_ERROR_CODE_TRUNCATE = 64
 
-# claim 时写入的默认租约长度（与 worker.LEASE_SECONDS 对齐）。生产默认 300。
-# claim_by_id 实际到期长度运行时读 settings.wiki_pipeline_lease_seconds
-# （回退本常量），与 worker.heartbeat 同源，保证短 lease 不被心跳顶回 300s。
-_LEASE_SECONDS = 300
+# claim 时写入的租约长度：运行时读 settings.wiki_pipeline_lease_seconds（默认 300），
+# 与 worker.heartbeat 同源，保证短 lease 不被心跳顶回 300s。
+# 配置合法性由 pydantic 在 Settings 构造时校验；此处不再吞异常回退默认值。
 
 
 def _lease_seconds() -> int:
-    """当前租约秒数：settings 覆盖优先，回退模块常量 300。"""
-    try:
-        from app.config import settings
-        return int(getattr(settings, "wiki_pipeline_lease_seconds", _LEASE_SECONDS))
-    except Exception:  # noqa: BLE001 - 导入期缺配置仍回退默认
-        return _LEASE_SECONDS
+    """当前租约秒数：直接读 settings（构造时已校验为正整数；非法即无法构造）。"""
+    from app.config import settings
+
+    return int(settings.wiki_pipeline_lease_seconds)
 
 # 系统生成的 stage 失败错误码（严格大写 snake，满足 StageResult 契约）。
 _STAGE_EXCEPTION_CODE = "STAGE_EXCEPTION"

@@ -1,3 +1,6 @@
+import math
+
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Optional
 
@@ -166,5 +169,35 @@ class Settings(BaseSettings):
     wiki_pipeline_heartbeat_timeout_seconds: int = 300
     wiki_pipeline_poll_interval_seconds: float = 2.0
     wiki_pipeline_lease_renew_interval_seconds: float = 30.0
+
+    # Phase 9B 配置校验：非法时长在启动配置阶段即失败（Settings 构造抛 ValidationError
+    # → 应用起不来、worker 不启动），绝不静默回退默认值。
+    @field_validator("wiki_pipeline_lease_seconds", "wiki_pipeline_heartbeat_timeout_seconds")
+    @classmethod
+    def _validate_wiki_pipeline_positive_int(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("must be a positive integer (seconds > 0)")
+        return value
+
+    @field_validator(
+        "wiki_pipeline_poll_interval_seconds", "wiki_pipeline_lease_renew_interval_seconds"
+    )
+    @classmethod
+    def _validate_wiki_pipeline_positive_finite_float(cls, value: float) -> float:
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError("must be a finite positive number (reject NaN/±Infinity/≤0)")
+        return value
+
+    @model_validator(mode="after")
+    def _validate_wiki_pipeline_renew_budget(self) -> "Settings":
+        budget = min(
+            self.wiki_pipeline_lease_seconds, self.wiki_pipeline_heartbeat_timeout_seconds
+        ) / 3
+        if self.wiki_pipeline_lease_renew_interval_seconds > budget:
+            raise ValueError(
+                "wiki_pipeline_lease_renew_interval_seconds must be <= "
+                f"min(lease, heartbeat_timeout) / 3 = {budget}"
+            )
+        return self
 
 settings = Settings()
