@@ -145,9 +145,9 @@
                   <span class="edit-hint">人工内容将在后续重建中保留（保存后自动锁定）。</span>
                 </div>
               </div>
-              <!-- 阅读态 -->
+              <!-- 阅读态：Phase 8B 起按 section_role/display 分派（endpoint+display → 结构化；否则 Markdown） -->
               <div v-else class="section-content">
-                <MarkdownPreview :content="sec.content" />
+                <SectionContent :section="sec" />
               </div>
 
               <div v-if="sec.citations.length" class="section-citations">
@@ -236,7 +236,7 @@ import {
 } from '../api/wiki'
 import { wikiWorkspacesApi, type WikiWorkspaceSummary } from '../api/wikiWorkspaces'
 import { useAuthStore } from '../stores/auth'
-import MarkdownPreview from '../components/MarkdownPreview.vue'
+import SectionContent from '../components/wiki/SectionContent.vue'
 import EvidenceDrawer from '../components/EvidenceDrawer.vue'
 import WorkspaceSelector from '../components/wiki/WorkspaceSelector.vue'
 import WorkspaceNotebooks from '../components/wiki/WorkspaceNotebooks.vue'

@@ -56,6 +56,7 @@ from app.core.wiki_pipeline.pipelines.wiki_skilled_default import (
     _stage_skill_route,
 )
 from app.core.wiki_skills.api_reference import compiler as api_compiler_mod
+from app.core.wiki_skills.api_reference import display as api_display_mod
 from app.core.wiki_skills.api_reference.compiler import ApiCompileResult
 from app.core.wiki_skills.api_reference.db_adapter import (
     build_api_source_documents_with_diagnostics,
@@ -470,7 +471,12 @@ def _api_bindings_for_section(ir, spec) -> list[tuple[str, str, str]]:
 
 
 def _derive_persist_sections(result: ApiCompileResult) -> list[dict]:
-    """compile 产物 → 确定性 persist Section 计划（结构 JSON-safe，无 excerpt）。"""
+    """compile 产物 → 确定性 persist Section 计划（结构 JSON-safe，无 excerpt）。
+
+    Phase 8B：仅当 section 校验通过（validation_status=="pass"）且 role 为
+    endpoint 时，在 structure dict 上追加命名空间子对象 display（契约 §2）。
+    投影只来自已通过验证的 IR 事实字段；display 越界/异常一律省略（不落库）。
+    """
     ir = result.ir
     blueprint = result.blueprint
     rendered_by_key = {s.section_key: s for s in result.sections}
@@ -478,17 +484,25 @@ def _derive_persist_sections(result: ApiCompileResult) -> list[dict]:
     for order, spec in enumerate(blueprint.sections):
         rendered = rendered_by_key.get(spec.section_key)
         content = rendered.content if rendered is not None else ""
+        content_hash = _hash_text(content)
+        validation_status = (
+            "pass" if (rendered is None or rendered.validation_status == "pass")
+            else "fail"
+        )
+        structure = spec.to_dict()
+        if validation_status == "pass" and spec.section_role == "endpoint":
+            section_display = api_display_mod.build_section_display(
+                ir, spec, content_hash)
+            if section_display is not None:
+                structure["display"] = section_display
         out.append({
             "order_index": order,
             "section_key": spec.section_key,
             "heading": spec.heading,
             "content": content,
-            "content_hash": _hash_text(content),
-            "validation_status": (
-                "pass" if (rendered is None or rendered.validation_status == "pass")
-                else "fail"
-            ),
-            "structure": spec.to_dict(),
+            "content_hash": content_hash,
+            "validation_status": validation_status,
+            "structure": structure,
             "bindings": _api_bindings_for_section(ir, spec),
         })
     return out

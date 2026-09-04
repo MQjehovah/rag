@@ -780,7 +780,10 @@ def test_no_excerpt_prompt_token_path_leak(db):
         "openapi": "3.0.1",
         "info": {"title": "用户 API", "version": "1.0", "description": overview},
         "paths": {"/api/users": {"get": {
-            "description": f"返回 200 成功。{marker_excerpt}",
+            # marker 放在 parser 不建模的扩展字段：即使 8B display 携带 IR 事实
+            # （endpoint.description 等），任意未建模来源文本也绝不能进入 structure_json。
+            "description": "",
+            "x-internal-probe": f"返回 200 成功。{marker_excerpt}",
             "responses": {"200": {"description": "ok"}},
         }}},
     }, ensure_ascii=False)

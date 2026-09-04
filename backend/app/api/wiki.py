@@ -34,6 +34,7 @@ from app.core.knowledge_compiler_v3.wiki_lifecycle import (
     set_section_protection_current,
 )
 from app.core.feature_flags import feature_enabled
+from app.core.wiki_skills.api_reference.display import section_api_view
 from app.models.database import (
     Page,
     WikiLink,
@@ -252,6 +253,13 @@ def _sections_payload(
     for sec in db.query(WikiSection).filter(
         WikiSection.revision_id == revision_id
     ).order_by(WikiSection.order_index).all():
+        section_role, display = section_api_view(
+            sec.structure_json, sec.content or "",
+            content_origin=sec.content_origin,
+            merge_policy=sec.merge_policy,
+            locked=sec.locked,
+            validation_status=sec.validation_status,
+        )
         sections.append({
             "id": sec.id,
             "section_type": sec.section_type,
@@ -266,6 +274,9 @@ def _sections_payload(
             "version_status": sec.version_status,
             "diff_notice": sec.diff_notice,
             "citations": [],
+            # Phase 8B：展示 DTO 增量字段（合法时受限 DTO；否则 null）。
+            "section_role": section_role,
+            "display": display,
         })
     return sections
 

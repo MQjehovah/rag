@@ -41,6 +41,89 @@ export interface WikiSection {
   merge_policy: string | null
   version_status: string | null
   diff_notice: string | null
+  // Phase 8B（见 backend DISPLAY_CONTRACT.md）：只读接口增量字段。
+  // section_role 由存储 structure_json 的合法 role 解析；display 合法时为受限 DTO，
+  // 否则为 null（前端回退 Markdown）。普通/历史/人工章节两者皆可缺省/null。
+  section_role?: string | null
+  display?: ApiSectionDisplay | null
+}
+
+// ===== Phase 8B display DTO（与 DISPLAY_CONTRACT.md 白名单一致，未知键前端不消费） =====
+
+export interface ApiSectionDisplay {
+  schema_version: string
+  content_hash: string
+  section_role: string
+  version_scope: string
+  endpoint: ApiEndpointMeta
+  parameters: ApiEndpointParam[]
+  request_body: ApiRequestBody | null
+  responses: ApiResponseRow[]
+  error_codes: ApiErrorCodeRow[]
+  examples: ApiExampleRow[]
+  version_notes: ApiVersionNoteRow[]
+  knowledge_gaps: ApiGapRow[]
+  conflicts: ApiConflictRow[]
+}
+
+export interface ApiEndpointMeta {
+  method: string
+  path: string
+  summary: string
+  description: string
+}
+
+export interface ApiEndpointParam {
+  location: 'path' | 'query' | 'header'
+  name: string
+  required: boolean
+  description: string
+}
+
+export interface ApiRequestBody {
+  required: boolean
+  description: string
+  media_types: ApiMediaType[]
+}
+
+export interface ApiMediaType {
+  media_type: string
+  schema_present: boolean
+}
+
+export interface ApiResponseRow {
+  status_code: string
+  description: string
+  schema_present: boolean
+}
+
+export interface ApiErrorCodeRow {
+  code: string
+  description: string
+  /** 空串 = 未提供（业务码≠HTTP 状态）；禁止并入 HTTP 状态列。 */
+  http_status: string
+}
+
+export interface ApiExampleRow {
+  title: string
+  description: string
+  media_type: string
+  /** JSON 安全对象/数组/标量；前端仅经 JSON.stringify + <pre> 文本展示。 */
+  content: unknown
+}
+
+export interface ApiVersionNoteRow {
+  version_scope: string
+  note: string
+}
+
+export interface ApiGapRow {
+  gap_type: string
+  description: string
+}
+
+export interface ApiConflictRow {
+  field_path: string
 }
 
 export interface WikiRelatedTopic {
