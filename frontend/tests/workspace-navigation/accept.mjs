@@ -1,10 +1,17 @@
-// Phase 8A.1 浏览器验收驱动器（可重复运行，隔离 mock，不连正式后端）。
+// Phase 8A.2 浏览器验收驱动器（可重复运行，隔离 mock，不连正式后端）。
 //
 // 前置：
 //   1) 前端 acceptance dev server 运行在 3001：cd frontend && npm run dev:acceptance
 //   2) Chrome/Edge 可用（CHROME_PATH 可覆盖；默认取本机 Chrome）
 // 运行：node frontend/tests/workspace-navigation/accept.mjs
 // 环境变量（可选）：FRONT_URL / MOCK_PORT / CDP_PORT / SHOTS_DIR
+// 退出码：
+//   0  = 所有预期场景执行且全部通过
+//   1  = 存在失败断言 / 驱动异常 / 启动失败 / 未执行完预期场景 / 空结果
+//
+// 负向自测（故意失败，应返回非零退出码；与正式验收分开记录）：
+//   NEG_ASSERT=1 node accept.mjs   # 注入失败断言
+//   NEG_ERROR=1  node accept.mjs   # 注入驱动异常
 //
 // 验收场景（真实用户路径，禁止手工 pushState 制造历史）：
 //   R1  工作区列表首次 500 → 点击“重试”→ 完整恢复 ready
@@ -20,6 +27,11 @@
 //   R8  保存 A 期间切到 B，A 完成后不得清空/重开/修改 B 的 UI
 //   R9  快速连续导航，旧恢复流程不覆盖最新 Workspace
 //   R10 320px 打开主题 + 管理员绑定面板，无整页横向溢出
+//   W1  详情初次读取拒绝其他/空/null/缺失 workspace_id（无旧正文，固定提示）
+//   W2  详情刷新路径拒绝错域 workspace_id（清旧正文与抽屉状态）
+//   F1  阅读主题时搜索：URL 保留 pageId，目录过滤，正文保持
+//   F2  编辑主题时改分类：不弹确认、不丢编辑内容、pageId 保留
+//   F3  搜索+分类后刷新：pageId/Workspace/筛选均恢复一致
 import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -37,6 +49,21 @@ const CHROME = process.env.CHROME_PATH || 'C:\\Program Files\\Google\\Chrome\\Ap
 const PROFILE = path.join(os.tmpdir(), 'wiki-workspace-nav-profile')
 const results = []
 const LOGF = path.join(os.tmpdir(), 'wiki-workspace-nav.log')
+const NEG_ASSERT = process.env.NEG_ASSERT === '1'
+const NEG_ERROR = process.env.NEG_ERROR === '1'
+let driverFailed = false
+let summarized = false
+
+function summarize() {
+  if (summarized) return null
+  summarized = true
+  const passed = results.filter((r) => r.ok).length
+  const failed = results.filter((r) => !r.ok).length
+  console.log('\n===== 汇总 =====')
+  console.log(`passed=${passed} failed=${failed} executed=${results.length}${driverFailed ? ' driverError=true' : ''}`)
+  console.log(`截图目录: ${SHOTS}`)
+  return { passed, failed, executed: results.length }
+}
 
 function LOG(line) {
   fs.appendFileSync(LOGF, line + '\n')
@@ -255,12 +282,18 @@ async function chooseCategory(cdp, label) {
 async function countSelector(cdp, selector) {
   return evaluate(cdp, `document.querySelectorAll(${JSON.stringify(selector)}).length`)
 }
+async function catalogTitles(cdp) {
+  return evaluate(cdp, `[...document.querySelectorAll('.catalog-item .catalog-title')].map(el => el.textContent.trim())`)
+}
 
 async function mockControl(patch) {
   await fetch(`http://127.0.0.1:${MOCK_PORT}/__control`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) })
 }
 async function resetAllControl() {
-  await mockControl({ errorWorkspaces: false, slowWorkspace: '', slowRevisionsPage: '', slowDiffPage: '', slowPatchPage: '' })
+  await mockControl({
+    errorWorkspaces: false, slowWorkspace: '', slowRevisionsPage: '', slowDiffPage: '', slowPatchPage: '',
+    detailTamper: {},
+  })
 }
 
 async function main() {
@@ -295,6 +328,18 @@ async function main() {
     await cdp.send('Runtime.enable')
     await goto(cdp, `${FRONT}/login`)
     LOG('cdp + front origin ready')
+
+    // ===== 负向自测：可控注入失败/驱动异常（不执行正式场景，预期非零退出） =====
+    if (NEG_ASSERT || NEG_ERROR) {
+      LOG(`[SELF-TEST] negative mode: NEG_ASSERT=${NEG_ASSERT} NEG_ERROR=${NEG_ERROR}`)
+      if (NEG_ASSERT) {
+        record('SELF-TEST-NEG-ASSERT', false, '注入的失败断言（负向自测，预期非零退出）')
+      }
+      if (NEG_ERROR) {
+        throw new Error('SELF-TEST-INJECTED driver error（负向自测，预期非零退出）')
+      }
+      return
+    }
 
     let ok = false
     let s
@@ -524,12 +569,110 @@ async function main() {
     await shot(cdp, 'r10-narrow-admin-detail')
     await clearViewport(cdp)
 
-    // ===== 汇总 =====
-    LOG('\n===== 验收汇总 =====')
-    for (const r of results) console.log(`${r.ok ? 'PASS' : 'FAIL'} | ${r.name}`)
-    console.log(`截图目录: ${SHOTS}`)
+    // ===== W1：详情初次读取严格拒绝错误 workspace_id（other/empty/null/absent） =====
+    for (const mode of ['other', 'empty', 'null', 'absent']) {
+      await resetAllControl()
+      await setToken(cdp, 'tok-both')
+      await mockControl({ detailTamper: { 'p-eng-1': mode } })
+      await goto(cdp, `${FRONT}/knowledge/wiki/p-eng-1?workspace_id=ws-eng`, '该主题不属于当前工作区')
+      await sleep(250)
+      const w1sections = await countSelector(cdp, '.section-item')
+      const w1title = await detailTitle(cdp)
+      const w1body = await bodyText(cdp)
+      ok = w1sections === 0 && w1title === '' && w1body.includes('该主题不属于当前工作区')
+      record(`W1-${mode} 初次读取拒绝错域详情（无旧正文/固定提示）`, ok, `sections=${w1sections}`)
+    }
+
+    // ===== W2：详情刷新路径拒绝错域 workspace_id（清旧正文与抽屉状态） =====
+    await resetAllControl()
+    await setToken(cdp, 'tok-both')
+    await goto(cdp, `${FRONT}/knowledge/wiki/p-eng-1?workspace_id=ws-eng`, '操作步骤')
+    ok = await clickByText(cdp, '编辑')
+    ok = ok && (await waitForCss(cdp, '.edit-box textarea', 4000))
+    ok = ok && (await setTextareaValue(cdp, '【刷新反例-保存内容】'))
+    await sleep(250)
+    await mockControl({ detailTamper: { 'p-eng-1': 'other' } })
+    ok = ok && (await clickButtonByText(cdp, '保存'))
+    const w2msg = await waitForText(cdp, '该主题不属于当前工作区', 8000)
+    await sleep(300)
+    const w2url = await currentUrl(cdp)
+    const w2title = await detailTitle(cdp)
+    const w2sections = await countSelector(cdp, '.section-item')
+    const w2edit = await countSelector(cdp, '.edit-box')
+    const w2rev = await countSelector(cdp, '.rev-item')
+    const w2body = await bodyText(cdp)
+    ok = ok && w2msg && w2title === '' && w2sections === 0 && w2edit === 0 && w2rev === 0 && w2url.includes('p-eng-1') && !w2body.includes('刷新反例-保存内容')
+    record('W2 刷新路径拒绝错域详情并清空旧正文/编辑/抽屉', ok, `sections=${w2sections} edit=${w2edit} rev=${w2rev}`)
+    await shot(cdp, 'w2-refresh-mismatch')
+
+    // ===== F1：阅读主题时搜索：URL 保留 pageId、目录过滤、正文保持 =====
+    await resetAllControl()
+    await setToken(cdp, 'tok-both')
+    await goto(cdp, `${FRONT}/knowledge/wiki/p-eng-1?workspace_id=ws-eng`, '操作步骤')
+    ok = await setInputValue(cdp, '搜索', '接线')
+    await sleep(1100)
+    const f1url = await currentUrl(cdp)
+    const f1q = await getQueryParam(cdp, 'q')
+    const f1cats = await catalogTitles(cdp)
+    const f1title = await detailTitle(cdp)
+    const f1body = await bodyText(cdp)
+    ok = ok && f1url.includes('/knowledge/wiki/p-eng-1') && f1url.includes('workspace_id=ws-eng') && f1q === '接线'
+      && f1cats.length === 1 && f1cats[0] === '接线规范' && f1title === '水箱安装手册' && f1body.includes('操作步骤')
+    record('F1 阅读主题时搜索保留 pageId/正文，目录按当前工作区过滤', ok, `q=${f1q} cats=${JSON.stringify(f1cats)}`)
+    await shot(cdp, 'f1-read-search-pageid')
+
+    // ===== F2：编辑主题时改变分类：不弹确认、不丢编辑内容、pageId 保留 =====
+    await resetAllControl()
+    await setToken(cdp, 'tok-both')
+    await goto(cdp, `${FRONT}/knowledge/wiki/p-eng-1?workspace_id=ws-eng`, '操作步骤')
+    await clickByText(cdp, '编辑')
+    await waitForCss(cdp, '.edit-box textarea', 4000)
+    await setTextareaValue(cdp, '【编辑中改分类-验收】')
+    await sleep(250)
+    s = await chooseCategory(cdp, '电气')
+    await sleep(1000)
+    const f2boxes = await countSelector(cdp, '.el-message-box')
+    const f2val = await textareaValue(cdp)
+    const f2url = await currentUrl(cdp)
+    const f2title = await detailTitle(cdp)
+    const f2cat = await getQueryParam(cdp, 'category')
+    const f2cats = await catalogTitles(cdp)
+    ok = s === 'ok' && f2boxes === 0 && f2val.includes('编辑中改分类') && f2title === '水箱安装手册'
+      && f2url.includes('/knowledge/wiki/p-eng-1') && f2cat === '电气' && f2cats.length === 1 && f2cats[0] === '接线规范'
+    record('F2 编辑主题时改分类：无确认框、编辑不丢、pageId 保留', ok, `boxes=${f2boxes} cat=${f2cat}`)
+    await shot(cdp, 'f2-edit-category')
+    await clickButtonByText(cdp, '取消')
+    await sleep(250)
+
+    // ===== F3：搜索+分类后刷新：pageId/Workspace/筛选均恢复一致 =====
+    await resetAllControl()
+    await setToken(cdp, 'tok-both')
+    await goto(cdp, `${FRONT}/knowledge/wiki/p-eng-1?workspace_id=ws-eng`, '操作步骤')
+    await setInputValue(cdp, '搜索', '接线')
+    await sleep(1000)
+    s = await chooseCategory(cdp, '电气')
+    await sleep(1000)
+    const f3pre = await currentUrl(cdp)
+    const f3preTitle = await detailTitle(cdp)
+    const f3preCats = await catalogTitles(cdp)
+    ok = s === 'ok' && f3pre.includes('/knowledge/wiki/p-eng-1') && f3pre.includes('workspace_id=ws-eng')
+      && (await getQueryParam(cdp, 'q')) === '接线' && (await getQueryParam(cdp, 'category')) === '电气'
+      && f3preTitle === '水箱安装手册' && f3preCats.length === 1 && f3preCats[0] === '接线规范'
+    record('F3a 搜索+分类后 URL 含 pageId/workspace/筛选', ok, `url=${f3pre}`)
+    await goto(cdp, f3pre, '操作步骤')
+    await sleep(300)
+    const f3title = await detailTitle(cdp)
+    const f3cats = await catalogTitles(cdp)
+    const f3body = await bodyText(cdp)
+    ok = (await currentUrl(cdp)).includes('/knowledge/wiki/p-eng-1')
+      && (await getQueryParam(cdp, 'q')) === '接线' && (await getQueryParam(cdp, 'category')) === '电气'
+      && (await currentUrl(cdp)).includes('workspace_id=ws-eng') && f3title === '水箱安装手册'
+      && f3cats.length === 1 && f3cats[0] === '接线规范' && f3body.includes('操作步骤')
+    record('F3b 刷新后 pageId/Workspace/筛选一致（正文可继续阅读）', ok, `cats=${JSON.stringify(f3cats)}`)
+    await shot(cdp, 'f3-refresh-consistent')
   } catch (e) {
     LOG('driver error: ' + (e && e.stack ? e.stack : String(e)))
+    driverFailed = true
     results.push({ name: 'DRIVER-ERROR', ok: false, extra: String(e) })
   } finally {
     try { if (cdp) await Promise.race([cdp.send('Browser.close').catch(() => {}), sleep(1200)]) } catch {}
@@ -537,9 +680,6 @@ async function main() {
     try { if (chrome) chrome.kill() } catch {}
     try { if (mockChild) mockChild.kill() } catch {}
     await sleep(300)
-    console.log('\n===== 验收汇总 =====')
-    for (const r of results) console.log(`${r.ok ? 'PASS' : 'FAIL'} | ${r.name}`)
-    try { process.exit(0) } catch {}
   }
 }
 
@@ -547,4 +687,19 @@ async function currentUrl(cdp) {
   return evaluate(cdp, 'location.href')
 }
 
-main().catch((e) => { console.error('driver fatal', e); process.exit(3) })
+main()
+  .then(() => {
+    const s = summarize()
+    const code = driverFailed || !s || s.executed === 0 || s.failed > 0 ? 1 : 0
+    process.exitCode = code
+    LOG(`SUMMARY passed=${s ? s.passed : 0} failed=${s ? s.failed : 0} executed=${s ? s.executed : 0} exitCode=${code}${NEG_ASSERT || NEG_ERROR ? ' [NEGATIVE-SELF-TEST]' : ''}`)
+    // 资源已清理；unref 定时器仅作兜底，不阻止事件循环自然退出
+    setTimeout(() => process.exit(code), 1500).unref()
+  })
+  .catch((e) => {
+    LOG('driver fatal: ' + (e && e.stack ? e.stack : String(e)))
+    driverFailed = true
+    summarize()
+    process.exitCode = 3
+    setTimeout(() => process.exit(3), 1500).unref()
+  })

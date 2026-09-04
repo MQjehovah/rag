@@ -19,6 +19,26 @@
 node frontend/tests/workspace-navigation/accept.mjs
 ```
 
+退出码：
+
+- `0`：所有预期场景执行且全部通过。
+- `1`：存在失败断言、驱动异常、启动失败、未执行完预期场景或空结果。
+- `3`：main 之外未捕获的致命异常（兜底）。
+
+脚本自动启动/关闭 mock 子进程与 headless Chrome，汇总只输出一次
+（passed / failed / executed / driverError）。资源清理（关闭浏览器/终止子进程）
+不覆盖失败结果——退出码由执行结果决定，而非无条件 `0`。
+
+### 负向自测（故意失败，预期非零退出；与正式验收分开记录）
+
+```bash
+# 1) 注入失败断言 → 应返回非零
+NEG_ASSERT=1 node frontend/tests/workspace-navigation/accept.mjs; echo $?
+
+# 2) 注入驱动异常 → 应返回非零
+NEG_ERROR=1 node frontend/tests/workspace-navigation/accept.mjs; echo $?
+```
+
 可选环境变量：
 
 | 变量 | 默认 | 说明 |
@@ -28,8 +48,6 @@ node frontend/tests/workspace-navigation/accept.mjs
 | `CDP_PORT` | `9333` | Chrome DevTools 端口 |
 | `CHROME_PATH` | Windows Chrome | Chrome/Edge 可执行文件 |
 | `SHOTS_DIR` | `os.tmpdir()/wiki-workspace-nav-shots` | 截图输出目录（不入库） |
-
-脚本自动启动/关闭 mock 子进程与 headless Chrome，退出码 0 且全部 `PASS` 即通过。
 
 ## 覆盖场景
 
@@ -43,6 +61,11 @@ node frontend/tests/workspace-navigation/accept.mjs
 - R8 保存 A 期间切到 B，A 完成后不干扰 B 的 UI
 - R9 快速连续导航，旧恢复流程不覆盖最新 Workspace
 - R10 320px 打开主题 + 管理员绑定面板，无整页横向溢出
+- W1 详情初次读取严格拒绝 `workspace_id` 为 other/empty/null/absent（无旧正文，固定提示）
+- W2 详情刷新路径拒绝错域 `workspace_id`（清旧正文/编辑/抽屉）
+- F1 阅读主题时搜索：URL 保留 pageId，目录过滤，正文保持
+- F2 编辑主题时改分类：不弹确认、不丢编辑内容、pageId 保留
+- F3 搜索+分类后刷新：pageId/Workspace/筛选均恢复一致
 
 ## 文件
 

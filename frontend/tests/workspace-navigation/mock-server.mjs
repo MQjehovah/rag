@@ -113,6 +113,8 @@ const control = {
   slowRevisionsPage: '',
   slowDiffPage: '',
   slowPatchPage: '',
+  // 详情响应 workspace_id 篡改：{ [pageId]: 'other' | 'empty' | 'null' | 'absent' }
+  detailTamper: {},
 }
 const requestLog = []
 
@@ -255,6 +257,12 @@ async function handle(req, res) {
       related_topic_ids: [],
       viewing_revision_id: 'r1',
     }
+    // 注入篡改（用于前端“详情工作区严格匹配”负向用例）
+    const tamper = control.detailTamper && control.detailTamper[page.id]
+    if (tamper === 'other') detail.workspace_id = 'ws-sales'
+    else if (tamper === 'empty') detail.workspace_id = ''
+    else if (tamper === 'null') detail.workspace_id = null
+    else if (tamper === 'absent') delete detail.workspace_id
     return json(res, 200, detail)
   }
 

@@ -583,6 +583,24 @@ async function load() {
 }
 
 // ---- 主题详情 ----
+// 详情响应 workspace 严格匹配：仅当 workspace_id 为非空字符串且精确等于当前工作区才展示。
+// 缺失 / null / 空串 / 其他 Workspace ID 一律拒绝，并清除旧正文与关联抽屉状态。
+function responseBelongsToWs(data: WikiDetail, ws: string): boolean {
+  return typeof data.workspace_id === 'string' && data.workspace_id !== '' && data.workspace_id === ws
+}
+
+function rejectDetailWsMismatch() {
+  detail.value = null
+  detailError.value = '该主题不属于当前工作区'
+  revisions.value = []
+  diff.value = null
+  showRevisions.value = false
+  evidenceVisible.value = false
+  viewingPreview.value = false
+  cancelEdit()
+  detailBad.value = true
+}
+
 async function openDetail(pageId: string, opts: { preview?: boolean } = {}) {
   const ws = workspaceId.value
   if (!ws || !alive) return
@@ -596,9 +614,8 @@ async function openDetail(pageId: string, opts: { preview?: boolean } = {}) {
   try {
     const data = await wikiApi.get(pageId, { preview: opts.preview })
     if (!readLive(gen) || workspaceId.value !== ws || currentPageId.value !== pageId) return
-    if (data.workspace_id && data.workspace_id !== workspaceId.value) {
-      detailBad.value = true
-      detailError.value = '该主题不属于当前工作区'
+    if (!responseBelongsToWs(data, ws)) {
+      rejectDetailWsMismatch()
       return
     }
     detail.value = data
@@ -618,10 +635,8 @@ async function refreshDetail(pageId: string, opts: { preview?: boolean } = {}) {
   try {
     const data = await wikiApi.get(pageId, { preview: opts.preview })
     if (!readLive(gen) || workspaceId.value !== ws || currentPageId.value !== pageId) return
-    if (data.workspace_id && data.workspace_id !== workspaceId.value) {
-      detailBad.value = true
-      detail.value = null
-      detailError.value = '该主题不属于当前工作区'
+    if (!responseBelongsToWs(data, ws)) {
+      rejectDetailWsMismatch()
       return
     }
     detailBad.value = false
@@ -743,16 +758,24 @@ function onWorkspaceSelect(nextId: string) {
   void navigate(null, { workspace_id: nextId })
 }
 
+// 仅更新 q/category：保留 route.path（含 pageId 主题页参数）与其他 query，
+// 筛选只影响目录，不关闭正在阅读/编辑的主题。
+function replaceQueryFilter(patch: QueryExtra) {
+  const loc = { path: route.path, query: { ...route.query, ...patch } as LocationQueryRaw }
+  if (router.resolve(loc).fullPath === route.fullPath) return
+  void router.replace(loc)
+}
+
 function syncSearchToRoute() {
   const q = searchText.value
   if (queryString(route.query.q) === q) return
-  void navigate(null, { q: q || undefined }, 'replace')
+  replaceQueryFilter({ q: q || undefined })
 }
 
 function syncCategoryToRoute() {
   const cat = categoryFilter.value || undefined
   if ((queryString(route.query.category) || undefined) === cat) return
-  void navigate(null, { category: cat }, 'replace')
+  replaceQueryFilter({ category: cat })
 }
 
 watch(searchText, () => {
