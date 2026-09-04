@@ -24,7 +24,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { onBeforeUnmount, ref, watch } from 'vue'
 import {
   wikiWorkspacesApi,
   type NotebookBindingSummary,
@@ -32,7 +32,8 @@ import {
 
 /** Phase 8A：管理员工作区信息面板——只读展示 active Notebook 绑定。
  * 仅在管理员角色下由父组件渲染；不提供绑定/解绑操作。
- * 自管理加载状态与竞态：快速切换 workspace 时用序号丢弃迟到响应。
+ * 自管理加载状态与竞态：快速切换 workspace 时用序号丢弃迟到响应；
+ * 组件卸载后使所有在途绑定读取失效。
  */
 const props = defineProps<{ workspaceId: string }>()
 
@@ -40,6 +41,7 @@ const bindings = ref<NotebookBindingSummary[]>([])
 const loading = ref(false)
 const error = ref('')
 let seq = 0
+let alive = true
 
 async function reload() {
   if (!props.workspaceId) return
@@ -48,18 +50,23 @@ async function reload() {
   error.value = ''
   try {
     const data = await wikiWorkspacesApi.listNotebooks(props.workspaceId)
-    if (token !== seq) return
+    if (!alive || token !== seq) return
     bindings.value = data.bindings || []
   } catch {
-    if (token !== seq) return
+    if (!alive || token !== seq) return
     bindings.value = []
     error.value = '绑定信息加载失败'
   } finally {
-    if (token === seq) loading.value = false
+    if (alive && token === seq) loading.value = false
   }
 }
 
 watch(() => props.workspaceId, reload, { immediate: true })
+
+onBeforeUnmount(() => {
+  alive = false
+  seq++
+})
 
 function fmtTime(t: string): string {
   return (t || '').replace('T', ' ').slice(0, 16)

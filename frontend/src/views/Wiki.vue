@@ -9,7 +9,7 @@
         <WorkspaceSelector
           :model-value="workspaceId"
           :workspaces="browsableWorkspaces"
-          :disabled="workspaceState !== 'ready'"
+          :disabled="selectorDisabled"
           :loading="workspaceState === 'loading'"
           @update:model-value="onWorkspaceSelect"
         />
@@ -24,7 +24,7 @@
           clearable
           style="width: 200px"
         />
-        <el-select v-model="categoryFilter" placeholder="分类" clearable style="width: 140px" @change="load">
+        <el-select v-model="categoryFilter" placeholder="分类" clearable style="width: 140px">
           <el-option v-for="c in categories" :key="c" :label="c" :value="c" />
         </el-select>
         <el-select
@@ -64,7 +64,7 @@
     <div v-if="workspaceState === 'loading'" v-loading="true" class="wiki-status">正在加载工作区…</div>
     <div v-else-if="workspaceState === 'error'" class="wiki-status status-error">
       <span>工作区加载失败：{{ workspaceLoadError }}</span>
-      <el-button size="small" type="primary" @click="fetchWorkspaces">重试</el-button>
+      <el-button size="small" type="primary" @click="retryWorkspaces">重试</el-button>
     </div>
     <div v-else-if="workspaceState === 'none'" class="wiki-status">暂无可访问的 Wiki 工作区</div>
     <div v-else-if="workspaceState === 'inaccessible'" class="wiki-status status-error">
@@ -221,9 +221,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { isNavigationFailure, onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import type { LocationQueryRaw, LocationQueryValueRaw, RouteLocationNormalized } from 'vue-router'
 import {
   wikiApi,
   type WikiCitation,
@@ -252,7 +253,7 @@ const canEdit = computed(() => isAdmin.value || isWikiEditor.value)
 // 副本验收环境标记（来自 .env.acceptance 的 VITE_ACCEPTANCE）
 const isAcceptance = import.meta.env.VITE_ACCEPTANCE === 'true' || import.meta.env.MODE === 'acceptance'
 
-// ===== Phase 8A：工作区浏览状态 =====
+// ===== 工作区浏览状态 =====
 type WorkspaceState = 'loading' | 'ready' | 'none' | 'inaccessible' | 'error'
 
 const workspaces = ref<WikiWorkspaceSummary[]>([])
@@ -270,6 +271,25 @@ const currentWorkspace = computed(
   () => workspaces.value.find((w) => w.id === workspaceId.value) || null,
 )
 const workspaceReady = computed(() => workspaceState.value === 'ready' && workspaceId.value !== '')
+// loading / error 时选择器不可用；inaccessible（存在可见 active）下允许主动改选。
+const selectorDisabled = computed(() => workspaceState.value === 'loading' || workspaceState.value === 'error')
+
+// ===== 视图意图（route 单一事实来源） =====
+interface ViewIntent {
+  pageId: string | null
+  wsId: string | null
+  q: string
+  category: string | null
+}
+
+function readIntentFromRoute(): ViewIntent {
+  return {
+    pageId: queryString(route.params.pageId) || null,
+    wsId: queryString(route.query.workspace_id) || null,
+    q: queryString(route.query.q),
+    category: queryString(route.query.category) || null,
+  }
+}
 
 const pages = ref<WikiPageSummary[]>([])
 const statusFilter = ref<string | undefined>(undefined)
@@ -278,6 +298,8 @@ const categoryFilter = ref<string | undefined>(undefined)
 const currentPageId = ref('')
 const detail = ref<WikiDetail | null>(null)
 const detailError = ref('')
+// 详情末态错误（404/不属于当前工作区等）：同目标下避免反复重试；换页时复位。
+const detailBad = ref(false)
 const revisions = ref<WikiRevision[]>([])
 const showRevisions = ref(false)
 const viewingPreview = ref(false)
@@ -288,18 +310,21 @@ const editingId = ref('')
 const editingContent = ref('')
 const editingOriginal = ref('')
 const editingDirty = computed(() => editingId.value !== '' && editingContent.value !== editingOriginal.value)
+let editSeq = 0
 
 // 引用追溯（J-2：仅 Evidence，不再有 Card 追溯）
 const evidenceVisible = ref(false)
 const evidencePageId = ref('')
 
-// 列表/详情请求竞态：序号递增使迟到响应失效（工作区 A→B 快速切换保护）。
-const listSeq = ref(0)
-const detailSeq = ref(0)
+// ===== 统一浏览上下文（navigation generation） =====
+const navGen = ref(0)
 const listLoading = ref(false)
 const listError = ref('')
-// 从路由恢复状态期间抑制 search/category watcher 触发多余请求。
-let syncingFromRoute = false
+const applied = ref<ViewIntent | null>(null)
+const forceListNextApply = ref(false)
+let alive = true
+let wsLoadPromise: Promise<void> | null = null
+let confirmingDiscard = false
 
 // 重建进度
 const rebuildMsg = ref('')
@@ -393,254 +418,388 @@ function queryString(v: unknown): string {
   return ''
 }
 
-function buildQuery(): Record<string, string | undefined> {
-  return {
-    workspace_id: workspaceId.value || undefined,
-    q: searchText.value || undefined,
-    category: categoryFilter.value || undefined,
+// ---- 路由工具：push/replace 与 URL 规范化 ----
+type QueryExtra = Record<string, LocationQueryValueRaw | undefined>
+
+function makeLocation(pageId: string | null, extra: QueryExtra): { path: string; query: LocationQueryRaw } {
+  const query: LocationQueryRaw = { ...route.query, ...extra }
+  return { path: pageId ? `/knowledge/wiki/${pageId}` : '/knowledge/wiki', query }
+}
+
+function sameAsCurrent(loc: { path: string; query: LocationQueryRaw }): boolean {
+  return router.resolve(loc).fullPath === route.fullPath
+}
+
+async function navigate(pageId: string | null, extra: QueryExtra, mode: 'push' | 'replace' = 'push'): Promise<boolean> {
+  const loc = makeLocation(pageId, extra)
+  if (sameAsCurrent(loc)) return false
+  try {
+    if (mode === 'replace') await router.replace(loc)
+    else await router.push(loc)
+    return true
+  } catch (e) {
+    // 导航被守卫取消/重复 → 忽略（保持当前视图与 URL）
+    if (isNavigationFailure(e)) return false
+    throw e
   }
 }
 
-function updateUrl() {
-  if (currentPageId.value) {
-    router.replace({ path: `/knowledge/wiki/${currentPageId.value}`, query: buildQuery() })
-  } else {
-    router.replace({ path: '/knowledge/wiki', query: buildQuery() })
-  }
+function normalizeWorkspaceIdInUrl(pageId: string | null, wsId: string): void {
+  void navigate(pageId, { workspace_id: wsId }, 'replace')
 }
 
-// ---- 清空浏览瞬态（切工作区 / 不可访问时调用；保留筛选词与全局重建轮询）----
+// ---- 编辑会话 ----
+function startEdit(sec: WikiSection) {
+  editingId.value = sec.id
+  editingContent.value = sec.content
+  editingOriginal.value = sec.content
+  editSeq++
+}
+
+function cancelEdit() {
+  editingId.value = ''
+  editingContent.value = ''
+  editingOriginal.value = ''
+}
+
+// ---- 瞬态清理 ----
+function clearDrawerState() {
+  revisions.value = []
+  diff.value = null
+  showRevisions.value = false
+  viewingPreview.value = false
+  evidenceVisible.value = false
+  detailBad.value = false
+}
+
+function closeDetail() {
+  currentPageId.value = ''
+  detail.value = null
+  detailError.value = ''
+  clearDrawerState()
+  cancelEdit()
+}
+
 function clearBrowsingState() {
-  listSeq.value++
-  detailSeq.value++
   pages.value = []
   listError.value = ''
   listLoading.value = false
-  currentPageId.value = ''
-  detail.value = null
-  detailError.value = ''
-  revisions.value = []
-  diff.value = null
-  showRevisions.value = false
-  viewingPreview.value = false
-  evidenceVisible.value = false
-  cancelEdit()
+  closeDetail()
+  applied.value = null
 }
 
-function clearDetailSelection() {
-  currentPageId.value = ''
-  detail.value = null
-  detailError.value = ''
-  revisions.value = []
-  diff.value = null
-  showRevisions.value = false
-  viewingPreview.value = false
-  evidenceVisible.value = false
-  cancelEdit()
-  updateUrl()
+function setNonReady(state: 'none' | 'inaccessible') {
+  workspaceState.value = state
+  workspaceId.value = ''
+  clearBrowsingState()
 }
 
-function syncFilterFromRoute() {
-  searchText.value = queryString(route.query.q)
-  const cat = queryString(route.query.category)
-  categoryFilter.value = cat || undefined
+function readLive(gen: number): boolean {
+  return alive && gen === navGen.value && workspaceState.value === 'ready'
 }
 
-function routeDiffersFromState(): boolean {
-  const routeWs = queryString(route.query.workspace_id)
-  const curWs = workspaceState.value === 'ready' ? workspaceId.value : ''
-  const routePage = queryString(route.params.pageId)
-  const curPage = currentPageId.value || ''
-  const routeQ = queryString(route.query.q)
-  const curQ = searchText.value || ''
-  const routeCat = queryString(route.query.category)
-  const curCat = categoryFilter.value || ''
-  return routeWs !== curWs || routePage !== curPage || routeQ !== curQ || routeCat !== curCat
+// ---- 未保存编辑导航守卫（取消后视图/编辑/URL/历史保持一致） ----
+function confirmDiscardEdits(): Promise<boolean> {
+  return ElMessageBox.confirm(
+    '当前主题有未保存的编辑内容，继续将丢弃这些修改。是否继续？',
+    '未保存编辑',
+    { type: 'warning', confirmButtonText: '继续切换', cancelButtonText: '取消' },
+  ).then(() => true).catch(() => false)
 }
 
-async function confirmDiscardEdits(): Promise<boolean> {
+async function guardTopicNavigation(to: RouteLocationNormalized): Promise<boolean> {
   if (!editingDirty.value) return true
+  const fromWs = queryString(route.query.workspace_id)
+  const fromPage = queryString(route.params.pageId) || null
+  const toWs = queryString(to.query.workspace_id)
+  const toPage = queryString(to.params.pageId) || null
+  if (fromWs === toWs && fromPage === toPage) return true
+  if (confirmingDiscard) return false
+  confirmingDiscard = true
   try {
-    await ElMessageBox.confirm(
-      '当前主题有未保存的编辑内容，继续将丢弃这些修改。是否继续？',
-      '未保存编辑',
-      { type: 'warning', confirmButtonText: '继续切换', cancelButtonText: '取消' },
-    )
-    return true
-  } catch {
-    return false
+    return await confirmDiscardEdits()
+  } finally {
+    confirmingDiscard = false
   }
 }
+onBeforeRouteUpdate(guardTopicNavigation)
+onBeforeRouteLeave(guardTopicNavigation)
 
-function syncUrlToState() {
-  router.replace({
-    path: currentPageId.value ? `/knowledge/wiki/${currentPageId.value}` : '/knowledge/wiki',
-    query: buildQuery(),
-  })
-}
-
-async function fetchWorkspaces() {
+// ---- 工作区列表 ----
+async function fetchWorkspaces(force = false): Promise<void> {
+  if (!force && (workspaces.value.length > 0 || wsLoadPromise)) {
+    if (wsLoadPromise) await wsLoadPromise
+    return
+  }
   workspaceState.value = 'loading'
   workspaceLoadError.value = ''
-  try {
-    workspaces.value = await wikiWorkspacesApi.list()
-  } catch (e: any) {
-    workspaces.value = []
-    workspaceState.value = 'error'
-    workspaceLoadError.value = e?.response?.data?.detail || '网络异常，工作区加载失败'
-    clearBrowsingState()
-  }
-}
-
-function selectWorkspace(nextId: string, opts: { persistUrl?: boolean } = {}) {
-  const changed = workspaceState.value !== 'ready' || workspaceId.value !== nextId
-  workspaceId.value = nextId
-  workspaceState.value = 'ready'
-  if (changed) clearBrowsingState()
-  if (opts.persistUrl) updateUrl()
-}
-
-// 依据当前 route 决定工作区选择：raw 可访问则用之；raw 不可访问/不存在 → inaccessible
-// （不静默跳到别的 workspace）；无 raw → 取稳定第一个 active 并写回 URL。
-async function ensureWorkspaceSelection() {
-  if (workspaceState.value !== 'error' && workspaces.value.length === 0) {
-    await fetchWorkspaces()
-  }
-  if (workspaceState.value === 'error') return
-  const raw = queryString(route.query.workspace_id)
-  const activeList = browsableWorkspaces.value
-  if (raw) {
-    const hit = activeList.find((w) => w.id === raw)
-    if (hit) {
-      selectWorkspace(hit.id)
-      return
+  const p = (async () => {
+    try {
+      workspaces.value = await wikiWorkspacesApi.list()
+    } catch (e: any) {
+      workspaces.value = []
+      workspaceState.value = 'error'
+      workspaceLoadError.value = e?.response?.data?.detail || '网络异常，工作区加载失败'
+      clearBrowsingState()
     }
-    // 指定 workspace 不存在/无权访问/archived → 统一不可访问提示
-    workspaceId.value = ''
-    workspaceState.value = 'inaccessible'
-    clearBrowsingState()
-    return
+  })()
+  wsLoadPromise = p
+  try {
+    await p
+  } finally {
+    wsLoadPromise = null
   }
-  if (activeList.length === 0) {
-    workspaceId.value = ''
-    workspaceState.value = 'none'
-    clearBrowsingState()
-    return
-  }
-  // 默认稳定选择第一个 active，并持久化到 URL
-  selectWorkspace(activeList[0].id, { persistUrl: true })
 }
 
+async function retryWorkspaces() {
+  await fetchWorkspaces(true)
+  if (workspaceState.value === 'error' || !alive) return
+  await applyRoute()
+}
+
+// ---- 主题列表 ----
 async function load() {
   if (!workspaceReady.value) return
-  const seq = ++listSeq.value
+  const gen = navGen.value
+  const ws = workspaceId.value
   listLoading.value = true
   listError.value = ''
   try {
     const data = await wikiApi.list({
-      workspaceId: workspaceId.value,
+      workspaceId: ws,
       status: isAdmin.value ? statusFilter.value : 'published',
       q: searchText.value || undefined,
       category: categoryFilter.value,
     })
-    if (seq !== listSeq.value) return
+    if (!readLive(gen) || workspaceId.value !== ws) return
     pages.value = data
   } catch (e: any) {
-    if (seq !== listSeq.value) return
+    if (!readLive(gen) || workspaceId.value !== ws) return
     pages.value = []
     listError.value = listErrorText(e)
   } finally {
-    if (seq === listSeq.value) listLoading.value = false
+    if (readLive(gen) && workspaceId.value === ws) listLoading.value = false
   }
 }
 
-async function openPage(pageId: string, preview = false) {
-  if (!workspaceReady.value) return
-  const seq = ++detailSeq.value
+// ---- 主题详情 ----
+async function openDetail(pageId: string, opts: { preview?: boolean } = {}) {
+  const ws = workspaceId.value
+  if (!ws || !alive) return
+  const gen = navGen.value
+  if (currentPageId.value && currentPageId.value !== pageId) cancelEdit()
   currentPageId.value = pageId
-  viewingPreview.value = preview
+  viewingPreview.value = !!opts.preview
   detail.value = null
   detailError.value = ''
-  updateUrl()
+  clearDrawerState()
   try {
-    const data = await wikiApi.get(pageId, { preview })
-    if (seq !== detailSeq.value) return
-    // 直接打开详情：校验其 workspace_id 与当前工作区一致，不一致不展示。
-    if (!data.workspace_id || data.workspace_id !== workspaceId.value) {
-      detail.value = null
+    const data = await wikiApi.get(pageId, { preview: opts.preview })
+    if (!readLive(gen) || workspaceId.value !== ws || currentPageId.value !== pageId) return
+    if (data.workspace_id && data.workspace_id !== workspaceId.value) {
+      detailBad.value = true
       detailError.value = '该主题不属于当前工作区'
       return
     }
     detail.value = data
   } catch (e: any) {
-    if (seq !== detailSeq.value) return
-    detail.value = null
+    if (!readLive(gen) || workspaceId.value !== ws || currentPageId.value !== pageId) return
+    detailBad.value = true
     detailError.value = detailErrorText(e)
   }
 }
 
-async function onWorkspaceSelect(nextId: string) {
-  if (!nextId || nextId === workspaceId.value || !workspaceState.value) return
-  if (!(await confirmDiscardEdits())) return
-  selectWorkspace(nextId, { persistUrl: true })
-  syncingFromRoute = true
+// 操作完成后的原地刷新（不产生新历史记录）；仅当仍停留在目标上下文时生效。
+async function refreshDetail(pageId: string, opts: { preview?: boolean } = {}) {
+  const ws = workspaceId.value
+  const gen = navGen.value
+  if (!ws || !alive) return
+  viewingPreview.value = opts.preview ?? viewingPreview.value
   try {
-    await load()
-  } finally {
-    syncingFromRoute = false
-  }
-}
-
-async function restoreFromRoute() {
-  // 在可能改写 URL（默认选择工作区）之前先固定本次路由的详情参数。
-  const pageIdParam = queryString(route.params.pageId)
-  const routeChanged = routeDiffersFromState()
-  if (routeChanged && editingDirty.value) {
-    const ok = await confirmDiscardEdits()
-    if (!ok) {
-      syncUrlToState()
+    const data = await wikiApi.get(pageId, { preview: opts.preview })
+    if (!readLive(gen) || workspaceId.value !== ws || currentPageId.value !== pageId) return
+    if (data.workspace_id && data.workspace_id !== workspaceId.value) {
+      detailBad.value = true
+      detail.value = null
+      detailError.value = '该主题不属于当前工作区'
       return
     }
-  }
-  syncingFromRoute = true
-  try {
-    syncFilterFromRoute()
-    if (workspaceState.value === 'loading' || workspaceState.value === 'error') {
-      await fetchWorkspaces()
-    }
-    await ensureWorkspaceSelection()
-    if (workspaceState.value !== 'ready') return
-    await load()
-    if (pageIdParam) {
-      await openPage(pageIdParam)
-    } else if (currentPageId.value) {
-      clearDetailSelection()
-    }
-  } finally {
-    syncingFromRoute = false
+    detailBad.value = false
+    detail.value = data
+    detailError.value = ''
+  } catch (e: any) {
+    if (!readLive(gen) || workspaceId.value !== ws || currentPageId.value !== pageId) return
+    detailBad.value = true
+    detailError.value = detailErrorText(e)
   }
 }
 
+// ---- 统一恢复流程：route → 校验 URL → 选工作区 → 目录 → 详情 ----
+async function applyRoute() {
+  if (!alive) return
+  const gen = ++navGen.value
+  if (searchDebounce) { clearTimeout(searchDebounce); searchDebounce = null }
+
+  // 1) 首次/失败后先拿工作区列表
+  if (workspaceState.value !== 'error' && workspaces.value.length === 0) {
+    await fetchWorkspaces()
+    if (!alive || gen !== navGen.value) return
+  }
+  if (workspaceState.value === 'error') {
+    applied.value = null
+    return
+  }
+
+  const intent = readIntentFromRoute()
+  const active = browsableWorkspaces.value
+
+  // 2) 决议工作区
+  let wsId = ''
+  if (intent.wsId) {
+    const hit = active.find((w) => w.id === intent.wsId)
+    if (hit) {
+      wsId = hit.id
+    } else {
+      // 指定 workspace 不存在/无权访问/archived → 统一不可访问提示，不静默跳转
+      setNonReady('inaccessible')
+      return
+    }
+  } else if (active.length) {
+    wsId = active[0].id
+  } else {
+    setNonReady('none')
+    return
+  }
+
+  // 3) 无 workspace_id：补默认值并规范化 URL（replace，不产生新历史）
+  if (!intent.wsId) {
+    normalizeWorkspaceIdInUrl(intent.pageId, wsId)
+    // URL 变化后由 route watcher 再次触发完整 apply，这里直接返回避免双加载
+    return
+  }
+
+  // 4) 就绪工作区
+  const wsChanged = workspaceState.value !== 'ready' || workspaceId.value !== wsId
+  if (wsChanged) {
+    workspaceState.value = 'ready'
+    workspaceId.value = wsId
+    clearBrowsingState()
+  }
+
+  // 5) 过滤条件与 URL 一致
+  searchText.value = intent.q
+  categoryFilter.value = intent.category || undefined
+
+  const listChange =
+    forceListNextApply.value ||
+    !applied.value ||
+    applied.value.wsId !== wsId ||
+    applied.value.q !== intent.q ||
+    (applied.value.category || '') !== (intent.category || '')
+  forceListNextApply.value = false
+
+  if (listChange) {
+    await load()
+    if (!alive || gen !== navGen.value) return
+  }
+
+  // 6) 详情
+  if (intent.pageId) {
+    const pageChanged = currentPageId.value !== intent.pageId
+    const missing = !pageChanged && detail.value === null && !detailBad.value
+    if (pageChanged || missing) {
+      await openDetail(intent.pageId)
+      if (!alive || gen !== navGen.value) return
+    }
+  } else if (currentPageId.value) {
+    closeDetail()
+  }
+
+  applied.value = {
+    pageId: currentPageId.value || null,
+    wsId,
+    q: searchText.value,
+    category: categoryFilter.value || null,
+  }
+}
+
+// ---- 用户动作（全部走 router，历史/URL 由 route 统一恢复） ----
+async function openPage(pageId: string) {
+  if (workspaceState.value !== 'ready' || !workspaceId.value) return
+  // 已是当前主题：详情缺失（错误）时允许原地重试；否则忽略
+  if (currentPageId.value === pageId && queryString(route.params.pageId) === pageId) {
+    if (!detail.value && detailBad.value) {
+      detailBad.value = false
+      await refreshDetail(pageId, { preview: viewingPreview.value })
+    }
+    return
+  }
+  await navigate(pageId, { workspace_id: workspaceId.value })
+}
+
+function onWorkspaceSelect(nextId: string) {
+  if (!nextId) return
+  if (workspaceState.value === 'ready' && nextId === workspaceId.value) return
+  void navigate(null, { workspace_id: nextId })
+}
+
+function syncSearchToRoute() {
+  const q = searchText.value
+  if (queryString(route.query.q) === q) return
+  void navigate(null, { q: q || undefined }, 'replace')
+}
+
+function syncCategoryToRoute() {
+  const cat = categoryFilter.value || undefined
+  if ((queryString(route.query.category) || undefined) === cat) return
+  void navigate(null, { category: cat }, 'replace')
+}
+
+watch(searchText, () => {
+  if (searchDebounce) clearTimeout(searchDebounce)
+  searchDebounce = setTimeout(syncSearchToRoute, 250)
+})
+
+watch(categoryFilter, () => {
+  syncCategoryToRoute()
+})
+
+watch(() => route.fullPath, () => { applyRoute() }, { immediate: true })
+
+// ---- Revision / Diff ----
 async function loadRevisions() {
-  if (!currentPageId.value) return
+  const pageId = currentPageId.value
+  if (!pageId || !alive) return
+  const gen = navGen.value
+  const ws = workspaceId.value
   try {
-    revisions.value = await wikiApi.revisions(currentPageId.value)
+    const data = await wikiApi.revisions(pageId)
+    if (!alive || gen !== navGen.value || workspaceId.value !== ws || currentPageId.value !== pageId) return
+    revisions.value = data
   } catch (e: any) {
+    if (!alive || gen !== navGen.value || workspaceId.value !== ws || currentPageId.value !== pageId) return
     ElMessage.error(e?.response?.data?.detail || '加载版本历史失败')
   }
 }
 
 async function openRevisions() {
+  if (!currentPageId.value) return
   showRevisions.value = true
   diff.value = null
   await loadRevisions()
 }
 
 async function viewDiff(revisionId: string) {
-  if (!detail.value) return
+  const pageId = currentPageId.value
+  if (!pageId || !alive) return
+  const gen = navGen.value
+  const ws = workspaceId.value
   try {
-    diff.value = await wikiApi.diff(detail.value.id, revisionId)
+    const data = await wikiApi.diff(pageId, revisionId)
+    if (!alive || gen !== navGen.value || workspaceId.value !== ws || currentPageId.value !== pageId) return
+    diff.value = data
   } catch (e: any) {
+    if (!alive || gen !== navGen.value || workspaceId.value !== ws || currentPageId.value !== pageId) return
     ElMessage.error(e?.response?.data?.detail || '加载 Diff 失败')
   }
 }
@@ -652,57 +811,125 @@ function openCitation(c: WikiCitation) {
   }
 }
 
-// 编辑/锁定
-function startEdit(sec: WikiSection) {
-  editingId.value = sec.id
-  editingContent.value = sec.content
-  editingOriginal.value = sec.content
-}
-
-function cancelEdit() {
-  editingId.value = ''
-  editingContent.value = ''
-  editingOriginal.value = ''
-}
-
+// ---- 编辑 / 锁定 / 解锁 / 发布 / 回滚 / 归档（await 前捕获目标 ID） ----
 async function saveSection(sec: WikiSection) {
-  if (!detail.value) return
-  const revisionId = detail.value.viewing_revision_id || detail.value.preview_revision_id
+  const pageId = currentPageId.value
+  const detailObj = detail.value
+  if (!pageId || !detailObj) return
+  const revisionId = detailObj.viewing_revision_id || detailObj.preview_revision_id
   if (!revisionId) return
+  const ws = workspaceId.value
+  const seq = editSeq
+  const sectionId = sec.id
+  const content = editingContent.value
   try {
-    await wikiApi.updateSection(detail.value.id, revisionId, sec.id, editingContent.value)
+    await wikiApi.updateSection(pageId, revisionId, sectionId, content)
+    if (!alive || workspaceId.value !== ws || currentPageId.value !== pageId) return
     ElMessage.success('已保存')
+    if (editSeq !== seq) return
     cancelEdit()
-    await openPage(detail.value.id, true)
+    viewingPreview.value = true
+    await refreshDetail(pageId, { preview: true })
   } catch (e: any) {
+    if (!alive || workspaceId.value !== ws || currentPageId.value !== pageId) return
     ElMessage.error(e?.response?.data?.detail || '保存失败')
   }
 }
 
 async function lockSection(sec: WikiSection) {
-  if (!detail.value) return
-  const revisionId = detail.value.viewing_revision_id || detail.value.preview_revision_id
+  const pageId = currentPageId.value
+  const detailObj = detail.value
+  if (!pageId || !detailObj) return
+  const revisionId = detailObj.viewing_revision_id || detailObj.preview_revision_id
   if (!revisionId) return
+  const ws = workspaceId.value
   try {
-    await wikiApi.lockSection(detail.value.id, revisionId, sec.id)
-    await openPage(detail.value.id, true)
+    await wikiApi.lockSection(pageId, revisionId, sec.id)
+    if (!alive || workspaceId.value !== ws || currentPageId.value !== pageId) return
+    await refreshDetail(pageId, { preview: viewingPreview.value })
   } catch (e: any) {
+    if (!alive || workspaceId.value !== ws || currentPageId.value !== pageId) return
     ElMessage.error(e?.response?.data?.detail || '锁定失败')
   }
 }
 
 async function unlockSection(sec: WikiSection) {
-  if (!detail.value) return
-  const revisionId = detail.value.viewing_revision_id || detail.value.preview_revision_id
+  const pageId = currentPageId.value
+  const detailObj = detail.value
+  if (!pageId || !detailObj) return
+  const revisionId = detailObj.viewing_revision_id || detailObj.preview_revision_id
   if (!revisionId) return
+  const ws = workspaceId.value
   try {
-    await wikiApi.unlockSection(detail.value.id, revisionId, sec.id)
-    await openPage(detail.value.id, true)
+    await wikiApi.unlockSection(pageId, revisionId, sec.id)
+    if (!alive || workspaceId.value !== ws || currentPageId.value !== pageId) return
+    await refreshDetail(pageId, { preview: viewingPreview.value })
   } catch (e: any) {
+    if (!alive || workspaceId.value !== ws || currentPageId.value !== pageId) return
     ElMessage.error(e?.response?.data?.detail || '解锁失败')
   }
 }
 
+async function publishRev(revisionId: string) {
+  const pageId = currentPageId.value
+  if (!pageId || !detail.value) return
+  const ws = workspaceId.value
+  try {
+    await wikiApi.publish(pageId, revisionId)
+    if (!alive || workspaceId.value !== ws || currentPageId.value !== pageId) return
+    ElMessage.success('已发布')
+    viewingPreview.value = false
+    await loadRevisions()
+    await refreshDetail(pageId)
+  } catch (e: any) {
+    if (!alive || workspaceId.value !== ws || currentPageId.value !== pageId) return
+    ElMessage.error(e?.response?.data?.detail || '发布失败')
+  }
+}
+
+async function rollbackRev(revisionId: string) {
+  const pageId = currentPageId.value
+  if (!pageId || !detail.value) return
+  const ws = workspaceId.value
+  try {
+    await ElMessageBox.confirm(
+      '回滚会把目标 Revision 重新发布，不会物理删除历史版本。确认回滚？',
+      '回滚确认',
+      { type: 'warning' },
+    )
+  } catch {
+    return
+  }
+  try {
+    await wikiApi.rollback(pageId, revisionId)
+    if (!alive || workspaceId.value !== ws || currentPageId.value !== pageId) return
+    ElMessage.success('已回滚')
+    await loadRevisions()
+    await refreshDetail(pageId)
+  } catch (e: any) {
+    if (!alive || workspaceId.value !== ws || currentPageId.value !== pageId) return
+    ElMessage.error(e?.response?.data?.detail || '回滚失败')
+  }
+}
+
+async function archivePage() {
+  const pageId = currentPageId.value
+  if (!pageId || !detail.value) return
+  const ws = workspaceId.value
+  try {
+    await wikiApi.archive(pageId)
+    if (!alive || workspaceId.value !== ws || currentPageId.value !== pageId) return
+    ElMessage.success('已归档')
+    cancelEdit()
+    forceListNextApply.value = true
+    await navigate(null, {}, 'replace')
+  } catch (e: any) {
+    if (!alive || workspaceId.value !== ws || currentPageId.value !== pageId) return
+    ElMessage.error(e?.response?.data?.detail || '归档失败')
+  }
+}
+
+// ---- 全局重建（不影响当前工作区，仅管理员） ----
 async function rebuild() {
   try {
     await ElMessageBox.confirm(
@@ -790,75 +1017,12 @@ function stopPolling() {
   }
 }
 
-async function archivePage() {
-  if (!detail.value) return
-  try {
-    await wikiApi.archive(detail.value.id)
-    ElMessage.success('已归档')
-    clearDetailSelection()
-    await load()
-  } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail || '归档失败')
-  }
-}
-
-async function publishRev(revisionId: string) {
-  if (!detail.value) return
-  try {
-    await wikiApi.publish(detail.value.id, revisionId)
-    ElMessage.success('已发布')
-    viewingPreview.value = false
-    await loadRevisions()
-    await load()
-    await openPage(detail.value.id)
-  } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail || '发布失败')
-  }
-}
-
-async function rollbackRev(revisionId: string) {
-  if (!detail.value) return
-  try {
-    await ElMessageBox.confirm(
-      '回滚会把目标 Revision 重新发布，不会物理删除历史版本。确认回滚？',
-      '回滚确认',
-      { type: 'warning' },
-    )
-  } catch {
-    return
-  }
-  try {
-    await wikiApi.rollback(detail.value.id, revisionId)
-    ElMessage.success('已回滚')
-    await loadRevisions()
-    await openPage(detail.value.id)
-  } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail || '回滚失败')
-  }
-}
-
-// 搜索 debounce（路由恢复期间由 restoreFromRoute 统一加载）
-watch(searchText, () => {
-  if (syncingFromRoute) return
-  if (searchDebounce) clearTimeout(searchDebounce)
-  searchDebounce = setTimeout(() => { load() }, 300)
-})
-
-watch(categoryFilter, () => {
-  if (syncingFromRoute) return
-  load()
-})
-
-onMounted(() => {
-  restoreFromRoute()
-  window.addEventListener('popstate', restoreFromRoute)
-})
-
 onBeforeUnmount(() => {
+  alive = false
+  navGen.value++
   stopPolling()
   stopRefreshPolling()
   if (searchDebounce) clearTimeout(searchDebounce)
-  window.removeEventListener('popstate', restoreFromRoute)
 })
 </script>
 
