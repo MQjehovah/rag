@@ -371,3 +371,139 @@ def test_archived_workspace_hidden_from_normal_users(client):
     ids = {w["id"] for w in c.get("/api/wiki-workspaces").json()["workspaces"]}
     assert eng_ws.id not in ids
     assert c.get(f"/api/wiki-workspaces/{eng_ws.id}").status_code == 404
+
+
+def test_read_bindings_admin_active_summary_only(client):
+    """admin GET {ws}/notebooks：仅 active 绑定摘要，白名单字段，不含敏感键。"""
+    c, db, _admin, _eng, _sales = client
+    eng_ws, _ = _seed_workspaces(db, with_bindings=True)
+    _override(_admin)
+    r = c.get(f"/api/wiki-workspaces/{eng_ws.id}/notebooks")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["workspace_id"] == eng_ws.id
+    assert body["workspace_name"] == "工程工作区"
+    assert [b["notebook_name"] for b in body["bindings"]] == ["工程知识库"]
+    assert all(b["status"] == "active" for b in body["bindings"])
+    assert all(b["created_at"] for b in body["bindings"])
+    assert all(b["updated_at"] for b in body["bindings"])  # updated_at 存在（非 null）
+    for b in body["bindings"]:
+        # 绑定摘要白名单：仅允许这 6 个键，绝不出现 group_id/源路径/ACL/连接等敏感字段。
+        assert set(b.keys()) == {
+            "binding_id", "notebook_id", "notebook_name", "status", "created_at", "updated_at",
+        }
+    raw = json.dumps(body, ensure_ascii=False).lower()
+    for token in ("group_id", "source_path", "acl", "connection", "created_by"):
+        assert token not in raw
+
+
+def test_read_bindings_non_admin_403_and_missing_ws_404(client):
+    """GET {ws}/notebooks admin-only：普通用户先 403（不可见也先 403），不存在 ws → 404。"""
+    c, db, _admin, _eng, _sales = client
+    eng_ws, sales_ws = _seed_workspaces(db, with_bindings=True)
+    _override(_eng)
+    assert c.get(f"/api/wiki-workspaces/{eng_ws.id}/notebooks").status_code == 403
+    # sales workspace 对 engineering 不可见 → 仍 403（先鉴权，不泄露存在性）
+    assert c.get(f"/api/wiki-workspaces/{sales_ws.id}/notebooks").status_code == 403
+    assert c.get("/api/wiki-workspaces/ws-missing/notebooks").status_code == 403
+    _override(_sales)
+    assert c.get(f"/api/wiki-workspaces/{eng_ws.id}/notebooks").status_code == 403
+    assert c.get(f"/api/wiki-workspaces/{sales_ws.id}/notebooks").status_code == 403
+    _override(_admin)
+    r = c.get("/api/wiki-workspaces/ws-missing/notebooks")
+    assert r.status_code == 404
+    assert r.json()["detail"] == "工作区不存在"
+
+
+def test_read_bindings_read_only_disabled_hidden(client):
+    """GET {ws}/notebooks 只读：disabled 绑定不返回；前后 binding 状态/数量与 workspace 数量不变。"""
+    c, db, _admin, _eng, _sales = client
+    from app.models.database import NotebookWorkspaceBinding, WikiWorkspace
+    eng_ws, _ = _seed_workspaces(db, with_bindings=False)
+    db.add(Notebook(id="nb1", name="待移除知识库", group_id="engineering"))
+    db.commit()
+    _override(_admin)
+    # 先绑定再解绑 → 产生 disabled 历史绑定（软解绑保留记录）
+    assert c.post(f"/api/wiki-workspaces/{eng_ws.id}/notebooks/nb1").status_code == 200
+    assert c.delete(f"/api/wiki-workspaces/{eng_ws.id}/notebooks/nb1").status_code == 200
+
+    def _snapshot():
+        db.expire_all()
+        return {
+            "bindings": db.query(NotebookWorkspaceBinding).filter(
+                NotebookWorkspaceBinding.workspace_id == eng_ws.id
+            ).count(),
+            "active": db.query(NotebookWorkspaceBinding).filter(
+                NotebookWorkspaceBinding.workspace_id == eng_ws.id,
+                NotebookWorkspaceBinding.status == "active",
+            ).count(),
+            "workspaces": db.query(WikiWorkspace).count(),
+        }
+
+    before = _snapshot()
+    assert before["bindings"] == 1 and before["active"] == 0  # disabled 历史保留，无 active
+    r = c.get(f"/api/wiki-workspaces/{eng_ws.id}/notebooks")
+    assert r.status_code == 200
+    assert r.json()["bindings"] == []  # disabled 绑定不出现在结果中
+    assert _snapshot() == before  # GET 零写入：binding 数量/状态、workspace 数量均不变
+
+
+def test_list_workspaces_field_redaction(client):
+    """列表裁剪：普通用户不含 key/acl_scope/scope_id/created_by；admin 含全部字段。"""
+    c, db, _admin, _eng, _sales = client
+    _seed_workspaces(db)
+    _override(_eng)
+    workspaces = c.get("/api/wiki-workspaces").json()["workspaces"]
+    assert len(workspaces) == 1
+    assert set(workspaces[0].keys()) == {
+        "id", "name", "description", "status", "created_at", "updated_at",
+    }
+    _override(_admin)
+    workspaces = c.get("/api/wiki-workspaces").json()["workspaces"]
+    assert len(workspaces) == 2
+    full = {
+        "id", "key", "name", "description", "acl_scope", "scope_id",
+        "status", "created_by", "created_at", "updated_at",
+    }
+    assert all(set(w.keys()) == full for w in workspaces)
+
+
+def test_workspace_detail_field_redaction(client):
+    """详情裁剪：普通用户 GET {id} 不含 key/acl_scope/scope_id/created_by；admin 含。"""
+    c, db, _admin, _eng, _sales = client
+    eng_ws, _ = _seed_workspaces(db)
+    _override(_eng)
+    body = c.get(f"/api/wiki-workspaces/{eng_ws.id}").json()
+    assert set(body.keys()) == {
+        "id", "name", "description", "status", "created_at", "updated_at",
+    }
+    # 404 语义不变：sales 用户不可见 eng_ws
+    _override(_sales)
+    assert c.get(f"/api/wiki-workspaces/{eng_ws.id}").status_code == 404
+    _override(_admin)
+    body = c.get(f"/api/wiki-workspaces/{eng_ws.id}").json()
+    full = {
+        "id", "key", "name", "description", "acl_scope", "scope_id",
+        "status", "created_by", "created_at", "updated_at",
+    }
+    assert set(body.keys()) == full
+
+
+def test_read_bindings_sorted_by_notebook_name(client):
+    """两个不同名称 notebook 绑同一 workspace：按 notebook name 升序稳定返回。"""
+    c, db, _admin, _eng, _sales = client
+    eng_ws, _ = _seed_workspaces(db, with_bindings=False)
+    # 先 add 后 bind 的顺序与名称顺序相反，验证输出按名称而非绑定顺序。
+    db.add_all([
+        Notebook(id="nb-b", name="Beta 知识库", group_id="engineering"),
+        Notebook(id="nb-a", name="Alpha 知识库", group_id="engineering"),
+    ])
+    db.commit()
+    _override(_admin)
+    assert c.post(f"/api/wiki-workspaces/{eng_ws.id}/notebooks/nb-b").status_code == 200
+    assert c.post(f"/api/wiki-workspaces/{eng_ws.id}/notebooks/nb-a").status_code == 200
+    r = c.get(f"/api/wiki-workspaces/{eng_ws.id}/notebooks")
+    assert r.status_code == 200
+    assert [b["notebook_name"] for b in r.json()["bindings"]] == [
+        "Alpha 知识库", "Beta 知识库",
+    ]

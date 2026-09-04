@@ -278,3 +278,23 @@ def list_workspace_wikis(db: Session, ws: WikiWorkspace, current_user: dict) -> 
             continue
         result.append(wp)
     return result
+
+
+def list_workspace_active_bindings(db: Session, ws: WikiWorkspace) -> list[tuple[NotebookWorkspaceBinding, Notebook]]:
+    """返回该 workspace 下 status=='active' 的绑定与其 Notebook（纯只读摘要助手）。
+
+    - 仅 active（disabled 历史绑定不返回）；
+    - 排序：Notebook.name 升序，同名列按 binding.id 升序（稳定输出便于测试）；
+    - 只查询，不 flush/commit，不新建/修改任何数据。
+    """
+    rows = (
+        db.query(NotebookWorkspaceBinding, Notebook)
+        .join(Notebook, Notebook.id == NotebookWorkspaceBinding.notebook_id)
+        .filter(
+            NotebookWorkspaceBinding.workspace_id == ws.id,
+            NotebookWorkspaceBinding.status == BINDING_STATUS_ACTIVE,
+        )
+        .order_by(Notebook.name.asc(), NotebookWorkspaceBinding.id.asc())
+        .all()
+    )
+    return [(b, nb) for b, nb in rows]

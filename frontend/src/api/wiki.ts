@@ -11,6 +11,7 @@ export interface WikiPageSummary {
   current_revision_id: string | null
   preview_revision_id: string | null
   has_preview: boolean
+  workspace_id?: string | null
   updated_at: string | null
 }
 
@@ -93,8 +94,18 @@ export interface RefreshStatus {
 }
 
 export const wikiApi = {
-  async list(params: { status?: string; q?: string; category?: string } = {}): Promise<WikiPageSummary[]> {
-    const res = await http.get('/api/wiki', { params })
+  /** workspaceId 必传：目录请求必须限定在当前工作区（Phase 8A）。 */
+  async list(
+    params: { workspaceId?: string; status?: string; q?: string; category?: string } = {},
+  ): Promise<WikiPageSummary[]> {
+    const res = await http.get('/api/wiki', {
+      params: {
+        workspace_id: params.workspaceId,
+        status: params.status,
+        q: params.q,
+        category: params.category,
+      },
+    })
     return res.data.pages
   },
 

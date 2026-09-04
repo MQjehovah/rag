@@ -6,6 +6,7 @@
 - PATCH  /api/wiki-workspaces/{id}                        → admin 改 name/description/status
 - POST   /api/wiki-workspaces/{id}/notebooks/{notebook_id} → admin 绑定（ACL 完全等价校验）
 - DELETE /api/wiki-workspaces/{id}/notebooks/{notebook_id} → admin 解绑
+- GET    /api/wiki-workspaces/{id}/notebooks              → admin 只读：active 绑定的 Notebook 摘要（403/404）
 - GET    /api/wiki-workspaces/{id}/wikis                  → 该 workspace 内可见 wiki
 
 403 语义：admin-only 写操作非 admin → 403。
@@ -46,18 +47,42 @@ def _require_admin(current_user: dict) -> None:
         raise HTTPException(status_code=403, detail="仅管理员可执行此操作")
 
 
-def _serialize_workspace(ws: WikiWorkspace) -> dict:
-    return {
+def _serialize_workspace(ws: WikiWorkspace, *, admin: bool) -> dict:
+    """角色感知序列化。
+
+    - admin：完整 shape（含 key/acl_scope/scope_id/created_by，供管理）；
+    - 普通用户：仅公开元数据，不含 key/acl_scope/scope_id/created_by。
+    """
+    base = {
         "id": ws.id,
-        "key": ws.key,
         "name": ws.name,
         "description": ws.description,
-        "acl_scope": ws.acl_scope,
-        "scope_id": ws.scope_id,
         "status": ws.status,
-        "created_by": ws.created_by,
         "created_at": ws.created_at.isoformat() if ws.created_at else None,
         "updated_at": ws.updated_at.isoformat() if ws.updated_at else None,
+    }
+    if not admin:
+        return base
+    base.update(
+        {
+            "key": ws.key,
+            "acl_scope": ws.acl_scope,
+            "scope_id": ws.scope_id,
+            "created_by": ws.created_by,
+        }
+    )
+    return base
+
+
+def _serialize_binding(binding, notebook: Notebook) -> dict:
+    """只读绑定摘要：白名单字段，绝不返回 group_id / 源文件路径 / ACL / 连接信息。"""
+    return {
+        "binding_id": binding.id,
+        "notebook_id": notebook.id,
+        "notebook_name": notebook.name,
+        "status": binding.status,
+        "created_at": binding.created_at.isoformat() if binding.created_at else None,
+        "updated_at": binding.updated_at.isoformat() if binding.updated_at else None,
     }
 
 
@@ -80,7 +105,8 @@ def list_workspaces(
 ):
     """普通用户只返回有权限访问的 workspace；admin 全部。"""
     rows = service.list_visible_workspaces(db, current_user)
-    return {"workspaces": [_serialize_workspace(ws) for ws in rows]}
+    admin = is_admin_user(current_user)
+    return {"workspaces": [_serialize_workspace(ws, admin=admin) for ws in rows]}
 
 
 @router.post("", status_code=201)
@@ -103,7 +129,7 @@ def create_workspace(
         db.rollback()
         raise HTTPException(status_code=400, detail=str(exc))
     db.commit()
-    return _serialize_workspace(ws)
+    return _serialize_workspace(ws, admin=True)
 
 
 @router.get("/{workspace_id}")
@@ -115,7 +141,7 @@ def get_workspace(
     ws = service.get_visible_workspace(db, current_user, workspace_id)
     if ws is None:
         raise HTTPException(status_code=404, detail="工作区不存在")
-    return _serialize_workspace(ws)
+    return _serialize_workspace(ws, admin=is_admin_user(current_user))
 
 
 @router.patch("/{workspace_id}")
@@ -131,7 +157,7 @@ def update_workspace(
         raise HTTPException(status_code=404, detail="工作区不存在")
     service.update_workspace(db, ws, payload)
     db.commit()
-    return _serialize_workspace(ws)
+    return _serialize_workspace(ws, admin=True)
 
 
 @router.post("/{workspace_id}/notebooks/{notebook_id}")
@@ -195,6 +221,31 @@ def unbind_notebook(
         raise HTTPException(status_code=404, detail=str(exc))
     db.commit()
     return {"message": "已解绑", "workspace_id": ws.id, "notebook_id": notebook_id}
+
+
+@router.get("/{workspace_id}/notebooks")
+def list_workspace_notebook_bindings(
+    workspace_id: str,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """admin 只读：返回该 workspace 下 active 绑定的 Notebook 摘要。
+
+    - 鉴权顺序与 bind/unbind 一致：先 403 管理员校验，再查存在性（404）；
+    - 仅返回 status=='active' 的绑定（disabled 历史绑定不返回）；
+    - 绑定摘要为白名单字段，绝不返回 group_id / 源文件路径 / ACL / 连接配置；
+    - 纯只读：不新建 workspace、不修改绑定、不 commit。
+    """
+    _require_admin(current_user)
+    ws = db.get(WikiWorkspace, workspace_id)
+    if ws is None:
+        raise HTTPException(status_code=404, detail="工作区不存在")
+    rows = service.list_workspace_active_bindings(db, ws)
+    return {
+        "workspace_id": ws.id,
+        "workspace_name": ws.name,
+        "bindings": [_serialize_binding(binding, notebook) for binding, notebook in rows],
+    }
 
 
 @router.get("/{workspace_id}/wikis")
