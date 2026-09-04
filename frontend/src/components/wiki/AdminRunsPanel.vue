@@ -219,6 +219,11 @@ const busyId = ref<string | null>(null)
 const ctxGen = ref(0)
 // 同一 run 的 getRun 请求序号：收起→重开时第二次请求可覆盖第一次在途结果，旧响应不得改写新 Stage。
 const stageSeqMap = ref<Record<string, number>>({})
+// 同一 run 的在途 getRun 请求序号（0=无在途）：轮询驱动刷新在途时只登记待刷新，不叠加新请求，
+// 避免“单次 getRun 持续 > 轮询周期”时请求无界叠加与展开区持续 loading。
+const stageInflightSeq = ref<Record<string, number>>({})
+// 在途详情返回后仍展开且期间有“待反映真实状态”的刷新请求 → 恰好补一次（不重叠）。
+const stageRefreshQueued = ref<Record<string, boolean>>({})
 // action（retry/cancel）完成时 listRuns 已在途 → 标记待刷新，当前请求结束后补一次（不重叠、ctx 失效即清除）。
 const pendingRefresh = ref(false)
 
@@ -285,6 +290,8 @@ function resetContext() {
   stagesMap.value = {}
   stageErrorMap.value = {}
   stageSeqMap.value = {}
+  stageInflightSeq.value = {}
+  stageRefreshQueued.value = {}
   loadError.value = ''
   pollError.value = ''
 }
@@ -317,11 +324,17 @@ async function loadPage(origin: 'manual' | 'poll' | 'action' | 'open' | 'page') 
       if (!liveIds.has(rid)) {
         delete stagesMap.value[rid]
         delete stageSeqMap.value[rid]
+        delete stageInflightSeq.value[rid]
+        delete stageRefreshQueued.value[rid]
       }
     }
     if (expandedId.value && !liveIds.has(expandedId.value)) {
+      const gone = expandedId.value
       expandedId.value = ''
       stageLoading.value = ''
+      delete stageSeqMap.value[gone]
+      delete stageInflightSeq.value[gone]
+      delete stageRefreshQueued.value[gone]
     }
     // 当前展开 run 随真实状态刷新（列表 status/attempt/current_stage 变化或每轮轮询都触发）
     void refreshExpandedStages()
@@ -362,6 +375,7 @@ async function toggleExpand(run: CompileRunSummary) {
     expandedId.value = ''
     stageLoading.value = ''
     stageSeqMap.value[run.id] = (stageSeqMap.value[run.id] || 0) + 1
+    stageRefreshQueued.value[run.id] = false
     return
   }
   expandedId.value = run.id
@@ -373,33 +387,50 @@ async function toggleExpand(run: CompileRunSummary) {
 async function fetchStages(run: CompileRunSummary) {
   const ctx = ctxGen.value
   const ws = props.workspaceId
+  const rid = run.id
   if (!alive || !panelOpen()) return
-  // 序号：新请求可覆盖同一 run 的旧在途请求；旧响应/其 finally 不得改写新 Stage/loading。
-  const seq = (stageSeqMap.value[run.id] || 0) + 1
-  stageSeqMap.value[run.id] = seq
-  stageLoading.value = run.id
+  // 在途去重：若该 run 已有 getRun 在途且其序号仍为最新（未被收起/重开打断），
+  // 轮询/列表刷新驱动的详情请求不叠加，只登记“待刷新”，由本次在途返回后恰好补一次。
+  const curSeq = stageSeqMap.value[rid] || 0
+  if (stageInflightSeq.value[rid] !== 0 && stageInflightSeq.value[rid] === curSeq) {
+    stageRefreshQueued.value[rid] = true
+    return
+  }
+  // 序号：新请求可覆盖同一 run 的旧在途请求（如收起→重开显式重取）；旧响应/其 finally 不得改写新 Stage/loading。
+  const seq = curSeq + 1
+  stageSeqMap.value[rid] = seq
+  stageInflightSeq.value[rid] = seq
+  stageLoading.value = rid
   try {
-    const detail = await wikiCompileApi.getRun(run.id)
+    const detail = await wikiCompileApi.getRun(rid)
     // getRun 结果校验 workspace/run/ctxGen/请求序号：旧详情不覆盖新工作区或新 Stage。
     if (
       !alive ||
       ctx !== ctxGen.value ||
       ws !== props.workspaceId ||
-      expandedId.value !== run.id ||
-      stageSeqMap.value[run.id] !== seq
+      expandedId.value !== rid ||
+      stageSeqMap.value[rid] !== seq
     ) return
     if (detail.workspace_id !== ws) return
     applyStageDetail(detail)
   } catch (e: any) {
     if (
       !alive || ctx !== ctxGen.value || ws !== props.workspaceId ||
-      expandedId.value !== run.id || stageSeqMap.value[run.id] !== seq
+      expandedId.value !== rid || stageSeqMap.value[rid] !== seq
     ) return
-    stageErrorMap.value[run.id] = e?.response?.data?.detail || '阶段信息加载失败'
+    stageErrorMap.value[rid] = e?.response?.data?.detail || '阶段信息加载失败'
   } finally {
+    // 仅当自己是当前在途请求时才清除在途标记（避免误清重开后更新的在途请求）。
+    if (stageInflightSeq.value[rid] === seq) stageInflightSeq.value[rid] = 0
     if (alive && ctx === ctxGen.value && ws === props.workspaceId &&
-        stageSeqMap.value[run.id] === seq) {
+        stageSeqMap.value[rid] === seq) {
       stageLoading.value = ''
+      if (stageRefreshQueued.value[rid]) {
+        // 在途期间的刷新诉求补一次（不重叠：此处在途已清，fetchStages 会重新开始新请求）
+        stageRefreshQueued.value[rid] = false
+        const runNow = runs.value.find((r) => r.id === rid)
+        if (runNow && expandedId.value === rid) void fetchStages(runNow)
+      }
     }
   }
 }
@@ -469,6 +500,8 @@ function goPage(delta: number) {
   stagesMap.value = {}
   stageErrorMap.value = {}
   stageSeqMap.value = {}
+  stageInflightSeq.value = {}
+  stageRefreshQueued.value = {}
   void loadPage('page')
 }
 
@@ -485,6 +518,8 @@ function toggleCollapse() {
     stagesMap.value = {}
     stageErrorMap.value = {}
     stageSeqMap.value = {}
+    stageInflightSeq.value = {}
+    stageRefreshQueued.value = {}
   } else {
     // 展开：旧 fetching 不得阻塞新上下文
     stopPolling()
@@ -495,6 +530,8 @@ function toggleCollapse() {
     expandedId.value = ''
     stageLoading.value = ''
     stageSeqMap.value = {}
+    stageInflightSeq.value = {}
+    stageRefreshQueued.value = {}
     loadError.value = ''
     pollError.value = ''
     void loadPage('open')

@@ -23,6 +23,9 @@ backend/tests/fixtures/p17_sample.jpg
 .env.local
 frontend/.env.acceptance
 
+# Phase 9A 隔离联调运行时产物（日志/截图/数据库/缓存，一律不入库）
+.phase9a/
+
 # 仅供本地查看的开发文档
 TITAN810_RAG_优化清单.md
 钉钉文档同步开发记录.md

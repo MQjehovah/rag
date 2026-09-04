@@ -11,6 +11,7 @@
 //   POST /__control { ... }           动态延迟/错误/状态覆盖
 //   GET  /__log、GET /__reset-log     请求日志
 //   GET  /__runs-timeline、GET /__reset-runs-timeline  轮询时间窗口（start/end，非重叠检查）
+//   GET  /__getrun-timeline、GET /__reset-getrun-timeline  getRun 详情时间线（并发尖峰/在途去重检查）
 import http from 'node:http'
 import { createHash } from 'node:crypto'
 import { URL } from 'node:url'
@@ -486,11 +487,15 @@ const control = {
   errorDiagRevision: '',
   slowRunDetailOnceRun: '',
   slowRunDetailMs: 1600,
+  slowRunDetailAlwaysRun: '',
+  slowRunDetailAlwaysMs: 2000,
   runStates: {},
 }
 const requestLog = []
 const runsTimeline = []
 let timelineId = 0
+const getRunTimeline = []
+let detailTimelineId = 0
 
 // ===================== 基础设施 =====================
 
@@ -564,6 +569,12 @@ async function handle(req, res) {
   if (path === '/__reset-runs-timeline') {
     runsTimeline.length = 0
     timelineId = 0
+    return json(res, 200, { ok: true })
+  }
+  if (path === '/__getrun-timeline') return json(res, 200, { entries: getRunTimeline })
+  if (path === '/__reset-getrun-timeline') {
+    getRunTimeline.length = 0
+    detailTimelineId = 0
     return json(res, 200, { ok: true })
   }
 
@@ -707,13 +718,27 @@ async function handle(req, res) {
     if (!user.is_admin) return json(res, 403, { detail: '仅管理员可查看编译任务' })
     const run = effectiveRun(m[1])
     if (!run) return json(res, 404, { detail: '编译任务不存在' })
+    // 详情请求时间线：start=到达 / end=返回（end=0 表示仍在途），供并发尖峰/在途去重断言。
+    const entry = { id: ++detailTimelineId, run: m[1], start: Date.now(), end: 0 }
+    getRunTimeline.push(entry)
+    const finish = () => { entry.end = Date.now() }
+    if (control.slowRunDetailAlwaysRun === m[1] && control.slowRunDetailAlwaysMs > 0) {
+      // 慢详情持续模式：该 run 的每次 getRun 都先快照再延迟（≥ 轮询周期），
+      // 模拟运行中详情持续慢返回（RA3：请求无界叠加 / 持续 loading 的复现条件）。
+      const snapshot = { ...serializeRun(run), stages: stagesOf(run), artifacts: [] }
+      await delay(control.slowRunDetailAlwaysMs)
+      finish()
+      return json(res, 200, snapshot)
+    }
     if (control.slowRunDetailOnceRun === m[1]) {
       control.slowRunDetailOnceRun = ''
       // 先快照再延迟返回：模拟“旧响应最后到达”，供收起/重开的时序反例。
       const snapshot = { ...serializeRun(run), stages: stagesOf(run), artifacts: [] }
       await delay(control.slowRunDetailMs > 0 ? control.slowRunDetailMs : 1600)
+      finish()
       return json(res, 200, snapshot)
     }
+    finish()
     return json(res, 200, { ...serializeRun(run), stages: stagesOf(run), artifacts: [] })
   }
 

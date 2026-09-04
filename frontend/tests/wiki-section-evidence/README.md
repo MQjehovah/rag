@@ -85,10 +85,18 @@ NEG_ERROR=1  node frontend/tests/wiki-section-evidence/accept.mjs; echo $?
   runs 翻页正确且面板不把当前页当全量；切 Section / Workspace 后页码与内容重置
 - V6 320px 抽屉：bounding rect 落在视口内（left≥0 且 right≤viewport width），
   element/full 完整 320px 截图 + 桌面截图；长内容可滚动可达
+- RA1 旧 getRun 迟到不覆盖新 Stage/status/attempt（收起→重开产生新请求，旧快照迟到被丢弃；
+  stageSeqMap/expandedId/ctxGen 协同）
+- RA2 retry 完成时 listRuns 已在途 → 结束后补一次操作后刷新（pendingRefresh，不丢最终状态）
+- RA3 单次 getRun 持续 > 轮询周期：轮询驱动详情刷新在途去重（同 run 的 getRun 在途 ≤1，
+  不无界叠加且持续刷新）；慢详情下收起→重开旧响应不覆盖新结果；run 终态最终显示
+  （attempt/status 正确、无残留 loading、静默期无新增 getRun）
 - T11 门禁回归（以上全部通过）
 
 ## 文件
 
 - `mock-server.mjs`：内存 mock（认证/工作区/wiki 详情含 preview/章节 evidence 分页/
-  诊断按 revision/编译任务列表分页与状态流 + `__control`/`__log`/`__runs-timeline` 动态控制）。
+  诊断按 revision/编译任务列表分页与状态流 + `__control`/`__log`/`__runs-timeline`/
+  `__getrun-timeline` 动态控制；`slowRunDetailAlwaysRun`+`slowRunDetailAlwaysMs` 使指定 run
+  每次 getRun 都延迟 ≥ 轮询周期，供 RA3 在途去重验收）。
 - `accept.mjs`：浏览器驱动验收脚本（真实点击/输入，不手工 pushState）。

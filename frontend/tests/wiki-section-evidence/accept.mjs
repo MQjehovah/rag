@@ -390,7 +390,7 @@ async function mockControl(patch) {
   await fetch(`http://127.0.0.1:${MOCK_PORT}/__control`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) })
 }
 async function resetControl() {
-  await mockControl({ errorWorkspaces: false, detailTamper: {}, slowEvidenceSection: '', errorEvidenceSection: '', slowRunsMs: 0, slowRunsWs: '', retry409: false, slowRetryMs: 0, slowDiagRevision: '', errorDiagRevision: '', slowDiagMs: 1500, slowRunDetailOnceRun: '', slowRunDetailMs: 1600 })
+  await mockControl({ errorWorkspaces: false, detailTamper: {}, slowEvidenceSection: '', errorEvidenceSection: '', slowRunsMs: 0, slowRunsWs: '', retry409: false, slowRetryMs: 0, slowDiagRevision: '', errorDiagRevision: '', slowDiagMs: 1500, slowRunDetailOnceRun: '', slowRunDetailMs: 1600, slowRunDetailAlwaysRun: '', slowRunDetailAlwaysMs: 2000 })
 }
 async function requestLog() {
   const r = await fetch(`http://127.0.0.1:${MOCK_PORT}/__log`)
@@ -405,6 +405,61 @@ async function runsTimeline() {
 }
 async function resetRunsTimeline() {
   await fetch(`http://127.0.0.1:${MOCK_PORT}/__reset-runs-timeline`, { method: 'POST' })
+}
+async function getRunTimeline() {
+  const r = await fetch(`http://127.0.0.1:${MOCK_PORT}/__getrun-timeline`)
+  return (await r.json()).entries
+}
+async function resetGetRunTimeline() {
+  await fetch(`http://127.0.0.1:${MOCK_PORT}/__reset-getrun-timeline`, { method: 'POST' })
+}
+// 区间重叠峰值：把 [start,end] 事件排序扫描；end=0 的仍处“在途”，按当前时刻计。
+function maxOverlap(entries) {
+  const ev = []
+  for (const e of entries) {
+    const end = e.end > 0 ? e.end : Date.now()
+    ev.push({ t: e.start, d: 1 })
+    ev.push({ t: end, d: -1 })
+  }
+  ev.sort((a, b) => a.t - b.t || a.d - b.d)
+  let cur = 0
+  let max = 0
+  for (const x of ev) {
+    cur += x.d
+    if (cur > max) max = cur
+  }
+  return max
+}
+// 紧凑诊断：相对首请求的 [start,end] 偏移（ms），用于核对“叠加还是串行”。
+function pollEntriesDiag(entries) {
+  const sorted = [...entries].sort((a, b) => a.start - b.start)
+  const base = sorted.length ? sorted[0].start : 0
+  return sorted.map((e) => {
+    const end = e.end > 0 ? e.end : Date.now()
+    return `[${e.start - base}->${end - base}]`
+  }).join(',')
+}
+// 浏览器网络层 getRun 详情请求区间（CDP Network 事件），end=0 表示仍在途。
+// 说明：页面 → vite 代理 → mock 之间，代理对慢目标请求会“串行化”，mock 侧到达会低估
+// 页面真实并发；因此以浏览器网络层（requestWillBeSent/responseReceived）为准。
+function netGetRunIntervals(events, runId) {
+  const byId = {}
+  for (const m of events) {
+    if (m.method === 'Network.requestWillBeSent') {
+      const u = m.params?.request?.url || ''
+      const mm = /\/api\/wiki-compile\/runs\/([^/]+)$/.exec(u)
+      if (mm && m.params.request.method === 'GET' && (!runId || mm[1] === runId) && !byId[m.params.requestId]) {
+        byId[m.params.requestId] = { run: mm[1], start: Math.round((m.params.wallTime || 0) * 1000), end: 0 }
+      }
+    } else if (m.method === 'Network.responseReceived') {
+      const rec = byId[m.params.requestId]
+      if (rec && rec.end === 0) {
+        const rt = m.params.response && m.params.response.responseTime
+        rec.end = rt > 0 ? Math.round(rt) : Date.now()
+      }
+    }
+  }
+  return Object.values(byId)
 }
 
 // ---- 截图 ----
@@ -1004,6 +1059,66 @@ async function main() {
     record('RA2 retry 完成时 listRuns 在途 → 结束后补一次刷新（最终为操作后状态）', ok,
       `listCalls=${ra2Lists.length} queued=${ra2After.includes('排队中')} attempt2=${ra2After.includes('attempt 2')}`)
     await mockControl({ slowRunsMs: 0, runStates: {} })
+
+    // ===== RA3：单次 getRun 持续 > 轮询周期：详情请求不得无界叠加，终态最终显示且无残留 loading =====
+    await resetControl()
+    await resetLog()
+    await resetGetRunTimeline()
+    await setToken(cdp, 'tok-admin')
+    await goto(cdp, P_MAIN, '第一节', 15000)
+    await waitForCss(cdp, '.compile-run-row[data-run-id="cr-poll"]', 8000)
+    // 仅 cr-poll 保持 running(attempt 1)，其余全部终态：轮询持续但展开 run 的每次 getRun 都很慢
+    await mockControl({ runStates: { 'cr-poll': { status: 'running', cancel_requested: false, attempt: 1, current_stage: 'compile' }, 'cr-fail': { status: 'succeeded', cancel_requested: false, attempt: 1, current_stage: null }, 'cr-retry': { status: 'succeeded', cancel_requested: false, attempt: 1, current_stage: null }, 'cr-done': { status: 'succeeded', cancel_requested: false, attempt: 1, current_stage: null }, 'cr-sales': { status: 'succeeded', cancel_requested: false, attempt: 1, current_stage: null } } })
+    ok = (await clickPanelRefresh(cdp)) === true
+    ok = ok && (await waitRunRowText(cdp, 'cr-poll', 'attempt 1', 8000)) && (await waitRunRowText(cdp, 'cr-poll', '执行中', 8000))
+    s = await expandRunRow(cdp, 'cr-poll')
+    ok = ok && s === 'ok' && (await waitRunRowText(cdp, 'cr-poll', 'compile', 8000))
+    // 开启“该 run 每次 getRun 都慢于轮询周期”；以浏览器网络层为准观察轮询驱动 getRun 是否无界叠加
+    await mockControl({ slowRunDetailAlwaysRun: 'cr-poll', slowRunDetailAlwaysMs: 2000 })
+    await resetRunsTimeline()
+    cdp.events.length = 0
+    let gtl = []
+    let ra3NetItv = []
+    for (let i = 0; i < 60; i++) {
+      ra3NetItv = netGetRunIntervals(cdp.events, 'cr-poll')
+      if (ra3NetItv.length >= 3) break
+      await sleep(300)
+    }
+    gtl = await getRunTimeline()
+    const ra3RunsWindow = (await runsTimeline()).length
+    const ra3NetMax = maxOverlap(ra3NetItv)
+    const ra3PollEntries = gtl.filter((e) => e.run === 'cr-poll')
+    const ra3PollMax = maxOverlap(ra3PollEntries)
+    ok = ok && ra3NetItv.length >= 3 && ra3NetMax <= 1
+    const ra3NetDiag = pollEntriesDiag(ra3NetItv)
+    record('RA3a 慢详情持续>轮询周期：浏览器网络层 getRun 在途≤1（不无界叠加，且持续刷新）', ok,
+      `netCalls=${ra3NetItv.length} netMaxInFlight=${ra3NetMax} mockDetailCalls=${ra3PollEntries.length} mockMax=${ra3PollMax} polls=${ra3RunsWindow} diag=${ra3NetDiag}`)
+    // 推进内容 attempt 1 → attempt 2（running）；期间仍有旧 attempt 1 慢快照在途
+    await mockControl({ runStates: { 'cr-poll': { status: 'running', cancel_requested: false, attempt: 2, current_stage: 'compile' } } })
+    // 收起→重开：重开后的新请求（attempt 2 快照）在途时，旧 attempt 1 慢响应迟到不得覆盖新结果
+    ok = ok && (await expandRunRow(cdp, 'cr-poll')) === 'ok' // 收起
+    ok = ok && (await expandRunRow(cdp, 'cr-poll')) === 'ok' // 重开
+    ok = ok && (await waitRunRowText(cdp, 'cr-poll', 'attempt 2', 12000))
+    await sleep(2600) // 等可能仍在途的旧 attempt 1 慢响应迟到返回
+    const ra3bText = await runRowText(cdp, 'cr-poll')
+    ok = ok && ra3bText.includes('attempt 2') && !ra3bText.includes('attempt 1') && !ra3bText.includes('失败')
+    record('RA3b 慢详情下收起→重开：新请求覆盖在途旧请求，旧 attempt1 响应迟到不覆盖新结果', ok,
+      `text=${ra3bText.replace(/\s+/g, ' ').slice(0, 110)}`)
+    // 编译完成（attempt 2 succeeded）：终态最终显示，无残留 loading，静默期无新增 getRun
+    await mockControl({ runStates: { 'cr-poll': { status: 'succeeded', cancel_requested: false, attempt: 2, current_stage: null } } })
+    ok = ok && (await waitRunRowText(cdp, 'cr-poll', 'attempt 2', 12000))
+    ok = ok && (await waitRunRowText(cdp, 'cr-poll', '成功', 12000))
+    ok = ok && (await waitCondition(cdp, `(() => { const el = document.querySelector('.compile-run-row[data-run-id="cr-poll"]'); return !!el && !el.innerText.includes('执行中') && !el.innerText.includes('加载阶段信息'); })()`, 15000))
+    await sleep(1200)
+    const ra3QuietBefore = netGetRunIntervals(cdp.events, 'cr-poll').length
+    await sleep(2800)
+    const ra3QuietAfter = netGetRunIntervals(cdp.events, 'cr-poll').length
+    const ra3Final = await runRowText(cdp, 'cr-poll')
+    const ra3FinalOk = ra3QuietAfter === ra3QuietBefore && ra3Final.includes('attempt 2') && ra3Final.includes('成功') && ra3Final.includes('compile') && !ra3Final.includes('执行中') && !ra3Final.includes('attempt 1') && !ra3Final.includes('加载阶段信息')
+    ok = ok && ra3FinalOk
+    record('RA3c 编译完成（attempt2 succeeded）后终态最终显示：无残留 loading、静默期无新增 getRun', ok,
+      `final=${ra3Final.replace(/\s+/g, ' ').slice(0, 140)} quiet=${ra3QuietBefore}->${ra3QuietAfter}`)
+    await mockControl({ slowRunDetailAlwaysRun: '', slowRunDetailAlwaysMs: 0, runStates: {} })
 
     // ===== T11：门禁回归 =====
     const badCount = results.filter((r) => !r.ok).length
