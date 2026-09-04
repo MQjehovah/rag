@@ -307,12 +307,90 @@ async function clickPanelRefresh(cdp) {
   })()`)
 }
 
+// 真实 UI 编辑流：点开目标章节的“编辑”→ 输入 → “保存”（保存后进入 preview revision 视图）
+async function editSaveSection(cdp, heading, newText) {
+  const clicked = await evaluate(cdp, `(() => {
+    const items = [...document.querySelectorAll('.section-item')];
+    const sec = items.find(el =>
+      ((el.querySelector('.section-heading')?.textContent || '').trim().replace(/^🟡 /, '') === ${JSON.stringify(heading)}));
+    if (!sec) return 'no-section';
+    const btn = [...sec.querySelectorAll('button, .el-button')].find(b => (b.textContent || '').trim() === '编辑');
+    if (!btn) return 'no-btn';
+    btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    return 'ok';
+  })()`)
+  if (clicked !== 'ok') return clicked
+  const taReady = await waitForCss(cdp, '.edit-box textarea', 6000)
+  if (!taReady) return 'no-textarea'
+  await evaluate(cdp, `(() => {
+    const ta = document.querySelector('.edit-box textarea');
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
+    setter.call(ta, ${JSON.stringify(newText)});
+    ta.dispatchEvent(new Event('input', { bubbles: true }));
+    return 'typed';
+  })()`)
+  return evaluate(cdp, `(() => {
+    const box = document.querySelector('.edit-box');
+    if (!box) return 'no-box';
+    const btn = [...box.querySelectorAll('button, .el-button')].find(b => (b.textContent || '').trim() === '保存');
+    if (!btn) return 'no-save';
+    btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    return 'ok';
+  })()`)
+}
+
+async function waitRunRowText(cdp, runId, substr, timeout = 12000) {
+  const start = Date.now()
+  while (Date.now() - start < timeout) {
+    const t = await runRowText(cdp, runId)
+    if (t.includes(substr)) return true
+    await sleep(180)
+  }
+  return false
+}
+async function scrollDrawerBodyTop(cdp) {
+  return evaluate(cdp, `(() => {
+    const el = document.querySelector('.section-evidence-drawer .el-drawer__body') || document.querySelector('.section-evidence-drawer');
+    if (!el) return { ok: false };
+    const before = el.scrollTop;
+    el.scrollTop = el.scrollHeight;
+    return { ok: true, before, after: el.scrollTop, scrollH: el.scrollHeight, clientH: el.clientHeight };
+  })()`)
+}
+async function countTextWithin(cdp, selector, text) {
+  return evaluate(cdp, `(() => {
+    const el = document.querySelector(${JSON.stringify(selector)});
+    if (!el) return -1;
+    return el.innerText.split(${JSON.stringify(text)}).length - 1;
+  })()`)
+}
+async function drawerCountItems(cdp) {
+  return countSelector(cdp, '.section-evidence-drawer .sev-item')
+}
+async function clickLoadMore(cdp) {
+  return evaluate(cdp, `(() => {
+    const b = document.querySelector('.section-evidence-drawer .sev-load-more');
+    if (!b) return false;
+    b.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    return true;
+  })()`)
+}
+async function clickRunPager(cdp, cls) {
+  return evaluate(cdp, `(() => {
+    const b = document.querySelector('.admin-runs-panel ' + ${JSON.stringify(cls)});
+    if (!b) return 'no-btn';
+    if (b.disabled) return 'disabled';
+    b.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    return 'ok';
+  })()`)
+}
+
 // ---- mock 控制 ----
 async function mockControl(patch) {
   await fetch(`http://127.0.0.1:${MOCK_PORT}/__control`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) })
 }
 async function resetControl() {
-  await mockControl({ errorWorkspaces: false, detailTamper: {}, slowEvidenceSection: '', errorEvidenceSection: '', slowRunsMs: 0, retry409: false, slowRetryMs: 0 })
+  await mockControl({ errorWorkspaces: false, detailTamper: {}, slowEvidenceSection: '', errorEvidenceSection: '', slowRunsMs: 0, slowRunsWs: '', retry409: false, slowRetryMs: 0, slowDiagRevision: '', errorDiagRevision: '', slowDiagMs: 1500 })
 }
 async function requestLog() {
   const r = await fetch(`http://127.0.0.1:${MOCK_PORT}/__log`)
@@ -523,11 +601,14 @@ async function main() {
     const engListCalls = t6Log.filter((e) => e.path === '/api/wiki-compile/runs' && e.ws === 'ws-eng')
     const crFailText = await runRowText(cdp, 'cr-fail')
     const crDoneText = await runRowText(cdp, 'cr-done')
+    const arpFooter = await evaluate(cdp, `(() => { const el = document.querySelector('.admin-runs-panel .arp-footer'); return el ? el.innerText : ''; })()`)
+    // 默认 limit 20：工程工作区 23 条 → 首页 20 行；total=23 为全量匹配数（与当前页分开展示）
     ok = t6Title === '当前工作区编译任务' && hasEngRows && !hasSalesRow
-      && engListCalls.length >= 1 && runRowsCount === 3
+      && engListCalls.length >= 1 && runRowsCount === 20
       && crFailText.includes('章节编译失败') && !crDoneText.includes('章节编译失败')
-    record('T6a 管理员面板标题/ws-eng 三行/无销售 run/请求带 workspace_id=ws-eng/safe error', ok,
-      `title=${t6Title} rows=${runRowsCount} hasSales=${hasSalesRow} listCalls=${engListCalls.length}`)
+      && arpFooter.includes('当前页 20 条') && arpFooter.includes('全工作区匹配 23 条') && arpFooter.includes('第 1 / 2 页')
+    record('T6a 管理员面板标题/ws-eng 首页 20 行/无销售 run/请求带 workspace_id/safe error/分页文案', ok,
+      `title=${t6Title} rows=${runRowsCount} hasSales=${hasSalesRow} listCalls=${engListCalls.length} footer=${arpFooter.replace(/\s+/g, ' ').slice(0, 80)}`)
     // stage 时间线
     s = await expandRunRow(cdp, 'cr-done')
     ok = s === 'ok' && (await waitForText(cdp, 'extract', 8000)) && (await waitForText(cdp, 'compile', 8000))
@@ -667,6 +748,209 @@ async function main() {
     LOG('T10 截图（任务面板 320）: ' + shotPanel320)
     record('T10 桌面与 320px 抽屉/任务面板截图已保存', ok && ov320.docW <= ov320.innerW + 2,
       `deskDrawer=${shotDrawerDesk.split(path.sep).pop()} narrowDrawer=${shotDrawer320.split(path.sep).pop()} deskPanel=${shotPanelDesk.split(path.sep).pop()} narrowPanel=${shotPanel320.split(path.sep).pop()} overflow320=${ov320.docW}<=${ov320.innerW}`)
+    await clearViewport(cdp)
+
+    // ===== V1：diagnostics 按 revision 变化刷新（同页 preview 模拟）且旧响应不覆盖 =====
+    await resetControl()
+    await setToken(cdp, 'tok-editor')
+    await goto(cdp, `${FRONT}/knowledge/wiki/p-v1?workspace_id=ws-eng`, '版本甲章节', 15000)
+    await waitForCss(cdp, '.editor-diagnostics', 8000)
+    ok = await waitForText(cdp, '版本甲接口', 12000)
+    let dpA = await panelText(cdp)
+    ok = ok && dpA.includes('版本甲接口') && dpA.includes('自动') && dpA.includes('确定性高置信自动判定')
+      && dpA.includes('未锁定') && !dpA.includes('版本乙接口') && !dpA.includes('由 ')
+    record('V1a 查看 published 修订(r-v1a)：validation 章节来自该 revision；skill 选择方式为自动', ok,
+      `dp=${dpA.replace(/\s+/g, ' ').slice(0, 100)}`)
+    // 慢速旧修订请求在途时，用真实“编辑→保存”切换到 preview revision（r-v1draft）
+    await mockControl({ slowDiagRevision: 'r-v1a', slowDiagMs: 6000 })
+    await goto(cdp, `${FRONT}/knowledge/wiki/p-v1?workspace_id=ws-eng`, '版本甲章节', 15000)
+    await waitForCss(cdp, '.editor-diagnostics', 8000)
+    s = await editSaveSection(cdp, '版本甲章节', 'V1 演示：切到草稿修订')
+    ok = s === 'ok' && (await waitForText(cdp, '版本乙接口', 15000))
+    ok = ok && (await waitForText(cdp, '[p-v1-DRAFT-MARK]', 10000))
+    let dpB = await panelText(cdp)
+    ok = ok && dpB.includes('版本乙接口') && dpB.includes('新增草稿章节') && dpB.includes('已锁定') && !dpB.includes('版本甲接口')
+    // 等待旧 r-v1a 慢响应返回：不得覆盖新 revision 内容
+    await sleep(6700)
+    dpB = await panelText(cdp)
+    ok = ok && dpB.includes('版本乙接口') && !dpB.includes('版本甲接口')
+    record('V1b 切到 preview 修订(r-v1draft)：章节随 revision 刷新且慢旧响应不覆盖', ok,
+      `edit=${s} dp=${dpB.replace(/\s+/g, ' ').slice(0, 110)}`)
+    await mockControl({ slowDiagRevision: '' })
+    record('V3a 选择方式中文映射（auto→自动）且无“由…选定”文案', ok && dpA.includes('自动') && !dpA.includes('由 '), ``)
+    record('V3b reason_code 受控映射（MANUAL_OVERRIDE→人工指定并覆盖系统决策；locked 单独显示）',
+      ok && dpB.includes('人工指定并覆盖系统决策') && dpB.includes('已锁定') && !dpB.includes('由 '), ``)
+
+    // ===== V2：编辑器可读 published；草稿 revision diagnostics 404 → 无权查看该版本 =====
+    await resetControl()
+    await setToken(cdp, 'tok-editor')
+    await goto(cdp, `${FRONT}/knowledge/wiki/p-v2?workspace_id=ws-eng`, '稳定章节', 15000)
+    await waitForCss(cdp, '.editor-diagnostics', 8000)
+    ok = await waitForText(cdp, '稳定版校验章', 12000)
+    let dpV2 = await panelText(cdp)
+    ok = ok && dpV2.includes('稳定版校验章') && dpV2.includes('决策原因未知') && dpV2.includes('未记录')
+    record('V2a published(r-v2c)：读者可读该 revision 校验；selected_by null→未记录；unknown→通用提示', ok,
+      `dp=${dpV2.replace(/\s+/g, ' ').slice(0, 90)}`)
+    record('V3c unknown reason_code 显示通用文案（非具体内部原因）', ok && dpV2.includes('决策原因未知'), ``)
+    s = await editSaveSection(cdp, '稳定章节', 'V2 演示：切到无权查看的草稿修订')
+    ok = s === 'ok' && (await waitForText(cdp, '无权查看该版本', 12000)) && (await waitForText(cdp, '[p-v2-DRAFT-MARK]', 10000))
+    dpV2 = await panelText(cdp)
+    ok = ok && dpV2.includes('无权查看该版本') && !dpV2.includes('稳定版校验章') && !dpV2.includes('主题概览')
+    record('V2b 草稿修订(r-v2draft) diagnostics 404：显示“无权查看该版本”且不展示章节名', ok, `dp=${dpV2.replace(/\s+/g, ' ').slice(0, 90)}`)
+
+    // ===== V4：Run 面板上下文竞态 / 展开 Stage 随真实状态刷新 / retry 后 attempt 更新 =====
+    await resetControl()
+    await setToken(cdp, 'tok-admin')
+    await goto(cdp, WS_ROOT, '接口主手册', 15000)
+    ok = (await waitForCss(cdp, '.compile-run-row[data-run-id="cr-done"]', 10000))
+    // V4a：慢 A（ws-eng）加载期间切 B（ws-sales）→ B 自动加载，A 迟到响应不覆盖
+    await mockControl({ runStates: { 'cr-poll': { status: 'succeeded', cancel_requested: false } }, slowRunsMs: 2500, slowRunsWs: 'ws-eng' })
+    ok = ok && (await clickPanelRefresh(cdp))
+    await sleep(400)
+    s = await chooseWorkspace(cdp, '销售工作区')
+    ok = ok && s === 'ok' && (await waitForCss(cdp, '.compile-run-row[data-run-id="cr-sales"]', 10000))
+    await sleep(3200)
+    const v4aSalesStill = (await runRowExists(cdp, 'cr-sales')) && !(await runRowExists(cdp, 'cr-done'))
+    ok = ok && v4aSalesStill
+    record('V4a 慢请求切换工作区：B 自动加载且旧响应不覆盖', ok, `salesRows=${v4aSalesStill}`)
+    await mockControl({ runStates: { 'cr-poll': { status: 'succeeded' } }, slowRunsMs: 0, slowRunsWs: '' })
+    s = await chooseWorkspace(cdp, '工程工作区')
+    ok = s === 'ok' && (await waitForCss(cdp, '.compile-run-row[data-run-id="cr-done"]', 10000))
+    // V4b：请求中收起再展开不卡住（旧 fetching 不阻塞新上下文）
+    await mockControl({ slowRunsMs: 2000, slowRunsWs: 'ws-eng' })
+    ok = ok && (await clickPanelRefresh(cdp))
+    await sleep(200)
+    ok = ok && (await clickPanelToggle(cdp))
+    await sleep(200)
+    await mockControl({ slowRunsMs: 0, slowRunsWs: '' })
+    ok = ok && (await clickPanelToggle(cdp))
+    ok = ok && (await waitForCss(cdp, '.compile-run-row[data-run-id="cr-done"]', 10000))
+    await sleep(2600)
+    const v4bRows = await runRowExists(cdp, 'cr-done')
+    const v4bRefreshEnabled = await evaluate(cdp, `(() => { const b = document.querySelector('.admin-runs-panel .arp-refresh'); return !b ? 'no-btn' : b.disabled; })()`)
+    ok = ok && v4bRows && v4bRefreshEnabled === false
+    record('V4b 请求中收起再展开：不卡住、新上下文正常加载、旧请求不阻塞刷新', ok, `rows=${v4bRows} refreshDisabled=${v4bRefreshEnabled}`)
+    // V4c：展开的 run Stage 随真实状态刷新（running → succeeded 显示成功而非旧 running）
+    await mockControl({ runStates: { 'cr-poll': { status: 'running', cancel_requested: false, attempt: 2, current_stage: 'compile' }, 'cr-retry': { status: 'failed', cancel_requested: false, attempt: 1, current_stage: null } } })
+    ok = ok && (await clickPanelRefresh(cdp))
+    ok = ok && (await waitRunRowText(cdp, 'cr-poll', '执行中', 10000))
+    s = await expandRunRow(cdp, 'cr-poll')
+    ok = ok && s === 'ok' && (await waitRunRowText(cdp, 'cr-poll', 'compile', 8000))
+    ok = ok && (await waitRunRowText(cdp, 'cr-poll', '执行中', 8000)) && (await waitRunRowText(cdp, 'cr-poll', 'attempt 2', 8000))
+    await mockControl({ runStates: { 'cr-poll': { status: 'succeeded', cancel_requested: false, attempt: 2, current_stage: null } } })
+    ok = ok && (await waitRunRowText(cdp, 'cr-poll', '成功', 10000))
+    const pollNoRunning = await waitCondition(cdp, `(() => { const el = document.querySelector('.compile-run-row[data-run-id="cr-poll"]'); return !!el && !el.innerText.includes('执行中'); })()`, 10000)
+    const pollSuccessCount = await countTextWithin(cdp, '.compile-run-row[data-run-id="cr-poll"]', '成功')
+    ok = ok && pollNoRunning && pollSuccessCount >= 3
+    record('V4c 展开 run 的 Stage 随真实状态刷新（running→成功；attempt 2 全 Stage 生效）', ok,
+      `pollNoRunning=${pollNoRunning} successTagCount=${pollSuccessCount}`)
+    // V4d：retry 后 attempt/current_stage 与 Stage 更新
+    ok = ok && (await expandRunRow(cdp, 'cr-poll')) // 收起 cr-poll
+    ok = ok && (await waitRunRowText(cdp, 'cr-retry', '失败', 8000))
+    s = await expandRunRow(cdp, 'cr-retry')
+    ok = ok && s === 'ok' && (await waitRunRowText(cdp, 'cr-retry', 'extract', 8000))
+    s = await clickRunBtn(cdp, 'cr-retry', '.run-retry-btn')
+    ok = ok && s === 'ok' && (await waitRunRowText(cdp, 'cr-retry', '排队中', 10000))
+    ok = ok && (await waitRunRowText(cdp, 'cr-retry', 'attempt 2', 10000))
+    await mockControl({ runStates: { 'cr-retry': { status: 'running', cancel_requested: false, attempt: 2, current_stage: 'compile' } } })
+    ok = ok && (await waitRunRowText(cdp, 'cr-retry', '执行中', 10000)) && (await waitRunRowText(cdp, 'cr-retry', 'compile', 10000))
+    ok = ok && (await waitRunRowText(cdp, 'cr-retry', 'attempt 2', 8000))
+    record('V4d retry 后 attempt/current_stage 与 Stage 更新', ok, `retry=${s}`)
+    await mockControl({ runStates: { 'cr-retry': { status: 'succeeded', cancel_requested: false, attempt: 2, current_stage: null }, 'cr-poll': { status: 'succeeded', cancel_requested: false, attempt: 2, current_stage: null } } })
+    await clickPanelRefresh(cdp)
+    await sleep(800)
+
+    // ===== V5：evidence 与 runs 分页（第二页可访问、不重复不遗漏、切上下文重置） =====
+    // runs 翻页：23 条 ws-eng → 第 1/2 页 20 条，第 2/2 页 3 条
+    ok = true
+    const footer1 = await evaluate(cdp, `(() => { const el = document.querySelector('.admin-runs-panel .arp-footer'); return el ? el.innerText : ''; })()`)
+    const rowsP1 = await countSelector(cdp, '.compile-run-row')
+    ok = footer1.includes('当前页 20 条') && footer1.includes('全工作区匹配 23 条') && footer1.includes('第 1 / 2 页') && rowsP1 === 20
+    let pager = await clickRunPager(cdp, '.arp-next')
+    ok = ok && pager === 'ok' && (await waitForCss(cdp, '.compile-run-row[data-run-id="cr-x01"]', 8000))
+    const rowsP2 = await countSelector(cdp, '.compile-run-row')
+    const footer2 = await evaluate(cdp, `(() => { const el = document.querySelector('.admin-runs-panel .arp-footer'); return el ? el.innerText : ''; })()`)
+    ok = ok && rowsP2 === 3 && footer2.includes('当前页 3 条') && footer2.includes('全工作区匹配 23 条')
+      && footer2.includes('第 2 / 2 页') && !(await runRowExists(cdp, 'cr-done'))
+    pager = await clickRunPager(cdp, '.arp-prev')
+    ok = ok && pager === 'ok' && (await waitForCss(cdp, '.compile-run-row[data-run-id="cr-done"]', 8000))
+    const footer3 = await evaluate(cdp, `(() => { const el = document.querySelector('.admin-runs-panel .arp-footer'); return el ? el.innerText : ''; })()`)
+    ok = ok && footer3.includes('第 1 / 2 页') && (await countSelector(cdp, '.compile-run-row')) === 20
+    record('V5a runs 分页：第二页可访问不串页；当前页条数≠全量匹配数', ok,
+      `rowsP2=${rowsP2} f1=${footer1.replace(/\s+/g, ' ').slice(0, 60)} f2=${footer2.replace(/\s+/g, ' ').slice(0, 60)}`)
+    // 切 workspace 后页码与内容重置回第 1 页
+    s = await chooseWorkspace(cdp, '销售工作区')
+    ok = s === 'ok' && (await waitForCss(cdp, '.compile-run-row[data-run-id="cr-sales"]', 10000))
+    s = await chooseWorkspace(cdp, '工程工作区')
+    ok = ok && s === 'ok' && (await waitForCss(cdp, '.compile-run-row[data-run-id="cr-done"]', 10000))
+    const footer4 = await evaluate(cdp, `(() => { const el = document.querySelector('.admin-runs-panel .arp-footer'); return el ? el.innerText : ''; })()`)
+    ok = ok && footer4.includes('第 1 / 2 页') && (await countSelector(cdp, '.compile-run-row')) === 20
+    record('V5b 切 workspace 后 runs 页码与内容重置到第 1 页', ok, `footer=${footer4.replace(/\s+/g, ' ').slice(0, 60)}`)
+    // evidence 翻页：26 条底层中 24 条可见（隐藏不计 total）；第二页可访问不重复不遗漏
+    await resetControl()
+    await setToken(cdp, 'tok-reader')
+    await goto(cdp, P_MAIN, '第一节', 15000)
+    s = await openSectionEvidence(cdp, '长列表样例')
+    ok = s === 'ok' && (await waitForText(cdp, '已加载 10 条 / 共 24 条', 10000))
+    const evCount1 = await drawerCountItems(cdp)
+    ok = ok && evCount1 === 10 && (await countTextWithin(cdp, '.section-evidence-drawer', 'EVID-PAGE-01')) === 1
+    ok = ok && (await clickLoadMore(cdp)) && (await waitForText(cdp, '已加载 20 条 / 共 24 条', 10000))
+    const evCount2 = await drawerCountItems(cdp)
+    ok = ok && evCount2 === 20 && (await waitForText(cdp, 'EVID-PAGE-15', 8000))
+      && (await countTextWithin(cdp, '.section-evidence-drawer', 'EVID-PAGE-07')) === 1 && (await countTextWithin(cdp, '.section-evidence-drawer', 'EVID-PAGE-11')) === 1
+    ok = ok && (await clickLoadMore(cdp)) && (await waitForText(cdp, '已加载 24 条 / 共 24 条', 10000))
+    const evCount3 = await drawerCountItems(cdp)
+    ok = ok && evCount3 === 24 && (await waitForText(cdp, 'EVID-PAGE-24', 8000))
+    const loadMoreGone = (await countSelector(cdp, '.section-evidence-drawer .sev-load-more')) === 0
+    ok = ok && loadMoreGone
+    record('V5c evidence 分页：隐藏证据不计 total(24)；加载更多到第二/三页不重复不遗漏', ok,
+      `counts=${evCount1},${evCount2},${evCount3} p01=${await countTextWithin(cdp, '.section-evidence-drawer', 'EVID-PAGE-01')}`)
+    // 切 Section → 分页与内容重置
+    await closeDrawer(cdp)
+    await sleep(400)
+    s = await openSectionEvidence(cdp, '第一节')
+    ok = s === 'ok' && (await waitForText(cdp, 'EVID-A-MARK', 10000)) && (await waitForText(cdp, '已加载 1 条 / 共 1 条', 8000))
+    ok = ok && (await drawerCountItems(cdp)) === 1
+    await closeDrawer(cdp)
+    await sleep(400)
+    s = await openSectionEvidence(cdp, '长列表样例')
+    ok = s === 'ok' && (await waitForText(cdp, '已加载 10 条 / 共 24 条', 10000))
+    ok = ok && (await drawerCountItems(cdp)) === 10
+    record('V5d 切 Section 后 evidence 分页与内容重置（丢弃旧分页状态）', ok, `open=${s}`)
+
+    // ===== V6：320px 抽屉完整可用（bounding rect 在视口内、长内容可滚动） + 截图 =====
+    await setViewport(cdp, 1400, 900, false)
+    await setToken(cdp, 'tok-reader')
+    await goto(cdp, P_MAIN, '第一节', 15000)
+    s = await openSectionEvidence(cdp, '长列表样例')
+    ok = s === 'ok' && (await waitForText(cdp, '已加载 10 条 / 共 24 条', 10000))
+    const v6ShotDesk = await shot(cdp, 'v6-drawer-desktop-1400')
+    await closeDrawer(cdp)
+    await sleep(400)
+    await setViewport(cdp, 320, 800, false)
+    await goto(cdp, P_MAIN, '第一节', 15000)
+    s = await openSectionEvidence(cdp, '长列表样例')
+    ok = ok && s === 'ok' && (await waitForText(cdp, '已加载 10 条 / 共 24 条', 10000))
+    await clickLoadMore(cdp)
+    await waitForText(cdp, '已加载 20 条 / 共 24 条', 10000)
+    await clickLoadMore(cdp)
+    ok = ok && (await waitForText(cdp, '已加载 24 条 / 共 24 条', 10000))
+    const rect320 = await evaluate(cdp, `(() => {
+      const el = document.querySelector('.section-evidence-drawer');
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      return { left: r.left, right: r.right, width: r.width, vw: window.innerWidth, bodyScrollH: (el.querySelector('.el-drawer__body') || el).scrollHeight, bodyClientH: (el.querySelector('.el-drawer__body') || el).clientHeight };
+    })()`)
+    const fits = rect320 && rect320.left >= -0.5 && rect320.right <= rect320.vw + 0.5
+    const scrollRes = await scrollDrawerBodyTop(cdp)
+    const scrollable = scrollRes.ok && scrollRes.scrollH > scrollRes.clientH + 2 && scrollRes.after > 0
+    const v6ShotFull = await shot(cdp, 'v6-drawer-320-full')
+    const v6ShotEl = await shotElement(cdp, '.section-evidence-drawer', 'v6-drawer-320-element')
+    LOG('V6 截图（抽屉 320 element）: ' + v6ShotEl)
+    ok = ok && fits && scrollable
+    record('V6 320px 抽屉完整可用：rect 在视口内 + 长内容可滚动（含 element/full/桌面截图）', ok,
+      `rect=${JSON.stringify(rect320 && { left: Math.round(rect320.left), right: Math.round(rect320.right), vw: rect320.vw })} scrollH=${scrollRes.scrollH}/${scrollRes.clientH} desk=${v6ShotDesk.split(path.sep).pop()} full=${v6ShotFull.split(path.sep).pop()} el=${v6ShotEl.split(path.sep).pop()}`)
+    await closeDrawer(cdp)
     await clearViewport(cdp)
 
     // ===== T11：门禁回归 =====

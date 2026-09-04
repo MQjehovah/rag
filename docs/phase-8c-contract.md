@@ -56,9 +56,13 @@ GET `/api/wiki/{wiki_id}/revisions/{revision_id}/sections/{section_id}/evidence?
 - 历史无 Binding 的 Section → items=[]（绝不回退成整 Page 的全部 Evidence）。
 
 ## 2. 编辑者只读诊断
-GET `/api/wiki/{wiki_id}/diagnostics`
+GET `/api/wiki/{wiki_id}/diagnostics?revision_id={可选}`
 
 权限：admin 或 access_control.can_edit_wiki(current_user, page) 的用户；否则 403。前端仅在可编辑页面请求。Wiki 不可见 → 404。
+`revision_id` 语义（Phase 8C.1）：
+- 缺省 = page.current_revision_id；必须属于该 Wiki；
+- 可见性沿用 Wiki 详情规则：非 admin（含 wiki_editor）仅 `revision_id==page.current_revision_id` 且该 revision.status=='published'（且 page published+ACL 可见）；admin 可查看属于该 Wiki 的任意 revision；
+- 任一不符 → 404（不区分无权/不存在）。validation.sections 只来自授权后的目标 Revision；响应顶层回显实际查看的 `revision_id`。
 
 响应：
 ```jsonc
@@ -66,23 +70,24 @@ GET `/api/wiki/{wiki_id}/diagnostics`
   "wiki_id": "…",
   "editable": true,
   "is_current_wiki_config": true,   // Skill 取自已展示的当前 Wiki 配置，不是历史 revision 当时配置
+  "revision_id": "…",               // 实际被查看的 revision
   "skill": {
     "key": "api_reference", "display_name": "API Reference", "version": "1",
-    "selection": "auto",            // auto/manual/none
-    "selected_by": "u-1",           // 可能 null
+    "selected_by": "auto",          // 受限枚举，表示“选择方式”，不是操作者姓名：
+                                    //   auto/manual/migration/default_fallback/locked/sticky（= SELECTED_BY_VALUES）；未知 → null
     "locked": false,
-    "reason_code": "auto_top_score" // 仅允许受控集合；未知/内部 → "unknown"
+    "reason_code": "DETERMINISTIC_HIGH_CONFIDENCE" // 受控集合；未知/内部 → "unknown"
   },
   "validation": {
-    "summary": "pass",              // 任一 fail→fail；否则任一 NULL/unknown→unknown；全 pass→pass
+    "summary": "pass",              // 任一 fail→fail；否则任一 NULL/unknown→unknown；全 pass→pass；无 section→unknown
     "sections": [ { "heading": "GET /users（v1）", "validation_status": "pass" } ]
   }
 }
 ```
+- 不再返回 `skill.selection` 聚合字段；`selected_by` 优先 page.skill_selected_by、缺失时回退 SkillDecision.selected_by，仅放行 SELECTED_BY_VALUES 六值，其余 null。
 - 不返回 skill_decision_json、Prompt、候选、原始 reason 文本。
-- validation.sections 取自当前查看 Revision 的 sections：validation_status 为 NULL → "unknown"（“历史全 NULL 不得算作通过”）。
+- reason_code 只回放后端真实受控码（自动确定性、sticky、锁定、人工覆盖/解锁、migration proposed/applied、default fallback、LLM_* 常规失败码等）；未知显示通用提示。
 - 隐藏 wiki 不泄露 skill/来源数量/决策。
-- reason_code 后端只回放一个很小的受控 code 集合（由实现方据 SkillDecision 字段确定），其余一律 "unknown"；前端按受控映射显示文案，未知显示通用提示。
 
 ## 3. 管理员当前工作区 CompileRun 面板
 - 复用现有 wiki_compile API：`GET /api/wiki-compile/runs`（新增可选 query `workspace_id`，先过滤后 count/分页）、`GET /runs/{id}`（含 stages/artifacts，既有安全序列化）、`POST /runs/{id}/retry`、`POST /runs/{id}/cancel`。

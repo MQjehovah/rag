@@ -224,16 +224,24 @@ export interface WikiSectionEvidenceResult {
 
 // ===== Phase 8C：编辑者只读诊断（见 docs/phase-8c-contract.md §2） =====
 
+/** SkillDecision.selected_by 受限枚举：选择方式（非操作者姓名）。 */
+export type WikiSkillSelectedBy =
+  | 'auto'
+  | 'manual'
+  | 'migration'
+  | 'default_fallback'
+  | 'locked'
+  | 'sticky'
+
 export interface WikiDiagnosticsSkill {
   key: string
   display_name: string
   version: string | null
-  /** auto/manual/none */
-  selection: string
-  selected_by: string | null
+  /** 受限枚举：auto/manual/migration/default_fallback/locked/sticky 或 null（未记录）。 */
+  selected_by: WikiSkillSelectedBy | null
   locked: boolean
-  /** 仅受控 reason_code；未知/内部 → "unknown" */
-  reason_code: string | null
+  /** 仅受控 reason_code；未知/内部 → "unknown"。 */
+  reason_code: string
 }
 
 export interface WikiDiagnosticsSectionStatus {
@@ -249,6 +257,8 @@ export interface WikiDiagnosticsValidation {
 
 export interface WikiDiagnostics {
   wiki_id: string
+  /** 本次实际查看的 revision（diagnostics 请求参数 revision_id 的回显；缺省 current）。 */
+  revision_id: string | null
   editable: boolean
   is_current_wiki_config: boolean
   skill: WikiDiagnosticsSkill | null
@@ -373,9 +383,12 @@ export const wikiApi = {
     return res.data
   },
 
-  /** Phase 8C：编辑者只读诊断（Skill 配置 + 当前查看 Revision 的章节校验摘要）。 */
-  async wikiDiagnostics(wikiId: string): Promise<WikiDiagnostics> {
-    const res = await http.get(`/api/wiki/${wikiId}/diagnostics`)
+  /** Phase 8C：编辑者只读诊断（Skill 配置 + 当前查看 Revision 的章节校验摘要）。
+   *  revisionId 缺省 → 后端取 current revision（validation.sections 来自该 revision）。 */
+  async wikiDiagnostics(wikiId: string, revisionId?: string | null): Promise<WikiDiagnostics> {
+    const res = await http.get(`/api/wiki/${wikiId}/diagnostics`, {
+      params: { revision_id: revisionId || undefined },
+    })
     return res.data
   },
 }

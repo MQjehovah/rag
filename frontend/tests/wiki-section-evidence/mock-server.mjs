@@ -1,9 +1,11 @@
 // Phase 8C 章节 Evidence / 编辑者诊断 / 管理员编译任务面板：浏览器验收隔离 mock。
 //
 // 内存只读数据，零 DB/模型/正式后端。数据与 docs/phase-8c-contract.md 逐字段对齐：
-//   - 章节 Evidence（分页/截断/多 binding 聚合/state 派生）
-//   - 编辑者只读诊断（Skill 受控字段 + validation sections，NULL → 未知）
-//   - wiki-compile runs list（workspace_id 过滤）/ get / retry（含 409）/ cancel（状态流）
+//   - 章节 Evidence（分页 offset+limit / 截断 / 多 binding 聚合 / state 派生；total 仅授权后可见计数）
+//   - 编辑者只读诊断（GET .../diagnostics?revision_id=；缺省 current；skill 无 selection，
+//     selected_by ∈ {auto,manual,migration,default_fallback,locked,sticky}|null；reason_code 受控码或 "unknown"；
+//     validation.sections 来自该 revision）
+//   - wiki-compile runs list（workspace_id 过滤 + 分页）/ get（stages 随真实状态派生）/ retry（含 409）/ cancel（状态流）
 //
 // 附带验收控制：
 //   POST /__control { ... }           动态延迟/错误/状态覆盖
@@ -85,6 +87,7 @@ const pMain = {
     makeSection({ id: 'p-main-a', section_type: 'steps', heading: '第一节', content: '# 第一节\n\n安装要求参考来源原文。' }),
     makeSection({ id: 'p-main-b', section_type: 'facts', heading: '第二节', content: '# 第二节\n\n接线要求与调试约定。' }),
     makeSection({ id: 'p-main-states', section_type: 'facts', heading: '状态样例', content: '用于验证 stale/rejected/hash changed/截断提示。' }),
+    makeSection({ id: 'p-main-lots', section_type: 'facts', heading: '长列表样例', content: '超过一页的分页验证（含隐藏来源不计数）。' }),
     makeSection({ id: 'p-main-empty', section_type: 'facts', heading: '空样例', content: '该章节无可见 Evidence。' }),
     makeSection({ id: 'p-main-fail', section_type: 'facts', heading: '失败样例', content: '该章节 Evidence 请求可注入失败。' }),
   ],
@@ -110,7 +113,36 @@ const pOther = {
   ],
 }
 
-const wikiDb = { 'ws-eng': [pMain, pOther], 'ws-sales': [] }
+// V1/V2 诊断验收页：同一页面拥有 published（current）与 preview（draft）两种 revision，
+// 预览/历史模拟通过既有“编辑→保存”真实 UI 流程切入（保存后进入 preview revision 视图）。
+function makeDraftPage({ id, title, category, currentRev, draftRev, currentHeading, draftHeading }) {
+  return {
+    id,
+    workspace_id: 'ws-eng',
+    title,
+    summary: `${title}：用于 diagnostics 按 revision 刷新验收。`,
+    status: 'published',
+    category,
+    keywords: [title],
+    locked: false,
+    latest_version: 'v1.0',
+    current_revision_id: currentRev,
+    preview_revision_id: draftRev,
+    has_preview: true,
+    updated_at: '2026-09-03T11:00:00',
+    sections: [
+      makeSection({ id: `${id}-s1`, section_type: 'steps', heading: currentHeading, content: `# ${currentHeading}\n\n[${id}-CURRENT-MARK] published 正文。` }),
+    ],
+    previewSections: [
+      makeSection({ id: `${id}-s1`, section_type: 'steps', heading: draftHeading, content: `# ${draftHeading}\n\n[${id}-DRAFT-MARK] preview 草稿正文。` }),
+    ],
+  }
+}
+
+const pV1 = makeDraftPage({ id: 'p-v1', title: '版本诊断甲', category: '诊断验收', currentRev: 'r-v1a', draftRev: 'r-v1draft', currentHeading: '版本甲章节', draftHeading: '版本乙章节' })
+const pV2 = makeDraftPage({ id: 'p-v2', title: '版本诊断乙', category: '诊断验收', currentRev: 'r-v2c', draftRev: 'r-v2draft', currentHeading: '稳定章节', draftHeading: '草稿章节' })
+
+const wikiDb = { 'ws-eng': [pMain, pOther, pV1, pV2], 'ws-sales': [] }
 
 function serializeWorkspace(w) {
   return { id: w.id, name: w.name, description: w.description, status: w.status, created_at: w.created_at, updated_at: w.updated_at }
@@ -124,12 +156,11 @@ function visibleWorkspaces(user) {
   })
 }
 function serializeSection(s) {
-  const out = { ...s }
-  return out
+  return { ...s }
 }
 function serializePageList(p) {
-  const { keywords, sections, ...rest } = p
-  return { ...rest, preview_revision_id: null }
+  const { keywords, sections, previewSections, ...rest } = p
+  return { ...rest }
 }
 
 // ===================== 章节 Evidence 数据 =====================
@@ -137,6 +168,21 @@ function serializePageList(p) {
 function makeEv({ id, type = 'text', status, hash, state, content, locator, source, bindings }) {
   return { evidence_id: id, evidence_type: type, status, hash_matches: hash, state, content, content_truncated: false, locator, source_display_name: source, bindings }
 }
+
+// 分页数据集：底层 26 条，其中 2 条来源对当前用户不可见 → 不返回也不计入 total（mock 真实契约）。
+const paginatedRaw = []
+for (let i = 1; i <= 26; i++) {
+  const pad = String(i).padStart(2, '0')
+  paginatedRaw.push(makeEv({
+    id: `ev-page-${pad}`,
+    status: 'active', hash: true, state: 'active_current',
+    content: `# 第 ${i} 条\n\nEVID-PAGE-${pad} 分页正文第 ${i} 条。`,
+    locator: { page_number: i, heading: '长列表', image_id: null, content_type: null },
+    source: i > 24 ? '隐藏来源(无权)' : '分页来源(可见)',
+    bindings: [{ field_path: `page.item_${pad}`, usage_type: 'support' }],
+  }))
+}
+const HIDDEN_EVIDENCE_IDS = new Set(['ev-page-25', 'ev-page-26'])
 
 const evidenceBySection = {
   'p-main|p-main-a': [
@@ -190,6 +236,7 @@ const evidenceBySection = {
       bindings: [{ field_path: 'long.example', usage_type: 'support' }],
     }),
   ],
+  'p-main|p-main-lots': paginatedRaw,
   'p-main|p-main-fail': [
     makeEv({
       id: 'ev-fail-1', status: 'active', hash: true, state: 'active_current',
@@ -210,31 +257,81 @@ const evidenceBySection = {
   ],
 }
 
-// ===================== 编辑者诊断 =====================
+// ===================== 编辑者诊断（真实 selected_by / reason_code 枚举；无 skill.selection） =====================
 
-function makeDiagnostics(wikiId) {
-  return {
-    wiki_id: wikiId,
-    editable: true,
-    is_current_wiki_config: true,
-    skill: {
-      key: 'api_reference',
-      display_name: 'API Reference',
-      version: '1',
-      selection: 'auto',
-      selected_by: null,
-      locked: false,
-      reason_code: 'auto_top_score',
+const API_REF_SKILL = {
+  key: 'api_reference',
+  display_name: 'API Reference',
+  version: '1',
+  selected_by: 'auto',
+  locked: false,
+  reason_code: 'DETERMINISTIC_HIGH_CONFIDENCE',
+}
+
+// revs[rev] === null → diagnostics 对该 revision 返回 404（统一“无权查看该版本”语义）。
+const diagnosticsDb = {
+  'p-main': {
+    current: 'r1',
+    revs: {
+      r1: {
+        is_current_wiki_config: true,
+        skill: { ...API_REF_SKILL },
+        validation: {
+          summary: 'pass',
+          sections: [
+            { heading: '主题概览', validation_status: 'pass' },
+            { heading: 'GET /users（v1）', validation_status: 'pass' },
+            { heading: '状态样例', validation_status: 'unknown' },
+          ],
+        },
+      },
     },
-    validation: {
-      summary: 'pass',
-      sections: [
-        { heading: '主题概览', validation_status: 'pass' },
-        { heading: 'GET /users（v1）', validation_status: 'pass' },
-        { heading: '状态样例', validation_status: null },
-      ],
+  },
+  'p-v1': {
+    current: 'r-v1a',
+    revs: {
+      'r-v1a': {
+        is_current_wiki_config: true,
+        skill: { ...API_REF_SKILL },
+        validation: {
+          summary: 'pass',
+          sections: [
+            { heading: '主题概览', validation_status: 'pass' },
+            { heading: '版本甲接口', validation_status: 'pass' },
+          ],
+        },
+      },
+      'r-v1draft': {
+        is_current_wiki_config: true,
+        skill: { key: 'api_reference', display_name: 'API Reference', version: '1', selected_by: 'manual', locked: true, reason_code: 'MANUAL_OVERRIDE' },
+        validation: {
+          summary: 'fail',
+          sections: [
+            { heading: '主题概览', validation_status: 'pass' },
+            { heading: '版本乙接口', validation_status: 'unknown' },
+            { heading: '新增草稿章节', validation_status: 'fail' },
+          ],
+        },
+      },
     },
-  }
+  },
+  'p-v2': {
+    current: 'r-v2c',
+    revs: {
+      'r-v2c': {
+        is_current_wiki_config: true,
+        skill: { key: 'api_reference', display_name: 'API Reference', version: '1', selected_by: null, locked: false, reason_code: 'unknown' },
+        validation: {
+          summary: 'unknown',
+          sections: [
+            { heading: '主题概览', validation_status: 'unknown' },
+            { heading: '稳定版校验章', validation_status: 'pass' },
+          ],
+        },
+      },
+      'r-v2draft': null, // 404：无权查看该版本
+    },
+  },
 }
 
 // ===================== 编译任务（runs） =====================
@@ -250,22 +347,38 @@ function runRow(id, { pipeline_key, pipeline_version, trigger_type, workspace_id
 }
 
 const baseRuns = {
-  'cr-done': runRow('cr-done', { pipeline_key: 'notes_wiki', pipeline_version: '1', trigger_type: 'manual', workspace_id: 'ws-eng', status: 'succeeded', attempt: 1, created: '2026-09-04T08:00:00', started: '2026-09-04T08:00:03', finished: '2026-09-04T08:02:10', output_revision_id: 'r1' }),
+  'cr-poll': runRow('cr-poll', { pipeline_key: 'notes_wiki', pipeline_version: '1', trigger_type: 'auto', workspace_id: 'ws-eng', status: 'succeeded', attempt: 1, created: '2026-09-04T09:00:00', started: '2026-09-04T09:00:01', finished: '2026-09-04T09:02:00', current_stage: 'compile', output_revision_id: 'r1' }),
   'cr-fail': runRow('cr-fail', { pipeline_key: 'notes_wiki', pipeline_version: '1', trigger_type: 'manual', workspace_id: 'ws-eng', status: 'failed', attempt: 1, created: '2026-09-04T08:05:00', started: '2026-09-04T08:05:02', finished: '2026-09-04T08:06:40', safe_error_code: 'compile_failed', safe_error_message: '章节编译失败：请检查上游来源（已脱敏）', error_summary: '章节编译失败：请检查上游来源（已脱敏）' }),
-  'cr-poll': runRow('cr-poll', { pipeline_key: 'notes_wiki', pipeline_version: '1', trigger_type: 'auto', workspace_id: 'ws-eng', status: 'succeeded', attempt: 1, created: '2026-09-04T09:00:00', started: '2026-09-04T09:00:01', finished: '2026-09-04T09:02:00', output_revision_id: 'r1' }),
+  'cr-retry': runRow('cr-retry', { pipeline_key: 'notes_wiki', pipeline_version: '1', trigger_type: 'manual', workspace_id: 'ws-eng', status: 'failed', attempt: 1, created: '2026-09-04T08:03:00', started: '2026-09-04T08:03:02', finished: '2026-09-04T08:04:10', safe_error_code: 'compile_failed', safe_error_message: '重试验收 run 失败（已脱敏）', error_summary: '重试验收 run 失败（已脱敏）' }),
+  'cr-done': runRow('cr-done', { pipeline_key: 'notes_wiki', pipeline_version: '1', trigger_type: 'manual', workspace_id: 'ws-eng', status: 'succeeded', attempt: 1, created: '2026-09-04T08:00:00', started: '2026-09-04T08:00:03', finished: '2026-09-04T08:02:10', output_revision_id: 'r1' }),
   'cr-sales': runRow('cr-sales', { pipeline_key: 'notes_wiki', pipeline_version: '1', trigger_type: 'auto', workspace_id: 'ws-sales', status: 'succeeded', attempt: 1, created: '2026-09-04T07:00:00', started: '2026-09-04T07:00:01', finished: '2026-09-04T07:02:00', output_revision_id: 'r1' }),
 }
+// 工程工作区补齐 > 一页（23 条：4 条验收 + 19 条历史成功，均早于 08:00，避免挤掉 cr-done/cr-fail/cr-poll/cr-retry）
+for (let i = 1; i <= 19; i++) {
+  const pad = String(i).padStart(2, '0')
+  const minutes = 30 + i // 07:31..07:49
+  const hh = String(Math.floor(minutes / 60)).padStart(2, '0')
+  const mm = String(minutes % 60).padStart(2, '0')
+  baseRuns[`cr-x${pad}`] = runRow(`cr-x${pad}`, { pipeline_key: 'notes_wiki', pipeline_version: '1', trigger_type: 'batch', workspace_id: 'ws-eng', status: 'succeeded', attempt: 1, created: `2026-09-04T${hh}:${mm}:00`, started: `2026-09-04T${hh}:${mm}:01`, finished: `2026-09-04T${hh}:${mm + 1 > 59 ? 59 : mm + 1}:00`, output_revision_id: 'r1' })
+}
 
-// 生效状态覆盖（__control.runStates 写入；cancel/retry 也写此表）
+// 生效状态覆盖（__control.runStates 写入；cancel/retry 也写此表：status/cancel_requested/attempt/current_stage）
 const liveStates = {}
 
 function effectiveRun(id) {
   const live = liveStates[id]
   const base = baseRuns[id]
   if (!base) return null
-  const status = live && live.status ? live.status : base.status
-  const cancel_requested = live && typeof live.cancel_requested === 'boolean' ? live.cancel_requested : Boolean(base.cancel_requested)
-  return { ...base, status, cancel_requested }
+  const merged = { ...base }
+  if (live) {
+    if (live.status !== undefined) merged.status = live.status
+    if (typeof live.cancel_requested === 'boolean') merged.cancel_requested = live.cancel_requested
+    if (live.attempt !== undefined) merged.attempt = live.attempt
+    if (live.current_stage !== undefined) merged.current_stage = live.current_stage
+    if (live.finished_at !== undefined) merged.finished_at = live.finished_at
+    if (live.started_at !== undefined) merged.started_at = live.started_at
+  }
+  return merged
 }
 
 function serializeRun(run) {
@@ -294,7 +407,7 @@ function serializeRun(run) {
   }
 }
 
-const stageDb = {
+const staticStages = {
   'cr-done': [
     { id: 'st-done-1', run_id: 'cr-done', stage_key: 'extract', stage_order: 1, status: 'succeeded', attempt: 1, retryable: true, component_key: 'notes_extractor', component_version: '1.0', parent_stage_run_id: null, error_code: '', error_message: '', safe_error_code: null, safe_error_message: null, metrics_summary: { cached: false }, started_at: '2026-09-04T08:00:05', finished_at: '2026-09-04T08:00:40', created_at: '2026-09-04T08:00:04' },
     { id: 'st-done-2', run_id: 'cr-done', stage_key: 'compile', stage_order: 2, status: 'succeeded', attempt: 1, retryable: true, component_key: 'notes_compiler', component_version: '1.0', parent_stage_run_id: null, error_code: '', error_message: '', safe_error_code: null, safe_error_message: null, metrics_summary: {}, started_at: '2026-09-04T08:00:41', finished_at: '2026-09-04T08:02:10', created_at: '2026-09-04T08:00:40' },
@@ -302,6 +415,59 @@ const stageDb = {
   'cr-fail': [
     { id: 'st-fail-1', run_id: 'cr-fail', stage_key: 'extract', stage_order: 1, status: 'failed', attempt: 1, retryable: true, component_key: 'notes_extractor', component_version: '1.0', parent_stage_run_id: null, error_code: 'compile_failed', error_message: '章节编译失败（已脱敏）', safe_error_code: 'compile_failed', safe_error_message: '章节编译失败（已脱敏）', metrics_summary: {}, started_at: '2026-09-04T08:05:02', finished_at: '2026-09-04T08:05:20', created_at: '2026-09-04T08:05:01' },
   ],
+}
+
+// 无静态 stage 的 run（cr-poll / cr-retry 等）：按实时 status/attempt/current_stage 派生 stage 时间线。
+function derivedStages(run) {
+  const attempt = Number(run.attempt) || 1
+  const T0 = '2026-09-04T09:00:02'
+  const mk = (stageKey, order, status, started, finished, safeError = null) => ({
+    id: `${run.id}-${stageKey}-a${attempt}`,
+    run_id: run.id,
+    stage_key: stageKey,
+    stage_order: order,
+    status,
+    attempt,
+    retryable: true,
+    component_key: 'notes_wiki_skill_v3',
+    component_version: '1.0',
+    parent_stage_run_id: null,
+    error_code: status === 'failed' ? 'compile_failed' : '',
+    error_message: status === 'failed' ? (safeError || '章节编译失败（已脱敏）') : '',
+    safe_error_code: status === 'failed' ? 'compile_failed' : null,
+    safe_error_message: status === 'failed' ? (safeError || '章节编译失败（已脱敏）') : null,
+    metrics_summary: {},
+    started_at: started,
+    finished_at: finished,
+    created_at: started || T0,
+  })
+  const st = run.status
+  if (st === 'succeeded') {
+    return [
+      mk('extract', 1, 'succeeded', T0, '2026-09-04T09:00:40'),
+      mk('compile', 2, 'succeeded', '2026-09-04T09:00:41', '2026-09-04T09:02:00'),
+    ]
+  }
+  if (st === 'running') {
+    const rows = [mk('extract', 1, 'succeeded', T0, '2026-09-04T09:00:40')]
+    rows.push(mk('compile', 2, 'running', '2026-09-04T09:00:41', null))
+    return rows
+  }
+  if (st === 'queued') {
+    return [mk('extract', 1, 'queued', null, null)]
+  }
+  if (st === 'failed') {
+    return [mk('extract', 1, 'failed', T0, '2026-09-04T09:00:20', run.safe_error_message)]
+  }
+  if (st === 'cancelled') {
+    return [mk('extract', 1, 'cancelled', T0, '2026-09-04T09:00:20')]
+  }
+  return []
+}
+
+function stagesOf(run) {
+  if (staticStages[run.id]) return staticStages[run.id]
+  return derivedStages(run)
 }
 
 // ===================== 控制 =====================
@@ -312,8 +478,12 @@ const control = {
   slowEvidenceSection: '',
   errorEvidenceSection: '',
   slowRunsMs: 0,
+  slowRunsWs: '',
   retry409: false,
   slowRetryMs: 0,
+  slowDiagRevision: '',
+  slowDiagMs: 1500,
+  errorDiagRevision: '',
   runStates: {},
 }
 const requestLog = []
@@ -361,6 +531,10 @@ function serializeEvidenceItem(raw) {
     source_display_name: raw.source_display_name,
     bindings: raw.bindings || [],
   }
+}
+
+function pageById(id) {
+  return Object.values(wikiDb).flat().find((p) => p.id === id)
 }
 
 async function handle(req, res) {
@@ -418,13 +592,13 @@ async function handle(req, res) {
     return json(res, 200, { pages })
   }
 
-  // ---- 章节 Evidence（8C §1） ----
+  // ---- 章节 Evidence（8C §1；total 仅授权后可见计数） ----
   m = path.match(/^\/api\/wiki\/([^/]+)\/revisions\/([^/]+)\/sections\/([^/]+)\/evidence$/)
   if (m && method === 'GET') {
     const wikiId = m[1]
     const revisionId = m[2]
     const sectionId = m[3]
-    const page = Object.values(wikiDb).flat().find((p) => p.id === wikiId)
+    const page = pageById(wikiId)
     const section = page && page.sections.find((s) => s.id === sectionId)
     if (!section) return json(res, 404, { detail: 'Section 不存在' })
     const limit = Math.min(Number(url.searchParams.get('limit')) || 50, 100)
@@ -432,31 +606,73 @@ async function handle(req, res) {
     const key = `${wikiId}|${sectionId}`
     if (control.slowEvidenceSection === sectionId) await delay(1500)
     if (control.errorEvidenceSection === sectionId) return json(res, 500, { detail: '证据服务异常（mock 注入）' })
-    const all = (evidenceBySection[key] || []).map(serializeEvidenceItem)
+    const all = (evidenceBySection[key] || [])
+      .filter((raw) => !HIDDEN_EVIDENCE_IDS.has(raw.evidence_id))
+      .map(serializeEvidenceItem)
     const items = all.slice(offset, offset + limit)
     return json(res, 200, { wiki_id: wikiId, revision_id: revisionId, section_id: sectionId, total: all.length, limit, offset, items })
   }
 
-  // ---- 编辑者诊断（8C §2；非编辑/管理员 → 403） ----
+  // ---- 章节保存（用于真实 UI “编辑→保存”进入 preview revision 视图的验收模拟） ----
+  m = path.match(/^\/api\/wiki\/([^/]+)\/revisions\/([^/]+)\/sections\/([^/]+)$/)
+  if (m && method === 'PATCH') {
+    const page = pageById(m[1])
+    if (!page) return json(res, 404, { detail: '主题页不存在' })
+    if (!user.is_admin && !user.is_wiki_editor) return json(res, 403, { detail: '无权编辑该 Wiki' })
+    let body = ''
+    for await (const chunk of req) body += chunk
+    try { JSON.parse(body || '{}') } catch { return json(res, 400, { detail: '请求体非法' }) }
+    const inCurrent = page.sections.some((s) => s.id === m[3])
+    const inPreview = (page.previewSections || []).some((s) => s.id === m[3])
+    if (!inCurrent && !inPreview) return json(res, 404, { detail: 'Section 不存在' })
+    return json(res, 200, { message: '已保存', locked: false })
+  }
+
+  // ---- 编辑者诊断（8C §2；revision_id 缺省 current；skill 无 selection） ----
   m = path.match(/^\/api\/wiki\/([^/]+)\/diagnostics$/)
   if (m && method === 'GET') {
     if (!user.is_admin && !user.is_wiki_editor) return json(res, 403, { detail: '无权查看编译诊断' })
-    const page = Object.values(wikiDb).flat().find((p) => p.id === m[1])
+    const page = pageById(m[1])
     if (!page) return json(res, 404, { detail: '主题页不存在' })
-    return json(res, 200, makeDiagnostics(m[1]))
+    const rule = diagnosticsDb[page.id]
+    if (!rule) return json(res, 404, { detail: 'Revision 不存在或无权查看该版本' })
+    const revParam = url.searchParams.get('revision_id') || ''
+    const effective = revParam || rule.current
+    if (control.errorDiagRevision && control.errorDiagRevision === effective) {
+      return json(res, 500, { detail: '诊断服务异常（mock 注入）' })
+    }
+    if (control.slowDiagRevision && control.slowDiagRevision === effective) {
+      await delay(control.slowDiagMs)
+    }
+    const entry = rule.revs[effective]
+    if (entry === undefined || entry === null) {
+      return json(res, 404, { detail: 'Revision 不存在或无权查看该版本' })
+    }
+    return json(res, 200, {
+      wiki_id: page.id,
+      revision_id: effective,
+      editable: true,
+      is_current_wiki_config: entry.is_current_wiki_config !== false,
+      skill: entry.skill,
+      validation: entry.validation,
+    })
   }
 
-  // ---- Wiki 详情 ----
+  // ---- Wiki 详情（preview=true 且页面有草稿 revision → 查看 preview revision；模拟预览/历史视图） ----
   m = path.match(/^\/api\/wiki\/([^/]+)$/)
   if (m && method === 'GET') {
-    const page = Object.values(wikiDb).flat().find((p) => p.id === m[1])
+    const page = pageById(m[1])
     if (!page || (!user.is_admin && page.status !== 'published')) return json(res, 404, { detail: '主题页不存在' })
+    const list = serializePageList(page)
+    const wantPreview = url.searchParams.get('preview') === 'true' && Boolean(page.preview_revision_id) && (user.is_admin || user.is_wiki_editor)
     const detail = {
-      ...serializePageList(page),
-      sections: page.sections.map(serializeSection),
+      ...list,
+      preview_revision_id: page.preview_revision_id || null,
+      has_preview: Boolean(page.preview_revision_id),
+      sections: (wantPreview ? page.previewSections || [] : page.sections).map(serializeSection),
       related_topics: [],
       related_topic_ids: [],
-      viewing_revision_id: 'r1',
+      viewing_revision_id: wantPreview ? page.preview_revision_id : page.current_revision_id,
     }
     const tamper = control.detailTamper && control.detailTamper[page.id]
     if (tamper === 'other') detail.workspace_id = 'ws-sales'
@@ -466,21 +682,21 @@ async function handle(req, res) {
     return json(res, 200, detail)
   }
 
-  // ---- 编译任务（8C §3，全部 require_admin） ----
+  // ---- 编译任务（8C §3，全部 require_admin；limit/offset 分页） ----
   if (path === '/api/wiki-compile/runs' && method === 'GET') {
     if (!user.is_admin) return json(res, 403, { detail: '仅管理员可查看编译任务' })
     const ws = url.searchParams.get('workspace_id') || ''
     const status = url.searchParams.get('status')
-    const limit = Math.min(Number(url.searchParams.get('limit')) || 50, 500)
+    const limit = Math.min(Number(url.searchParams.get('limit')) || 20, 500)
     const offset = Number(url.searchParams.get('offset')) || 0
     const start = Date.now()
-    if (control.slowRunsMs > 0) await delay(control.slowRunsMs)
+    if (control.slowRunsMs > 0 && (!control.slowRunsWs || control.slowRunsWs === ws)) await delay(control.slowRunsMs)
     const all = Object.keys(baseRuns)
       .map(effectiveRun)
       .filter((r) => r && (!ws || r.workspace_id === ws) && (!status || r.status === status))
       .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))
     const items = all.slice(offset, offset + limit)
-    runsTimeline.push({ id: ++timelineId, start, end: Date.now(), ws, count: items.length })
+    runsTimeline.push({ id: ++timelineId, start, end: Date.now(), ws, count: items.length, offset })
     return json(res, 200, { total: all.length, limit, offset, runs: items.map(serializeRun) })
   }
 
@@ -489,7 +705,7 @@ async function handle(req, res) {
     if (!user.is_admin) return json(res, 403, { detail: '仅管理员可查看编译任务' })
     const run = effectiveRun(m[1])
     if (!run) return json(res, 404, { detail: '编译任务不存在' })
-    return json(res, 200, { ...serializeRun(run), stages: stageDb[m[1]] || [], artifacts: [] })
+    return json(res, 200, { ...serializeRun(run), stages: stagesOf(run), artifacts: [] })
   }
 
   m = path.match(/^\/api\/wiki-compile\/runs\/([^/]+)\/retry$/)
@@ -500,8 +716,9 @@ async function handle(req, res) {
     const run = effectiveRun(m[1])
     if (!run) return json(res, 404, { detail: '编译任务不存在' })
     if (run.status !== 'failed') return json(res, 409, { detail: '仅失败状态可重试' })
-    liveStates[m[1]] = { status: 'queued', cancel_requested: false }
-    return json(res, 200, { run_id: run.id, status: 'queued', attempt: run.attempt, message: '已重新入队' })
+    const nextAttempt = (Number(run.attempt) || 1) + 1
+    liveStates[m[1]] = { status: 'queued', cancel_requested: false, attempt: nextAttempt, current_stage: null, finished_at: null }
+    return json(res, 200, { run_id: run.id, status: 'queued', attempt: nextAttempt, message: '已重新入队' })
   }
 
   m = path.match(/^\/api\/wiki-compile\/runs\/([^/]+)\/cancel$/)
@@ -510,15 +727,15 @@ async function handle(req, res) {
     const run = effectiveRun(m[1])
     if (!run) return json(res, 404, { detail: '编译任务不存在' })
     if (run.status === 'queued') {
-      liveStates[m[1]] = { status: 'cancelled', cancel_requested: false }
+      liveStates[m[1]] = { status: 'cancelled', cancel_requested: false, attempt: run.attempt, current_stage: run.current_stage, finished_at: run.finished_at || '2026-09-04T09:00:20' }
       return json(res, 200, { run_id: run.id, status: 'cancelled', cancel_requested: false, message: '已取消' })
     }
     if (run.status === 'running') {
-      liveStates[m[1]] = { status: 'running', cancel_requested: true }
+      liveStates[m[1]] = { status: 'running', cancel_requested: true, attempt: run.attempt, current_stage: run.current_stage }
       // 模拟 worker 异步收敛：running → cancel_requested → cancelled（4s 后推进，便于验收观察中间态）
       setTimeout(() => {
         if (liveStates[m[1]] && liveStates[m[1]].status === 'running') {
-          liveStates[m[1]] = { status: 'cancelled', cancel_requested: false }
+          liveStates[m[1]] = { status: 'cancelled', cancel_requested: false, attempt: run.attempt, current_stage: run.current_stage, finished_at: '2026-09-04T09:00:40' }
         }
       }, 4000)
       return json(res, 200, { run_id: run.id, status: 'running', cancel_requested: true, message: '已请求取消' })

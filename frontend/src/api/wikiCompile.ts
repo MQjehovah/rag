@@ -67,13 +67,13 @@ export interface CompileRunListResult {
 }
 
 export const wikiCompileApi = {
-  /** 按当前工作区过滤的编译任务列表（先过滤后 count/分页）。 */
+  /** 按当前工作区过滤的编译任务列表（先过滤后 count/分页；limit 默认 20）。 */
   async listRuns(params: { workspaceId: string; status?: string; limit?: number; offset?: number }): Promise<CompileRunListResult> {
     const res = await http.get('/api/wiki-compile/runs', {
       params: {
         workspace_id: params.workspaceId,
         status: params.status,
-        limit: params.limit ?? 50,
+        limit: params.limit ?? 20,
         offset: params.offset ?? 0,
       },
     })

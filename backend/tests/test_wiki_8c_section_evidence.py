@@ -12,6 +12,9 @@
 - content 截断 2000 + content_truncated；locator 白名单；limit 分页 total 授权后计数；
 - diagnostics：admin/wiki_editor 可、普通读者 403、其它组 editor 404；skill 受控字段；
   validation summary 派生；
+- diagnostics revision 绑定：缺省 current、admin 可取任意 revision（sections 不串用、
+  跨 Wiki 404）；非 admin（含 editor）仅 current published（草稿/历史/他 Wiki → 404）；
+  selected_by 受限枚举映射（无聚合 selection 字段）；reason_code 受控回放；历史全 NULL → unknown；
 - compile runs：仅 admin；workspace_id 先过滤后分页 total。
 
 全部请求只读：只查询、不 flush/commit（fixture 内 commit 仅用于准备数据）。
@@ -150,6 +153,33 @@ def _add_section(db, *, sid, rid, heading="章节", section_type="evidence", val
     ))
     db.flush()
     return sid
+
+
+def _diag_wiki(db, wid, *, cur_rid, cur_statuses, extra_rev=None, extra_statuses=(),
+               extra_rev_status="superseded", skill_selected_by=None,
+               skill_locked=False, skill_decision_json=None):
+    """published wiki：current revision + 可选历史 revision；返回 wiki。"""
+    wp = WikiPage(id=wid, title=wid, acl_scope='{"groups": ["group_a"]}',
+                  status="published", dirty=False,
+                  skill_selected_by=skill_selected_by,
+                  skill_locked=skill_locked,
+                  skill_decision_json=skill_decision_json)
+    db.add(wp)
+    db.flush()
+    db.add(WikiRevision(id=cur_rid, wiki_page_id=wid, title=wid, status="published"))
+    if extra_rev:
+        db.add(WikiRevision(id=extra_rev, wiki_page_id=wid, title=wid,
+                            status=extra_rev_status))
+    db.flush()
+    wp.current_revision_id = cur_rid
+    for i, vs in enumerate(cur_statuses):
+        _add_section(db, sid=f"{wid}-c{i}", rid=cur_rid, heading=f"cur{i}",
+                     section_type="summary", validation_status=vs, order=i)
+    for i, vs in enumerate(extra_statuses or ()):
+        _add_section(db, sid=f"{wid}-h{i}", rid=extra_rev, heading=f"his{i}",
+                     section_type="summary", validation_status=vs, order=i)
+    db.flush()
+    return wp
 
 
 def _add_evidence(db, *, eid, page_id, content="证据正文", content_hash=None, status="active",
@@ -548,11 +578,12 @@ def test_diagnostics_skill_fields_and_reason_code(client):
         _override(_editor())
         body = c.get("/api/wiki/wp-dx/diagnostics").json()
         skill = body["skill"]
+        assert body["revision_id"] == "dx-rev"  # 缺省 = current_revision_id
         assert skill["key"] == "api_reference"
         assert skill["display_name"] == "API Reference"
         assert skill["version"] == "1"
-        assert skill["selection"] == "auto"
-        assert "selected_by" in skill
+        assert "selection" not in skill  # 不再返回聚合 selection
+        assert skill["selected_by"] == "auto"
         assert skill["locked"] is False
         assert skill["reason_code"] == "DETERMINISTIC_HIGH_CONFIDENCE"
 
@@ -584,9 +615,11 @@ def test_diagnostics_skill_no_data_and_manual_locked(client):
 
     _override(_editor())
     body = c.get("/api/wiki/wp-dx2/diagnostics").json()
+    assert body["revision_id"] == "dx2-rev"
     assert body["skill"]["key"] == "default"
     assert body["skill"]["display_name"] is None  # 未注册 → null
-    assert body["skill"]["selection"] == "manual"
+    assert "selection" not in body["skill"]
+    assert body["skill"]["selected_by"] == "manual"
     assert body["skill"]["locked"] is True
     assert body["skill"]["reason_code"] == "unknown"
 
@@ -620,6 +653,7 @@ def test_diagnostics_validation_summary(client):
 
     _override(_admin())
     assert c.get("/api/wiki/wp-ok/diagnostics").json()["validation"]["summary"] == "pass"
+    assert c.get("/api/wiki/wp-ok/diagnostics").json()["revision_id"] == "ok-rev"
     assert c.get("/api/wiki/wp-unk/diagnostics").json()["validation"]["summary"] == "unknown"
     assert c.get("/api/wiki/wp-fail/diagnostics").json()["validation"]["summary"] == "fail"
     assert c.get("/api/wiki/wp-mix/diagnostics").json()["validation"]["summary"] == "fail"
@@ -651,6 +685,157 @@ def test_diagnostics_no_internal_keys(client):
     for token in ("skill_decision_json", "prompt", "candidate", "acl", "payload",
                   "source_path", "connection"):
         assert token not in raw
+
+
+# ---------------------------------------------------------------------------
+# diagnostics：revision 绑定（与正在查看的 Revision 对应）
+# ---------------------------------------------------------------------------
+
+def test_diagnostics_revision_binding_two_revisions(client):
+    c, db, _url = client
+    _diag_wiki(db, "wp-rv", cur_rid="rvA", cur_statuses=["pass", "pass"],
+               extra_rev="rvB", extra_statuses=["pass", None, "fail"])
+    db.commit()
+
+    # admin 缺省 = current（pass）；?revision_id=rvB → 读 rvB 自身 sections（fail）
+    _override(_admin())
+    cur = c.get("/api/wiki/wp-rv/diagnostics").json()
+    assert cur["revision_id"] == "rvA"
+    assert cur["validation"]["summary"] == "pass"
+    assert [s["validation_status"] for s in cur["validation"]["sections"]] == ["pass", "pass"]
+
+    hist = c.get("/api/wiki/wp-rv/diagnostics", params={"revision_id": "rvB"}).json()
+    assert hist["revision_id"] == "rvB"
+    assert hist["validation"]["summary"] == "fail"
+    assert [s["heading"] for s in hist["validation"]["sections"]] == ["his0", "his1", "his2"]
+    assert [s["validation_status"] for s in hist["validation"]["sections"]] == ["pass", "unknown", "fail"]
+
+    # admin 显式请求当前 revision → 返回 current（不串用历史）
+    cur2 = c.get("/api/wiki/wp-rv/diagnostics", params={"revision_id": "rvA"}).json()
+    assert cur2["revision_id"] == "rvA"
+    assert cur2["validation"]["summary"] == "pass"
+    assert len(cur2["validation"]["sections"]) == 2
+
+
+def test_diagnostics_revision_cross_wiki_and_missing_404(client):
+    c, db, _url = client
+    _diag_wiki(db, "wp-x", cur_rid="x1", cur_statuses=["pass"])
+    _diag_wiki(db, "wp-y", cur_rid="y1", cur_statuses=["pass"])
+    db.commit()
+
+    _override(_admin())
+    # 跨 Wiki 的 revision_id → 404
+    assert c.get("/api/wiki/wp-x/diagnostics", params={"revision_id": "y1"}).status_code == 404
+    assert c.get("/api/wiki/wp-y/diagnostics", params={"revision_id": "x1"}).status_code == 404
+    # 不存在/不属于 → 404
+    assert c.get("/api/wiki/wp-x/diagnostics", params={"revision_id": "nope"}).status_code == 404
+
+    # 编辑者同样统一 404（不区分无权/不存在）
+    _override(_editor())
+    assert c.get("/api/wiki/wp-x/diagnostics", params={"revision_id": "y1"}).status_code == 404
+    assert c.get("/api/wiki/wp-x/diagnostics", params={"revision_id": "nope"}).status_code == 404
+
+
+def test_diagnostics_editor_only_current_published(client):
+    c, db, _url = client
+    _diag_wiki(db, "wp-e", cur_rid="e1", cur_statuses=["pass"])
+    # 同 Wiki 的草稿 revision（非当前/非 published）
+    db.add(WikiRevision(id="e-draft", wiki_page_id="wp-e", title="草稿", status="draft"))
+    # 同 Wiki 的旧 published revision（非当前）
+    db.add(WikiRevision(id="e-old", wiki_page_id="wp-e", title="旧版", status="published"))
+    db.commit()
+
+    _override(_editor())
+    # 当前 published → 200；缺省 revision_id = current
+    r = c.get("/api/wiki/wp-e/diagnostics")
+    assert r.status_code == 200
+    assert r.json()["revision_id"] == "e1"
+    assert c.get("/api/wiki/wp-e/diagnostics",
+                 params={"revision_id": "e1"}).status_code == 200
+    # 无权查看的草稿 revision → 404
+    assert c.get("/api/wiki/wp-e/diagnostics",
+                 params={"revision_id": "e-draft"}).status_code == 404
+    # 历史但 published 且非当前 → 404（非 admin 仅当前）
+    assert c.get("/api/wiki/wp-e/diagnostics",
+                 params={"revision_id": "e-old"}).status_code == 404
+
+    # admin 可取同 Wiki 任意 revision（含草稿）
+    _override(_admin())
+    assert c.get("/api/wiki/wp-e/diagnostics",
+                 params={"revision_id": "e-draft"}).status_code == 200
+    assert c.get("/api/wiki/wp-e/diagnostics",
+                 params={"revision_id": "e-old"}).status_code == 200
+
+
+def test_diagnostics_historical_all_null_validation_unknown(client):
+    c, db, _url = client
+    _diag_wiki(db, "wp-null", cur_rid="n1", cur_statuses=["pass"],
+               extra_rev="n-hist", extra_statuses=[None, None])
+    db.commit()
+
+    # 全 NULL 历史 validation → unknown（不当作通过）
+    _override(_admin())
+    body = c.get("/api/wiki/wp-null/diagnostics", params={"revision_id": "n-hist"}).json()
+    assert body["revision_id"] == "n-hist"
+    assert body["validation"]["summary"] == "unknown"
+    assert len(body["validation"]["sections"]) == 2
+    assert all(s["validation_status"] == "unknown" for s in body["validation"]["sections"])
+    # 当前 published 不受影响
+    assert c.get("/api/wiki/wp-null/diagnostics").json()["validation"]["summary"] == "pass"
+
+
+# ---------------------------------------------------------------------------
+# diagnostics：selected_by 受限枚举 / reason_code 受控回放
+# ---------------------------------------------------------------------------
+
+def test_diagnostics_selected_by_enum_mapping(client):
+    c, db, _url = client
+    values = ["auto", "manual", "migration", "default_fallback", "locked", "sticky"]
+    for i, v in enumerate(values):
+        _diag_wiki(db, f"wp-sb{i}", cur_rid=f"sb{i}-r", cur_statuses=["pass"],
+                   skill_selected_by=v, skill_locked=(v == "locked"))
+    # page 未持久化 + decision.selected_by → 回退受限枚举
+    _diag_wiki(db, "wp-sbdec", cur_rid="sbdec-r", cur_statuses=["pass"],
+               skill_decision_json=json.dumps({"selected_by": "default_fallback"}))
+    # 无任何真实选择方式 → null（不折叠成 auto/manual/none）
+    _diag_wiki(db, "wp-sbnone", cur_rid="sbnone-r", cur_statuses=["pass"])
+    # 非受限枚举（经 decision 注入，绕开 DB CHECK）→ null
+    _diag_wiki(db, "wp-sbbad", cur_rid="sbbad-r", cur_statuses=["pass"],
+               skill_decision_json=json.dumps({"selected_by": "操作者-张三"}))
+    db.commit()
+
+    _override(_editor())
+    for i, v in enumerate(values):
+        body = c.get(f"/api/wiki/wp-sb{i}/diagnostics").json()
+        assert "selection" not in body["skill"]  # 聚合字段不再返回
+        assert body["skill"]["selected_by"] == v
+    # locked bool 独立保留（不与 selected_by 折叠）
+    assert c.get("/api/wiki/wp-sb0/diagnostics").json()["skill"]["locked"] is False
+    assert c.get("/api/wiki/wp-sb4/diagnostics").json()["skill"]["locked"] is True
+    # 回退 / null
+    assert c.get("/api/wiki/wp-sbdec/diagnostics").json()["skill"]["selected_by"] == "default_fallback"
+    assert c.get("/api/wiki/wp-sbnone/diagnostics").json()["skill"]["selected_by"] is None
+    assert c.get("/api/wiki/wp-sbbad/diagnostics").json()["skill"]["selected_by"] is None
+
+
+def test_diagnostics_reason_code_controlled_replay(client):
+    c, db, _url = client
+    codes = ["SKILL_STICKY_CURRENT", "MANUAL_OVERRIDE", "MIGRATION_APPLIED",
+             "DETERMINISTIC_HIGH_CONFIDENCE", "LLM_TIMEOUT"]
+    for i, code in enumerate(codes):
+        _diag_wiki(db, f"wp-rc{i}", cur_rid=f"rc{i}-r", cur_statuses=["pass"],
+                   skill_decision_json=json.dumps({"selected_by": "auto", "reason_code": code}))
+    # 未知/内部 reason_code → "unknown"（不回放原始自由文本）
+    _diag_wiki(db, "wp-rcbad", cur_rid="rcbad-r", cur_statuses=["pass"],
+               skill_decision_json=json.dumps({"selected_by": "auto",
+                                               "reason_code": "内部引擎X"}))
+    db.commit()
+
+    _override(_editor())
+    for i, code in enumerate(codes):
+        body = c.get(f"/api/wiki/wp-rc{i}/diagnostics").json()
+        assert body["skill"]["reason_code"] == code
+    assert c.get("/api/wiki/wp-rcbad/diagnostics").json()["skill"]["reason_code"] == "unknown"
 
 
 # ---------------------------------------------------------------------------

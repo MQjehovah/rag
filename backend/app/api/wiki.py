@@ -12,7 +12,8 @@
 - POST /api/wiki/{page_id}/approve|reject → 410 废弃
 - GET  /api/wiki/{wiki_id}/revisions/{revision_id}/sections/{section_id}/evidence
       → Section Evidence 追溯（只读；Phase 8C）
-- GET  /api/wiki/{wiki_id}/diagnostics   → 编辑者只读诊断（只读；Phase 8C）
+- GET  /api/wiki/{wiki_id}/diagnostics   → 编辑者只读诊断（只读；Phase 8C；?revision_id= 绑定查看目标 Revision）
+
 """
 from __future__ import annotations
 
@@ -39,6 +40,7 @@ from app.core.knowledge_compiler_v3.wiki_lifecycle import (
 )
 from app.core.feature_flags import feature_enabled
 from app.core.wiki_skills.api_reference.display import section_api_view
+from app.core.wiki_skills.schemas import SELECTED_BY_VALUES
 from app.models.database import (
     EvidenceItem,
     Page,
@@ -811,9 +813,6 @@ _CONTROLLED_REASON_CODES = frozenset({
     "MIGRATION_APPLIED",
 })
 
-# skill_selected_by（SkillDecision.selected_by）→ 只读诊断 selection 的聚合集合。
-_SKILL_SELECTION_AUTO = frozenset({"auto", "migration", "default_fallback", "sticky"})
-
 
 def _parse_evidence_locator(locator_json: str | None) -> dict:
     """locator 白名单解析：仅 page_number(int)/heading/image_id/content_type。
@@ -988,20 +987,20 @@ def _parse_skill_decision(page: WikiPage) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
-def _skill_selection(page: WikiPage, decision: dict | None) -> str:
-    """selection ∈ {auto, manual, none}（按 skill_selected_by / 决策 selected_by）。"""
-    if bool(page.skill_locked):
-        return "manual"
+def _skill_selected_by(page: WikiPage, decision: dict | None) -> str | None:
+    """受限「选择方式」方法枚举（方法，不是操作者姓名）。
+
+    读取真实存储：优先 page.skill_selected_by；为空时回退 decision.selected_by。
+    值 ∈ SELECTED_BY_VALUES 则原样（auto/manual/migration/default_fallback/
+    locked/sticky），否则 None（不折叠成 auto/manual/none）。
+    """
     method = page.skill_selected_by
     if not method and decision:
-        method = decision.get("selected_by")
+        raw = decision.get("selected_by")
+        method = raw if isinstance(raw, str) and raw else None
     if not method:
-        return "none"
-    if method in ("manual", "locked"):
-        return "manual"
-    if method in _SKILL_SELECTION_AUTO:
-        return "auto"
-    return "none"
+        return None
+    return method if method in SELECTED_BY_VALUES else None
 
 
 def _skill_display_name(key: str | None, version: str | None) -> str | None:
@@ -1060,23 +1059,22 @@ def _skill_diagnostics(page: WikiPage) -> dict:
         "key": key,
         "display_name": _skill_display_name(key, version),
         "version": version,
-        "selection": _skill_selection(page, decision),
-        "selected_by": None,  # 未持久化选择者；契约允许 null
+        "selected_by": _skill_selected_by(page, decision),
         "locked": bool(page.skill_locked),
         "reason_code": reason or "unknown",
     }
 
 
-def _validation_payload(db: Session, page: WikiPage) -> dict:
-    """validation 摘要（取当前查看 revision = current_revision_id 的 sections）。
+def _validation_payload(db: Session, revision_id: str | None) -> dict:
+    """validation 摘要（取授权后的目标查看 revision 的 sections）。
 
     任一 fail→fail；否则任一 NULL/unknown→unknown；全 pass→pass；无 section → unknown。
     """
     sections: list[dict] = []
-    if page.current_revision_id:
+    if revision_id:
         rows = (
             db.query(WikiSection)
-            .filter(WikiSection.revision_id == page.current_revision_id)
+            .filter(WikiSection.revision_id == revision_id)
             .order_by(WikiSection.order_index, WikiSection.id)
             .all()
         )
@@ -1100,26 +1098,63 @@ def _validation_payload(db: Session, page: WikiPage) -> dict:
     return {"summary": summary, "sections": sections}
 
 
+def _resolve_diagnostics_revision(
+    db: Session,
+    page: WikiPage,
+    current_user: dict,
+    revision_id: str | None,
+) -> str:
+    """解析 diagnostics 查看目标 Revision（统一 404，不区分不存在/无权/不属于）。
+
+    - 缺省 = page.current_revision_id；
+    - Revision 必须属于该 Wiki；
+    - 可见性沿用 Wiki 详情规则：非 admin（含 wiki_editor）仅当前 published；
+      admin 可查看属于该 Wiki 的任意 Revision。
+    """
+    view_id = revision_id or page.current_revision_id
+    if not view_id:
+        raise HTTPException(status_code=404, detail="Revision 不存在")
+    target = (
+        db.query(WikiRevision)
+        .filter(
+            WikiRevision.id == view_id,
+            WikiRevision.wiki_page_id == page.id,
+        )
+        .first()
+    )
+    if target is None:
+        raise HTTPException(status_code=404, detail="Revision 不存在")
+    if not is_admin_user(current_user):
+        if page.current_revision_id != view_id or target.status != "published":
+            raise HTTPException(status_code=404, detail="Revision 不存在")
+    return target.id
+
+
 @router.get("/{page_id}/diagnostics")
 def get_wiki_diagnostics(
     page_id: str,
+    revision_id: Optional[str] = None,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
     """编辑者只读诊断（Phase 8C）：admin 或可编辑（wiki_editor）用户。
 
-    Wiki 不可见 → 404；可见但无编辑权（普通读者）→ 403。
+    - Wiki 不可见 → 404（对齐 Wiki 详情规则：非 admin 仅 published + ACL 可见）；
+      可见但无编辑权（普通读者）→ 403。
+    - 可选 query `revision_id`：校验 Revision 属于该 Wiki 并按详情规则授权
+      （非 admin 仅 current published；admin 任意）。validation.sections 取该
+      目标 Revision；顶层返回实际查看的 `revision_id`。skill 摘要恒为当前 Wiki 配置。
     """
     _require_enabled(db)
-    page = db.query(WikiPage).filter(WikiPage.id == page_id).first()
-    if page is None or not access_control.can_view_wiki(db, current_user, page):
-        raise HTTPException(status_code=404, detail="主题页不存在")
+    page = _visible_wiki_or_404(db, current_user, page_id)
     if not access_control.can_edit_wiki(db, current_user, page):
         raise HTTPException(status_code=403, detail="无权编辑该 Wiki")
+    view_revision_id = _resolve_diagnostics_revision(db, page, current_user, revision_id)
     return {
         "wiki_id": page.id,
         "editable": True,
         "is_current_wiki_config": True,
+        "revision_id": view_revision_id,
         "skill": _skill_diagnostics(page),
-        "validation": _validation_payload(db, page),
+        "validation": _validation_payload(db, view_revision_id),
     }
