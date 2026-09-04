@@ -179,6 +179,82 @@ export interface RefreshStatus {
   queue_occupied: number
 }
 
+// ===== Phase 8C：章节 Evidence 追溯（只读，见 docs/phase-8c-contract.md §1） =====
+
+/** 受限 locator 白名单：page_number/heading/image_id/content_type，绝不消费 chunk_id/bbox 等。 */
+export interface WikiSectionEvidenceLocator {
+  page_number?: number | null
+  heading?: string | null
+  image_id?: string | null
+  content_type?: string | null
+}
+
+export interface EvidenceBindingUse {
+  field_path: string
+  usage_type: 'support' | 'conflict' | string
+}
+
+export interface WikiSectionEvidenceItem {
+  evidence_id: string
+  evidence_type: string
+  /** EvidenceItem.status：active/stale/rejected */
+  status: string
+  /** 绑定快照 evidence_content_hash == EvidenceItem.content_hash */
+  hash_matches: boolean
+  /** active_current / changed / stale / rejected */
+  state: string
+  /** 已授权原文（服务端截断至 2000 字符） */
+  content: string
+  content_truncated: boolean
+  locator: WikiSectionEvidenceLocator
+  source_display_name: string
+  /** 同 Evidence 多条 Binding 按 evidence_id 去重后聚合 */
+  bindings: EvidenceBindingUse[]
+}
+
+export interface WikiSectionEvidenceResult {
+  wiki_id: string
+  revision_id: string
+  section_id: string
+  total: number
+  limit: number
+  offset: number
+  items: WikiSectionEvidenceItem[]
+}
+
+// ===== Phase 8C：编辑者只读诊断（见 docs/phase-8c-contract.md §2） =====
+
+export interface WikiDiagnosticsSkill {
+  key: string
+  display_name: string
+  version: string | null
+  /** auto/manual/none */
+  selection: string
+  selected_by: string | null
+  locked: boolean
+  /** 仅受控 reason_code；未知/内部 → "unknown" */
+  reason_code: string | null
+}
+
+export interface WikiDiagnosticsSectionStatus {
+  heading: string
+  /** NULL → unknown（历史全 NULL 不得算作通过） */
+  validation_status: string | null
+}
+
+export interface WikiDiagnosticsValidation {
+  summary: string
+  sections: WikiDiagnosticsSectionStatus[]
+}
+
+export interface WikiDiagnostics {
+  wiki_id: string
+  editable: boolean
+  is_current_wiki_config: boolean
+  skill: WikiDiagnosticsSkill | null
+  validation: WikiDiagnosticsValidation | null
+}
+
 export const wikiApi = {
   /** workspaceId 必传：目录请求必须限定在当前工作区（Phase 8A）。 */
   async list(
@@ -279,6 +355,27 @@ export const wikiApi = {
 
   async unlockSection(pageId: string, revisionId: string, sectionId: string): Promise<{ message: string; locked: boolean }> {
     const res = await http.post(`/api/wiki/${pageId}/revisions/${revisionId}/sections/${sectionId}/unlock`)
+    return res.data
+  },
+
+  /** Phase 8C：按 Section 查询其绑定的可授权 Evidence（只读）。 */
+  async sectionEvidence(params: {
+    wikiId: string
+    revisionId: string
+    sectionId: string
+    limit?: number
+    offset?: number
+  }): Promise<WikiSectionEvidenceResult> {
+    const res = await http.get(
+      `/api/wiki/${params.wikiId}/revisions/${params.revisionId}/sections/${params.sectionId}/evidence`,
+      { params: { limit: params.limit ?? 50, offset: params.offset ?? 0 } },
+    )
+    return res.data
+  },
+
+  /** Phase 8C：编辑者只读诊断（Skill 配置 + 当前查看 Revision 的章节校验摘要）。 */
+  async wikiDiagnostics(wikiId: string): Promise<WikiDiagnostics> {
+    const res = await http.get(`/api/wiki/${wikiId}/diagnostics`)
     return res.data
   },
 }

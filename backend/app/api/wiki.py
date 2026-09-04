@@ -10,9 +10,13 @@
 - POST /api/wiki/{page_id}/archive    → 归档（管理员）
 - POST /api/wiki/{page_id}/rollback/{revision_id} → 回滚（管理员）
 - POST /api/wiki/{page_id}/approve|reject → 410 废弃
+- GET  /api/wiki/{wiki_id}/revisions/{revision_id}/sections/{section_id}/evidence
+      → Section Evidence 追溯（只读；Phase 8C）
+- GET  /api/wiki/{wiki_id}/diagnostics   → 编辑者只读诊断（只读；Phase 8C）
 """
 from __future__ import annotations
 
+import json
 import logging
 import threading
 import uuid
@@ -36,11 +40,13 @@ from app.core.knowledge_compiler_v3.wiki_lifecycle import (
 from app.core.feature_flags import feature_enabled
 from app.core.wiki_skills.api_reference.display import section_api_view
 from app.models.database import (
+    EvidenceItem,
     Page,
     WikiLink,
     WikiPage,
     WikiRevision,
     WikiSection,
+    WikiSectionEvidenceBinding,
     get_session,
 )
 
@@ -784,3 +790,336 @@ def unlock_section(
     section.locked = False
     db.commit()
     return {"message": "Section 已解锁", "locked": False}
+
+
+# ---------------------------------------------------------------------------
+# Phase 8C：Section Evidence 追溯 + 编辑者只读诊断（全部只读，绝不 flush/commit）
+# ---------------------------------------------------------------------------
+
+_EVIDENCE_CONTENT_LIMIT = 2000
+
+# Skill decision reason_code 受控回放集合（服务端可产生的全部 code）；其余一律 "unknown"。
+_CONTROLLED_REASON_CODES = frozenset({
+    "MANUAL_OVERRIDE", "MANUAL_UNLOCK",
+    "SKILL_LOCKED", "LOCKED_SKILL_MISSING", "SKILL_STICKY_CURRENT",
+    "SKILL_STICKY_MARGIN", "ONLY_DEFAULT_AVAILABLE", "MIGRATION_PROPOSED",
+    "DETERMINISTIC_HIGH_CONFIDENCE", "NO_LLM_ROUTER",
+    "LLM_TIMEOUT", "LLM_ERROR", "LLM_INVALID_RESPONSE", "LLM_UNKNOWN_SKILL",
+    "LLM_UNKNOWN_VERSION", "LLM_OUT_OF_CANDIDATES", "LOW_LLM_CONFIDENCE",
+    "LLM_HIGH_CONFIDENCE", "NO_CANDIDATES", "NO_DEFAULT_AVAILABLE",
+    "SKILL_NOT_APPLICABLE", "SKILL_ROUTE_ERROR", "SKILL_MATCH_FALLBACK",
+    "MIGRATION_APPLIED",
+})
+
+# skill_selected_by（SkillDecision.selected_by）→ 只读诊断 selection 的聚合集合。
+_SKILL_SELECTION_AUTO = frozenset({"auto", "migration", "default_fallback", "sticky"})
+
+
+def _parse_evidence_locator(locator_json: str | None) -> dict:
+    """locator 白名单解析：仅 page_number(int)/heading/image_id/content_type。
+
+    解析失败或类型不符 → 对应字段 null；绝不返回 chunk_id/bbox 等内部字段。
+    """
+    out = {"page_number": None, "heading": None, "image_id": None, "content_type": None}
+    try:
+        parsed = json.loads(locator_json or "{}")
+    except (TypeError, ValueError):
+        parsed = None
+    if isinstance(parsed, dict):
+        page_number = parsed.get("page_number")
+        if isinstance(page_number, int) and not isinstance(page_number, bool):
+            out["page_number"] = page_number
+        for key in ("heading", "image_id", "content_type"):
+            value = parsed.get(key)
+            if isinstance(value, str):
+                out[key] = value
+    return out
+
+
+def _clip_evidence_content(content: str | None) -> tuple[str, bool]:
+    """Evidence 正文截断到 2000 字符；截断时置标记。"""
+    text = content or ""
+    if len(text) <= _EVIDENCE_CONTENT_LIMIT:
+        return text, False
+    return text[:_EVIDENCE_CONTENT_LIMIT], True
+
+
+def _evidence_state(status: str | None, hash_matches: bool) -> str:
+    """Evidence state 派生（契约 §1）。未知状态 fail-closed 为 unknown。"""
+    if status == "active":
+        return "active_current" if hash_matches else "changed"
+    if status == "stale":
+        return "stale"
+    if status == "rejected":
+        return "rejected"
+    return "unknown"
+
+
+@router.get(
+    "/{page_id}/revisions/{revision_id}/sections/{section_id}/evidence"
+)
+def get_section_evidence(
+    page_id: str,
+    revision_id: str,
+    section_id: str,
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Section Evidence 追溯（只读，Phase 8C）。
+
+    鉴权链（任一不满足/不存在 → 统一 404）：
+    1. Wiki 可见（对齐 _visible_wiki 语义）；
+    2. Revision 属于该 Wiki（普通读者仅 page.current_revision_id 且 published；
+       admin 可看该 Wiki 任意 revision）；
+    3. Section 属于该 Revision；
+    4. Evidence 由该 Section 的 Binding 引用；
+    5. Evidence.source_page_id ∈ 授权 Page 集合（不可见不返回、不计 total）。
+    """
+    _require_enabled(db)
+    page = _visible_wiki_or_404(db, current_user, page_id)
+    admin = is_admin_user(current_user)
+
+    revision = db.query(WikiRevision).filter(
+        WikiRevision.id == revision_id,
+        WikiRevision.wiki_page_id == page.id,
+    ).first()
+    if revision is None:
+        raise HTTPException(status_code=404, detail="Revision 不存在")
+    if not admin:
+        if page.current_revision_id != revision_id or revision.status != "published":
+            raise HTTPException(status_code=404, detail="Revision 不存在")
+
+    section = db.query(WikiSection).filter(WikiSection.id == section_id).first()
+    if section is None or section.revision_id != revision_id:
+        raise HTTPException(status_code=404, detail="Section 不存在")
+
+    visible_page_ids = access_control.get_visible_page_ids(db, current_user)
+
+    bindings = (
+        db.query(WikiSectionEvidenceBinding)
+        .filter(WikiSectionEvidenceBinding.section_id == section.id)
+        .order_by(
+            WikiSectionEvidenceBinding.created_at,
+            WikiSectionEvidenceBinding.id,
+        )
+        .all()
+    )
+    # 授权后聚合：同 evidence 多条 binding → 单 item，bindings 稳定排序。
+    order: list[str] = []
+    bindings_by_ev: dict[str, list[WikiSectionEvidenceBinding]] = {}
+    evidence_rows: dict[str, EvidenceItem] = {}
+    titles: dict = {}
+    if bindings:
+        evidence_rows = {
+            e.id: e
+            for e in db.query(EvidenceItem)
+            .filter(EvidenceItem.id.in_([b.evidence_id for b in bindings]))
+            .all()
+        }
+        visible_src_ids = {
+            e.source_page_id for e in evidence_rows.values()
+            if e.source_page_id in visible_page_ids
+        }
+        if visible_src_ids:
+            titles = dict(
+                db.query(Page.id, Page.title)
+                .filter(Page.id.in_(visible_src_ids))
+                .all()
+            )
+        for b in bindings:
+            ev = evidence_rows.get(b.evidence_id)
+            if ev is None:
+                continue  # Evidence 物理不存在：不伪造记录
+            if ev.source_page_id not in visible_page_ids:
+                continue  # 来源不可见：不返回、不计入 total
+            if b.evidence_id not in bindings_by_ev:
+                bindings_by_ev[b.evidence_id] = []
+                order.append(b.evidence_id)
+            bindings_by_ev[b.evidence_id].append(b)
+
+    total = len(order)
+    items = []
+    for eid in order[offset:offset + limit]:
+        ev = evidence_rows[eid]
+        rows = bindings_by_ev[eid]
+        content, truncated = _clip_evidence_content(ev.content)
+        # 同 evidence 全部 binding 快照 hash 都与当前 Evidence 内容一致才为 true。
+        hash_matches = bool(ev.content_hash) and all(
+            r.evidence_content_hash == ev.content_hash for r in rows
+        )
+        items.append({
+            "evidence_id": ev.id,
+            "evidence_type": ev.evidence_type,
+            "status": ev.status,
+            "hash_matches": hash_matches,
+            "state": _evidence_state(ev.status, hash_matches),
+            "content": content,
+            "content_truncated": truncated,
+            "locator": _parse_evidence_locator(ev.locator_json),
+            "source_display_name": titles.get(ev.source_page_id) or "",
+            "bindings": [
+                {"field_path": r.field_path, "usage_type": r.usage_type}
+                for r in rows
+            ],
+        })
+
+    return {
+        "wiki_id": page.id,
+        "revision_id": revision_id,
+        "section_id": section.id,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "items": items,
+    }
+
+
+def _parse_skill_decision(page: WikiPage) -> dict | None:
+    """安全读取 skill_decision_json（仅作受控字段回放；失败/非对象 → None）。"""
+    raw = page.skill_decision_json
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _skill_selection(page: WikiPage, decision: dict | None) -> str:
+    """selection ∈ {auto, manual, none}（按 skill_selected_by / 决策 selected_by）。"""
+    if bool(page.skill_locked):
+        return "manual"
+    method = page.skill_selected_by
+    if not method and decision:
+        method = decision.get("selected_by")
+    if not method:
+        return "none"
+    if method in ("manual", "locked"):
+        return "manual"
+    if method in _SKILL_SELECTION_AUTO:
+        return "auto"
+    return "none"
+
+
+def _skill_display_name(key: str | None, version: str | None) -> str | None:
+    """display_name 尽量经既有 Skill Registry 解析；无法解析 → None。"""
+    if not key:
+        return None
+    try:
+        from app.core.wiki_skills import registry as skill_registry
+
+        info = skill_registry.snapshot().get(key)
+        if not info:
+            return None
+        versions = info.get("versions") or {}
+        desc = None
+        if version and version in versions:
+            desc = versions[version]
+        if desc is None:
+            active = info.get("active_version")
+            if active and active in versions:
+                desc = versions[active]
+        if desc is None and versions:
+            try:
+                first = next(iter(versions))
+            except StopIteration:  # pragma: no cover
+                first = None
+            if first and first in versions:
+                desc = versions[first]
+        if desc is not None and hasattr(desc, "get"):
+            label = desc.get("label")
+            return label if isinstance(label, str) and label else None
+        return None
+    except Exception:  # noqa: BLE001 - 展示字段尽力而为，绝不外泄内部错误
+        return None
+
+
+def _skill_diagnostics(page: WikiPage) -> dict:
+    """Skill 只读诊断（只回放受控字段；不返回 decision JSON/Prompt/候选/原始 reason）。"""
+    decision = _parse_skill_decision(page)
+    key = page.content_skill
+    if not key and decision:
+        selected = decision.get("selected_skill")
+        key = selected if isinstance(selected, str) and selected else None
+    version = page.skill_version
+    if not version and decision:
+        selected_version = decision.get("selected_version")
+        version = (
+            selected_version
+            if isinstance(selected_version, str) and selected_version
+            else None
+        )
+    reason = ""
+    if decision:
+        raw = decision.get("reason_code")
+        reason = raw if isinstance(raw, str) and raw in _CONTROLLED_REASON_CODES else ""
+    return {
+        "key": key,
+        "display_name": _skill_display_name(key, version),
+        "version": version,
+        "selection": _skill_selection(page, decision),
+        "selected_by": None,  # 未持久化选择者；契约允许 null
+        "locked": bool(page.skill_locked),
+        "reason_code": reason or "unknown",
+    }
+
+
+def _validation_payload(db: Session, page: WikiPage) -> dict:
+    """validation 摘要（取当前查看 revision = current_revision_id 的 sections）。
+
+    任一 fail→fail；否则任一 NULL/unknown→unknown；全 pass→pass；无 section → unknown。
+    """
+    sections: list[dict] = []
+    if page.current_revision_id:
+        rows = (
+            db.query(WikiSection)
+            .filter(WikiSection.revision_id == page.current_revision_id)
+            .order_by(WikiSection.order_index, WikiSection.id)
+            .all()
+        )
+        for sec in rows:
+            heading = (sec.heading or "").strip() or (sec.section_type or "")
+            vs = sec.validation_status
+            sections.append({
+                "heading": heading,
+                "validation_status": vs if vs in ("pass", "fail") else "unknown",
+            })
+    if not sections:
+        summary = "unknown"
+    else:
+        values = [s["validation_status"] for s in sections]
+        if "fail" in values:
+            summary = "fail"
+        elif any(v == "unknown" for v in values):
+            summary = "unknown"
+        else:
+            summary = "pass"
+    return {"summary": summary, "sections": sections}
+
+
+@router.get("/{page_id}/diagnostics")
+def get_wiki_diagnostics(
+    page_id: str,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """编辑者只读诊断（Phase 8C）：admin 或可编辑（wiki_editor）用户。
+
+    Wiki 不可见 → 404；可见但无编辑权（普通读者）→ 403。
+    """
+    _require_enabled(db)
+    page = db.query(WikiPage).filter(WikiPage.id == page_id).first()
+    if page is None or not access_control.can_view_wiki(db, current_user, page):
+        raise HTTPException(status_code=404, detail="主题页不存在")
+    if not access_control.can_edit_wiki(db, current_user, page):
+        raise HTTPException(status_code=403, detail="无权编辑该 Wiki")
+    return {
+        "wiki_id": page.id,
+        "editable": True,
+        "is_current_wiki_config": True,
+        "skill": _skill_diagnostics(page),
+        "validation": _validation_payload(db, page),
+    }

@@ -174,6 +174,7 @@ def _http_error(exc: CompileRunError) -> HTTPException:
 def list_runs(
     status: str | None = Query(default=None),
     pipeline_key: str | None = Query(default=None),
+    workspace_id: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
@@ -184,6 +185,8 @@ def list_runs(
         query = query.filter(CompileRun.status == status)
     if pipeline_key:
         query = query.filter(CompileRun.pipeline_key == pipeline_key)
+    if workspace_id is not None:
+        query = query.filter(CompileRun.workspace_id == workspace_id)
     total = query.count()
     rows = (
         query.order_by(CompileRun.created_at.desc(), CompileRun.id.desc())

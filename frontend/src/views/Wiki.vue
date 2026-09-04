@@ -48,6 +48,12 @@
       :workspace-id="workspaceId"
     />
 
+    <!-- 管理员：当前工作区编译任务面板（Phase 8C；与当前工作区强绑定，非全局生成历史） -->
+    <AdminRunsPanel
+      v-if="isAdmin && workspaceState === 'ready'"
+      :workspace-id="workspaceId"
+    />
+
     <!-- 管理员：全局管理（作用于全部工作区，与当前工作区无关） -->
     <div v-if="isAdmin && workspaceState !== 'loading'" class="global-manage">
       <div class="gm-title">全局管理</div>
@@ -117,6 +123,13 @@
 
             <p class="detail-summary">{{ detail.summary }}</p>
 
+            <!-- Phase 8C：编辑者/管理员只读诊断摘要（普通读者不渲染、不请求） -->
+            <EditorDiagnostics
+              v-if="canEdit && (detail.viewing_revision_id || detail.preview_revision_id)"
+              :wiki-id="detail.id"
+              :revision-id="detail.viewing_revision_id || detail.preview_revision_id"
+            />
+
             <div v-for="sec in detail.sections" :key="sec.id" class="section-item">
               <div class="section-head">
                 <h4 class="section-heading">
@@ -126,6 +139,7 @@
                 <el-tag v-else-if="sec.version_label === 'unversioned'" size="small" type="info">版本未标明</el-tag>
                 <el-tag v-else-if="sec.version_label" size="small" type="success">版本 {{ sec.version_label }}</el-tag>
                 <el-tag v-if="sec.locked" size="small" type="warning">锁定</el-tag>
+                <el-button size="small" text type="primary" @click="openSectionEvidence(sec)">章节证据</el-button>
                 <template v-if="canEdit">
                   <el-button v-if="!editingId" size="small" text type="primary" @click="startEdit(sec)">编辑</el-button>
                   <template v-if="viewingPreview">
@@ -198,6 +212,16 @@
       :page-id="evidencePageId"
     />
 
+    <!-- Phase 8C：按 Section 查询的章节证据抽屉（身份 = 当前 wikiId / 查看 revision / sec.id） -->
+    <SectionEvidenceDrawer
+      v-if="sectionEvidenceCtx"
+      v-model:visible="sectionEvidenceVisible"
+      :wiki-id="sectionEvidenceCtx.wikiId"
+      :revision-id="sectionEvidenceCtx.revisionId"
+      :section-id="sectionEvidenceCtx.sectionId"
+      :reading-non-current="sectionEvidenceCtx.readingNonCurrent"
+    />
+
     <!-- Revision 历史 Drawer（含 Diff） -->
     <el-drawer v-model="showRevisions" title="版本历史" size="520px">
       <div class="rev-list">
@@ -240,6 +264,9 @@ import SectionContent from '../components/wiki/SectionContent.vue'
 import EvidenceDrawer from '../components/EvidenceDrawer.vue'
 import WorkspaceSelector from '../components/wiki/WorkspaceSelector.vue'
 import WorkspaceNotebooks from '../components/wiki/WorkspaceNotebooks.vue'
+import SectionEvidenceDrawer from '../components/wiki/SectionEvidenceDrawer.vue'
+import EditorDiagnostics from '../components/wiki/EditorDiagnostics.vue'
+import AdminRunsPanel from '../components/wiki/AdminRunsPanel.vue'
 
 const authStore = useAuthStore()
 const route = useRoute()
@@ -315,6 +342,16 @@ let editSeq = 0
 // 引用追溯（J-2：仅 Evidence，不再有 Card 追溯）
 const evidenceVisible = ref(false)
 const evidencePageId = ref('')
+
+// Phase 8C：按 Section 查询的章节证据抽屉（身份随当前查看 revision）
+interface SectionEvidenceCtx {
+  wikiId: string
+  revisionId: string
+  sectionId: string
+  readingNonCurrent: boolean
+}
+const sectionEvidenceVisible = ref(false)
+const sectionEvidenceCtx = ref<SectionEvidenceCtx | null>(null)
 
 // ===== 统一浏览上下文（navigation generation） =====
 const navGen = ref(0)
@@ -469,6 +506,8 @@ function clearDrawerState() {
   showRevisions.value = false
   viewingPreview.value = false
   evidenceVisible.value = false
+  sectionEvidenceVisible.value = false
+  sectionEvidenceCtx.value = null
   detailBad.value = false
 }
 
@@ -596,6 +635,8 @@ function rejectDetailWsMismatch() {
   diff.value = null
   showRevisions.value = false
   evidenceVisible.value = false
+  sectionEvidenceVisible.value = false
+  sectionEvidenceCtx.value = null
   viewingPreview.value = false
   cancelEdit()
   detailBad.value = true
@@ -832,6 +873,23 @@ function openCitation(c: WikiCitation) {
     evidencePageId.value = c.evidence.page_id || ''
     evidenceVisible.value = true
   }
+}
+
+// ---- Phase 8C：章节证据抽屉（revisionId 与编辑一致：viewing/preview） ----
+function openSectionEvidence(sec: WikiSection) {
+  const detailObj = detail.value
+  if (!detailObj) return
+  const revisionId = detailObj.viewing_revision_id || detailObj.preview_revision_id
+  if (!revisionId) return
+  sectionEvidenceCtx.value = {
+    wikiId: detailObj.id,
+    revisionId,
+    sectionId: sec.id,
+    readingNonCurrent: Boolean(
+      detailObj.current_revision_id && revisionId !== detailObj.current_revision_id,
+    ),
+  }
+  sectionEvidenceVisible.value = true
 }
 
 // ---- 编辑 / 锁定 / 解锁 / 发布 / 回滚 / 归档（await 前捕获目标 ID） ----
