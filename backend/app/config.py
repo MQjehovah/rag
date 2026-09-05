@@ -79,6 +79,11 @@ class Settings(BaseSettings):
     auto_organize_enabled: bool = False
     auto_organize_interval_hours: int = 24
 
+    # SSO/OIDC 可选接入:配置 sso_issuer 后 get_current_user 认 SSO token(D-ready)
+    sso_issuer: str = ""
+    sso_audience: str = ""
+    sso_jwks_uri: str = ""
+
     class Config:
         env_file = ".env"
 
