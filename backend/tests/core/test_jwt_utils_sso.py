@@ -123,3 +123,45 @@ def test_get_current_user_hs256_missing_user_unauthorized(db):
     with pytest.raises(HTTPException) as exc_info:
         get_current_user(credentials=_bearer(token), db=db)
     assert exc_info.value.status_code == 401
+
+
+def test_get_current_user_hs256_disabled_user_unauthorized(db):
+    """HS256 老路径:token 对应用户已禁用 -> 401(与不存在同样文案)。"""
+    user = User(
+        id=str(uuid.uuid4()),
+        username="admin_disabled",
+        is_local=True,
+        is_active=False,
+    )
+    db.add(user)
+    db.commit()
+
+    token = create_access_token(user.id, [])
+    with pytest.raises(HTTPException) as exc_info:
+        get_current_user(credentials=_bearer(token), db=db)
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.detail == "用户不存在或已禁用"
+
+
+def test_get_current_user_sso_keeps_groups_when_no_groups_claim(sso_env, db):
+    """SSO 命中已有用户且 claims 无 groups 声明 -> 现有组不被触碰。"""
+    key, _ = sso_env
+    existing = User(
+        id=str(uuid.uuid4()),
+        username=SSO_EMP_NO,
+        email="old@example.com",
+        display_name="旧名字",
+        is_local=False,
+        is_active=True,
+    )
+    db.add(existing)
+    for g in ["研发部", "旧组"]:
+        db.add(UserGroup(id=str(uuid.uuid4()), user_id=existing.id, group_name=g))
+    db.commit()
+
+    token = _sso_token(key)
+    payload = get_current_user(credentials=_bearer(token), db=db)
+
+    assert sorted(payload["groups"]) == ["旧组", "研发部"]
+    rows = db.query(UserGroup).filter(UserGroup.user_id == existing.id).all()
+    assert sorted(r.group_name for r in rows) == ["旧组", "研发部"]
