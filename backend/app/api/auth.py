@@ -8,21 +8,15 @@ from app.models.schema import LoginRequest, LoginResponse, UserResponse, GroupRe
 from app.core.auth import ldap_auth
 from app.api.deps import get_db
 from app.core.jwt_utils import create_access_token, get_current_user
+from app.core.user_utils import sync_user_groups
 from app.config import settings
 
 router = APIRouter(prefix="/api/auth", tags=["认证"])
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-def _sync_user_groups(db: Session, user_id: str, groups: list[str]):
-    db.query(UserGroup).filter(UserGroup.user_id == user_id).delete()
-    for g in groups:
-        db.add(UserGroup(id=str(uuid.uuid4()), user_id=user_id, group_name=g))
-    db.commit()
-
-
 def _create_local_admin(db: Session):
-    existing = db.query(User).filter(User.is_local == True).first()
+    existing = db.query(User).filter(User.is_local).first()
     if existing:
         return
 
@@ -120,7 +114,7 @@ def login(data: LoginRequest, db: Session = Depends(get_db)):
         db.commit()
 
     groups = ldap_result.get("groups", [])
-    _sync_user_groups(db, user.id, groups)
+    sync_user_groups(db, user, groups)
 
     token = create_access_token(user.id, groups)
     return LoginResponse(

@@ -1,14 +1,18 @@
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
 from jose import JWTError, jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.api.deps import get_db
-from app.models.database import User, UserGroup
+from app.core.sso_auth import SsoAuthError, verify_sso_token
+from app.core.user_utils import build_user_payload, sync_user_groups
+from app.models.database import User
 
 ALGORITHM = "HS256"
 
@@ -33,13 +37,27 @@ def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security),
     db: Session = Depends(get_db),
 ):
+    """双轨鉴权:先认自家 HS256 token,失败再试 SSO OIDC(RS256) token。
+
+    轨1(HS256)保持原逻辑:sub=user UUID,禁用/不存在 -> 401。
+    轨2(SSO) sub=工号:用户不存在自动建号并同步 groups;
+    已禁用 -> 403。两轨最终经 build_user_payload 输出同形状 dict。
+    """
     payload = decode_token(credentials.credentials)
-    if payload is None:
+    if payload is not None:
+        return _resolve_hs256_user(db, payload)
+
+    try:
+        claims = verify_sso_token(credentials.credentials)
+    except SsoAuthError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="无效的认证令牌",
         )
+    return _resolve_sso_user(db, claims)
 
+
+def _resolve_hs256_user(db: Session, payload: dict) -> dict:
     user_id = payload.get("sub")
     if user_id is None:
         raise HTTPException(
@@ -53,17 +71,41 @@ def get_current_user(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="用户不存在或已禁用",
         )
+    return build_user_payload(db, user)
 
-    user_groups = db.query(UserGroup).filter(UserGroup.user_id == user.id).all()
-    current_groups = [ug.group_name for ug in user_groups]
 
-    return {
-        "id": user.id,
-        "username": user.username,
-        "email": user.email,
-        "display_name": user.display_name,
-        "is_local": user.is_local,
-        "is_active": user.is_active,
-        "groups": current_groups,
-        "is_admin": settings.ldap_group_map_admin in current_groups if settings.ldap_group_map_admin else False,
-    }
+def _resolve_sso_user(db: Session, claims: dict) -> dict:
+    """SSO 轨:按 username=工号 查/建 User,有 groups 声明则同步,最后组 payload。"""
+    username = str(claims["sub"])
+    user = db.query(User).filter(User.username == username).first()
+
+    if user is None:
+        user = User(
+            id=str(uuid.uuid4()),
+            username=username,
+            email=claims.get("email", ""),
+            display_name=claims.get("name", username),
+            is_local=False,
+            is_active=True,
+        )
+        db.add(user)
+        try:
+            db.commit()
+            db.refresh(user)
+        except IntegrityError:
+            # 并发建号竞态:username 唯一约束被别的请求抢建,回滚后回查兜底
+            db.rollback()
+            user = db.query(User).filter(User.username == username).first()
+            if user is None:
+                raise
+
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="用户已禁用",
+        )
+
+    groups = claims.get("groups")
+    if groups:
+        sync_user_groups(db, user, list(groups))
+    return build_user_payload(db, user)
