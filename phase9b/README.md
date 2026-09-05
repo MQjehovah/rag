@@ -144,7 +144,9 @@ cd backend
 - schema-aware inventory（真实库与 baseline 快照各一次，`identical=True`）：notebooks=3（均 admin scope，
   无 extra groups）、pages=145、page_chunks=5403、wiki_pages/revisions/sections=0、evidence=5403、
   图谱 117/82/214/4570/76；缺 `wiki_workspaces/notebook_workspace_bindings/
-  wiki_section_evidence_bindings` 表；`wiki_pages.workspace_id` 等 P41+ 列已物理存在（schema 超前）。
+  wiki_section_evidence_bindings` 表；`wiki_pages.workspace_id` 并不存在（本报告早先描述
+  为「已物理存在」属误述，见下“报告修正”）；物理超前的仅是 `pages` 的 7 个 P40 canonical
+  列（`note_schema_version` 等）已存在且与迁移目标等价。
 - 回填候选：3 个 notebook（candidate=3，blocked=0，同 ACL 共享 scope=1 组含 3 notebook）。
 
 ### 8.2 快照与一致性
@@ -195,6 +197,11 @@ cd backend
 规则：缺失→创建；已存在且等价→保留；已存在不等价→受控失败；列存在不代表迁移完成
 （FK/CHECK/索引仍补齐）；新增约束前不自动清洗违规数据（违反即失败、数据保持）；
 不改业务值、不触发 worker/编译/外部调用；不改 revision/down_revision、不分叉、不 stamp。
+
+> 报告修正（本轮，以 baseline 实际 schema 输出为准）：此前（§8.1 与 f690df3 摘要）称
+> `wiki_pages.workspace_id` 已物理存在属误述——对 baseline 逐列 `PRAGMA table_info` 复核，
+> `wiki_pages` 不含 `workspace_id`；真实库物理超前的仅是 P40 的 7 个 `pages` canonical 列。
+> 原因未再猜测；本节差异表（§9.1）与其后所有 drill 均以该实际 schema 输出为准。
 
 ### 9.2 结果（真实数据副本演练，2026-09-05）
 - 真实库不变：SHA-256 `be2b6d6c…0cb66f`、大小/时间/alembic P38/quick/计数前后一致。

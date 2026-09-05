@@ -156,5 +156,172 @@ def test_constraint_violating_data_fails_without_cleanup(tmp_path):
         conn.close()
 
 
+# ---------------------------------------------------------------------------
+# 等价判断纯函数反例（索引 / FK / server_default / CHECK）
+# ---------------------------------------------------------------------------
+
+
+def test_index_equivalence_rejects_wrong_columns_unique_predicate():
+    import migration_compat as mc
+    target_cols = ["workspace_id"]
+    target_where = None
+    # 列集错误
+    assert not mc._indexes_equivalent(
+        {"columns": ["id"], "unique": False, "where": None},
+        target_cols, False, target_where)
+    # unique 错误
+    assert not mc._indexes_equivalent(
+        {"columns": ["workspace_id"], "unique": True, "where": None},
+        target_cols, False, target_where)
+    # 谓词错误：既有有谓词、目标无谓词
+    assert not mc._indexes_equivalent(
+        {"columns": ["workspace_id"], "unique": False,
+         "where": "workspace_id IS NOT NULL"},
+        target_cols, False, target_where)
+    # 谓词错误：文字不同（保留字面量）
+    assert not mc._indexes_equivalent(
+        {"columns": ["workspace_id"], "unique": False,
+         "where": "dirty = 'x'"},
+        ["workspace_id"], False, "dirty = 'X'")
+    # 正确等价 → 可复用
+    assert mc._indexes_equivalent(
+        {"columns": ["workspace_id"], "unique": False, "where": None},
+        target_cols, False, None)
+
+
+def test_fk_relation_status_rejects_ondelete_diff_and_reuse_equal():
+    import migration_compat as mc
+    base = {
+        "constrained_columns": ["workspace_id"],
+        "referred_table": "wiki_workspaces",
+        "referred_columns": ["id"],
+        "options": {"ondelete": "SET NULL"},
+    }
+    assert mc._fk_relation_status(
+        base, ["workspace_id"], "wiki_workspaces", ["id"], "SET NULL") == "equal"
+    assert mc._fk_relation_status(
+        dict(base, options={"ondelete": "CASCADE"}),
+        ["workspace_id"], "wiki_workspaces", ["id"], "SET NULL") == "ondeletes_diff"
+    assert mc._fk_relation_status(
+        dict(base, constrained_columns=["other_id"]),
+        ["workspace_id"], "wiki_workspaces", ["id"], "SET NULL") == "none"
+
+
+def test_server_default_equivalence_rejects_diffs_and_maps_boolean():
+    import sqlalchemy as sa
+    import migration_compat as mc
+    # 无默认 == 无默认
+    assert mc._server_default_equal({"default": None},
+                                    sa.Column("c", sa.String(10), nullable=True))
+    # 一端有默认另一端无 → 不等价
+    assert not mc._server_default_equal({"default": "0"},
+                                        sa.Column("c", sa.String(10), nullable=True))
+    assert not mc._server_default_equal({"default": None},
+                                        sa.Column("c", sa.String(10),
+                                                  server_default=sa.text("'x'")))
+    # 布尔 0/false 同义
+    bool_col = sa.Column("skill_locked", sa.Boolean(), nullable=True,
+                         server_default=sa.sql.expression.false())
+    assert mc._server_default_equal({"default": "0"}, bool_col)
+    assert not mc._server_default_equal({"default": "1"}, bool_col)
+    # 字符串默认：大小写/空白语义保留
+    str_col = sa.Column("k", sa.String(64), server_default=sa.text("'abc'"))
+    assert mc._server_default_equal({"default": "'abc'"}, str_col)
+    assert not mc._server_default_equal({"default": "'ABC'"}, str_col)
+
+
+def test_check_extraction_handles_nested_parentheses_and_in():
+    import migration_compat as mc
+    p43 = ("CREATE TABLE t (id INTEGER, "
+           "skill_confidence FLOAT, "
+           "CONSTRAINT ck_skill "
+           "CHECK (skill_confidence IS NULL OR "
+           "(skill_confidence >= 0.0 AND skill_confidence <= 1.0)))")
+    checks = mc.extract_check_constraints(p43)
+    assert checks and checks[0][0] == "ck_skill"
+    assert "skill_confidence >= 0.0" in checks[0][1]
+    assert checks[0][1].endswith("skill_confidence <= 1.0)")  # 内层括号完整
+    p44 = ("CREATE TABLE s (id INTEGER, validation_status VARCHAR(32), "
+           "CHECK (validation_status IS NULL OR "
+           "validation_status IN ('pass','fail')))")
+    ch44 = mc.extract_check_constraints(p44)
+    assert ch44 and ch44[0][0] is None and "IN ('pass','fail')" in ch44[0][1]
+    # 同条件（换行/大小写）归一相等
+    assert (mc._cond_norm("validation_status IS NULL OR validation_status IN ('pass','fail')")
+            == mc._cond_norm("validation_status IS NULL OR\n validation_status in ('pass','fail')"))
+    # 字符串常量大小写不同 → 不等价
+    assert (mc._cond_norm("validation_status IN ('pass','fail')")
+            != mc._cond_norm("validation_status IN ('pass','Fail')"))
+
+
+# ---------------------------------------------------------------------------
+# 迁移路径级：P41 索引错误定义被拒 / 正确索引复用 / 失败不改业务值
+# ---------------------------------------------------------------------------
+
+
+def _wiki_ahead_index_case(tmp_path, index_sql: str):
+    db = _fresh(tmp_path)
+    _upgrade_to(db, _P38)
+    _exec(db, "ALTER TABLE wiki_pages ADD COLUMN workspace_id VARCHAR(36)")
+    _exec(db, "INSERT INTO wiki_pages (id, title) VALUES ('keep-row', 't')")
+    _exec(db, index_sql)
+    return db
+
+
+def test_p41_wrong_unique_index_rejected_row_kept(tmp_path):
+    db = _wiki_ahead_index_case(
+        tmp_path,
+        "CREATE UNIQUE INDEX ix_wiki_pages_workspace_id "
+        "ON wiki_pages (workspace_id)")
+    proc = _alembic(db, "upgrade", "head")
+    assert proc.returncode != 0
+    assert "migration_compat_index_conflict" in proc.stderr
+    conn = sqlite3.connect(f"file:{Path(db).as_posix()}?mode=ro", uri=True)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM wiki_pages WHERE id='keep-row'"
+                            ).fetchone()[0] == 1, "失败不得修改业务值"
+    finally:
+        conn.close()
+
+
+def test_p41_wrong_predicate_index_rejected(tmp_path):
+    db = _wiki_ahead_index_case(
+        tmp_path,
+        "CREATE INDEX ix_wiki_pages_workspace_id ON wiki_pages (workspace_id) "
+        "WHERE workspace_id IS NOT NULL")
+    proc = _alembic(db, "upgrade", "head")
+    assert proc.returncode != 0
+    assert "migration_compat_index_conflict" in proc.stderr
+
+
+def test_p41_wrong_columns_index_rejected(tmp_path):
+    db = _wiki_ahead_index_case(
+        tmp_path,
+        "CREATE INDEX ix_wiki_pages_workspace_id ON wiki_pages (id)")
+    proc = _alembic(db, "upgrade", "head")
+    assert proc.returncode != 0
+    assert "migration_compat_index_conflict" in proc.stderr
+
+
+def test_p41_correct_index_reused_not_duplicated(tmp_path):
+    db = _wiki_ahead_index_case(
+        tmp_path,
+        "CREATE INDEX ix_wiki_pages_workspace_id ON wiki_pages (workspace_id)")
+    proc = _alembic(db, "upgrade", "head")
+    assert proc.returncode == 0, proc.stderr
+    assert _version(db) == _HEAD
+    conn = sqlite3.connect(f"file:{Path(db).as_posix()}?mode=ro", uri=True)
+    try:
+        cnt = conn.execute(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='index' "
+            "AND name='ix_wiki_pages_workspace_id'").fetchone()[0]
+        assert cnt == 1, "等价索引必须复用而不是重复创建"
+        assert conn.execute(
+            "SELECT 1 FROM pragma_foreign_key_list('wiki_pages') "
+            "WHERE \"from\"='workspace_id'").fetchone() is not None
+    finally:
+        conn.close()
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-q"])
