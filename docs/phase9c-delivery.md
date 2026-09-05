@@ -26,8 +26,9 @@ Blueprint → Section 生成 + Evidence 覆盖验证 → 原子发布 `WikiRevis
 
 - 分支：`feature/dingtalk-to-markdown`（本地，无 push）。
 - 迁移唯一 head：`a9b8c7d6e5f4`（P44；仓库链单 head，经 `alembic` 实跑与测试断言）。
-- “被测试代码 SHA”：Phase 9C 全量 pytest 运行对象对应的提交见文末（先于文档提交的
-  源码/测试 checkpoint）。文档提交 SHA 见文末，二者分别列出避免混淆。
+- “被测试代码 SHA”：Phase 9C 全量 pytest（2454 项）运行对象对应提交 `bc26b02`；B1 连续链
+  补测新增提交见文末 §12（单独记录，不计入全量总数）。文档提交 SHA 见文末，二者分别列出
+  避免混淆。
 
 ## 3. 环境 / 依赖 / 配置 / 启停
 
@@ -100,10 +101,13 @@ Workspace identity）。
 详细 20 项→证据映射见下方清单（测试名均真实存在）。链路类型：真实生产调用链（executor
 真实 v3 发布 + 临时 SQLite + Fake 模型）/ 临时 SQLite 集成 / Fake 模型替身 / mock 接口 /
 单测直调。
-1 新来源 Raw→Canonical→Workspace→Topic→Skill→Revision：分段覆盖（sources executor：
-  `test_phase2_executor_conversion.py:122/:155`；wiki.compile：`test_wiki_skill_default_v3.py:310`、
-  `test_phase5_pipeline_core.py:205`、`test_phase9a_integration.py:350/:436`）。
-  局限：无“connector raw 进库后同一测试内连续触发 wiki.compile 到 Revision”的连续用例（记录缺口，见 §10）。
+1 新来源 Raw→Canonical→Workspace→Topic→Skill→Revision：
+   - 连续全链（单用例）：`tests/test_phase9c_b1_connector_chain.py::test_connector_raw_to_published_revision_continuous_chain`
+     ——Fake Connector 原始 Markdown → 真实 sources executor（CanonicalNote/Page/Evidence）→ 真实
+     schedule_page_refresh 自动建 page_changed CompileRun → 真实 startup worker 消费并发布 default
+     Wiki Revision；同入口不可转换条目失败、无 Page/Run/Revision（不再按分段冒充）。
+   - 分段参考：`test_phase2_executor_conversion.py:122/:155`、`test_wiki_skill_default_v3.py:310`、
+     `test_phase5_pipeline_core.py:205`、`test_phase9a_integration.py:350/:436`。
 2 Markdown passthrough：`test_canonical_note_converters.py:72/87/93/107`、
   `test_phase24_semantics.py:347`（直通/保留分隔符/剥 frontmatter）。
 3 PDF/Office 共享转换 + 失败不建页：`test_canonical_note_converters.py:357/:465`、
@@ -171,22 +175,26 @@ Workspace identity）。
 - 真实模型质量/费用未评估（全部 Fake/预录确定性输出）。
 - 当前真实库**尚未升级**（仍 P38 且物理部分超前），应用上线前须先完成正式迁移
   （见 §5 与 §11）。
-- 连续全链（raw→Revision 同一用例）与真实 v3 高并发 soak 未建用例（见 §10 缺口）。
+- B1 连续全链（raw→Revision 同一用例）已实现（`test_phase9c_b1_connector_chain.py`，见 §10）；
+  真实 v3 多 worker 高并发 soak 仍为未验证能力（见 §10 B3）。
 
 ## 10. 覆盖缺口（如实）
 
-- B1 单一连续“connector raw → CanonicalNote → Page → page_changed CompileRun → Revision”
-  用例缺失（两套 executor 各自有覆盖）；建议最小用例：raw md/pdf → converter → upsert →
-  wiki.compile；坏文件断言无 Page、无 run、无 Revision。**本轮未实现**。
-- B3 真实 v3 product pipeline 多 worker 高并发 soak 未建（现有并发为 fake pipeline +
-  跨进程单 run）。**本轮未实现**。
-- B2 已在本批补反例并通过（见第 8 项 12 的粗体测试）。
+- B1 连续全链：**已实现并通过**（`tests/test_phase9c_b1_connector_chain.py`，见第 8 项 1）——
+  Fake Connector 原始 Markdown → 真实 sources executor/CanonicalNote/Page/Evidence → 真实
+  schedule_page_refresh 自动 page_changed CompileRun → 真实 startup worker 发布 default Wiki
+  Revision；同入口确定性不可转换资料失败且无 Page/Run/Revision；不影响成功来源数据。
+  仅测试/文档新增，无生产源码变更。
+- B3 真实 v3 product pipeline 多 worker 高并发 soak：**未验证**（现有并发为 fake pipeline +
+  跨进程单 run），不作为当前 SQLite 交付阻断。
+- B2 已补反例并通过（见第 8 项 12 的粗体测试）。
 
 ## 11. 上线前仍需执行的步骤（需单独授权）
 
 1. 真实库正式迁移（需授权）：一致性备份→副本 inventory→兼容迁移→回填 dry-run→批准计划
-   apply→postflight；PostgreSQL 目标时先做 PG 副本验证。
-2. 启动 PG 相关服务与 pgvector，做一次 PostgreSQL 真实链路验收（当前未实测）。
+   apply→postflight。
+2. PostgreSQL 验收：**仅在选定 PG 部署时为上线前置**——届时再启动 PG/pgvector 服务并做一次
+   PostgreSQL 真实链路验收（当前 SQLite 交付不要求、未实测）。
 3. 上线前回归：真实资料小批量（含 1 个 API Reference 资料）触发正式编译到 Revision，
    并在界面核验目录/结构化章节/Evidence。
 4. 添加新 Skill 的最小标准流程（上线态）：在 `wiki_skills/builtin/<skill>` 注册 key/版本/
@@ -201,9 +209,11 @@ Workspace identity）。
 - 后端全量 pytest（一次，`.venv`）：**2454 passed / 2 skipped / 0 failed**，exit 0，
   时长 ≈16:31；skip 为 `test_wiki_skill_loader.py`（当前平台无法建立外部连接、安全跳过）；
   warnings 均为既有 deprecation（无运行异常；故障注入日志与后台异常已按“通过 + 仅 deprecation”
-  区分）。完整日志保留在临时目录（未入库）。
+  区分）。完整日志保留在临时目录（未入库）。**该 2454 结果对应被测试代码提交 `bc26b02`**。
+- B1 缺口补测（新增 `tests/test_phase9c_b1_connector_chain.py`，单用例连续链）：
+  **1 passed（复跑 3 次均通过，≈9.4–9.6s）**；结果单独记录，**不计入/不冒充新的全量总数**。
 - 前端 `npm run build`：成功，exit 0（vue-tsc 已含）。
 - 复用的既有验收证据：Phase 8 前端 mock 套件、9A live9a、9A/9B 集成、9B 副本迁移演练
   均按“链路未变不复跑”原则引用既有记录（见 §1 文档链接与本表），未重复执行。
-- 数据/模型隔离：全量 pytest 未引用真实 notes.db（仅注释与工具测试的假 “notes.db” 文件
+- 数据/模型隔离：全量 pytest 与 B1 均未引用真实 notes.db（仅注释与工具测试的假 “notes.db” 文件
   名）；conftest autouse 隔离外部模型；无回退真实客户端。
