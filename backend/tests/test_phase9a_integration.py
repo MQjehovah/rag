@@ -847,3 +847,45 @@ def test_cancel_queued_run_immediate(env: Env):
     # 终态再 cancel → 409。
     assert env.c.post(f"/api/wiki-compile/runs/{run_id}/cancel",
                       headers=env.admin).status_code == 409
+
+
+def test_v3_llm_failure_after_publish_keeps_old_revision_and_dirty(env: Env):
+    """真实 v3 链：已发布 Wiki 再次编译时 LLM 失败 → 保留旧发布版、dirty 保持、不重复发布。"""
+    env.set_fault(False)  # 先让 w-fail 成功发布一次
+    runs = refresh_and_collect_runs(env, wiki_ids=[fixtures.WIKI_FAIL_ID])
+    ok_run = env.drive_run(runs[fixtures.WIKI_FAIL_ID].id)
+    assert ok_run.status == "succeeded", (ok_run.safe_error_code,
+                                          ok_run.safe_error_message)
+    w = env.wiki(fixtures.WIKI_FAIL_ID)
+    assert w.current_revision_id is not None and w.dirty is False
+    old_rev = w.current_revision_id
+    old_sections = env.current_sections(fixtures.WIKI_FAIL_ID)
+    old_section_keys = {s.section_key or s.section_type for s in old_sections}
+
+    # 二次 manual_rebuild：变更来源内容（产生新 input_hash/幂等键），fault 注入使 LLM 抛错。
+    page = env.db.get(Page, "p-fail")
+    assert page is not None
+    page.content = (page.content or "") + "\n" + fixtures.MARKER_FAIL + " 变更段"
+    env.db.commit()
+    env.set_fault(True)
+    w2 = env.wiki(fixtures.WIKI_FAIL_ID)
+    w2.dirty = True
+    env.db.commit()
+    runs2 = refresh_and_collect_runs(env, wiki_ids=[fixtures.WIKI_FAIL_ID])
+    fail_run = env.drive_run(runs2[fixtures.WIKI_FAIL_ID].id)
+    assert fail_run.status == "failed", (fail_run.safe_error_code,
+                                         fail_run.safe_error_message)
+    w3 = env.wiki(fixtures.WIKI_FAIL_ID)
+    assert w3.current_revision_id == old_rev, "LLM 失败不得切换 current_revision"
+    assert w3.dirty is True, "LLM 失败必须保持 dirty"
+    # 失败的 run 不产出新 published Revision / 成功 run 数不增。
+    assert fail_run.output_revision_id is None
+    succeeded_runs = (env.db.query(CompileRun)
+                      .filter(CompileRun.wiki_page_id == fixtures.WIKI_FAIL_ID,
+                              CompileRun.status == "succeeded")
+                      .count())
+    assert succeeded_runs == 1, "不得因失败产生新的 succeeded run"
+    # 历史 revision/section 原样保留（稳定 key/语义，不要求行 ID 不变）。
+    cur_sections = env.current_sections(fixtures.WIKI_FAIL_ID)
+    assert {s.section_key or s.section_type for s in cur_sections} == old_section_keys
+    env.set_fault(False)
