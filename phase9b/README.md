@@ -131,3 +131,48 @@ cd backend
   `backend/app/core/wiki_skills/api_reference/compiler.py`
 - 测试：`backend/tests/test_phase9b_version_scope.py`、`backend/tests/test_phase9b_config.py`
 - 文档：`phase9b/CONTRACT-version-config.md`、本文件
+
+## 八、第三批授权：真实库副本迁移/回填/恢复演练（checkpoint：7374f65 →）
+
+**结论先行：真实库保持零修改；副本 Alembic 迁移到 head 遇到 schema 超前阻断，如实记录为待决策阻断，未做任何绕过。**
+
+### 8.1 前置核查
+- HEAD 7374f65、Alembic 唯一 head `a9b8c7d6e5f4`。
+- 真实库（`backend/data/notes.db`，普通文件、非 reparse）：160,489,472 B、mtime 2026-09-02 17:58:50、
+  SHA-256 `be2b6d6c…0cb66f`、`journal_mode=wal`（目录无 -wal/-shm 残留）、`quick_check=ok`、
+  `alembic_version=e6f7a8b9c0d1`(P38)、无 python 服务进程使用。
+- schema-aware inventory（真实库与 baseline 快照各一次，`identical=True`）：notebooks=3（均 admin scope，
+  无 extra groups）、pages=145、page_chunks=5403、wiki_pages/revisions/sections=0、evidence=5403、
+  图谱 117/82/214/4570/76；缺 `wiki_workspaces/notebook_workspace_bindings/
+  wiki_section_evidence_bindings` 表；`wiki_pages.workspace_id` 等 P41+ 列已物理存在（schema 超前）。
+- 回填候选：3 个 notebook（candidate=3，blocked=0，同 ACL 共享 scope=1 组含 3 notebook）。
+
+### 8.2 快照与一致性
+- 会话 `backend/.phase9b_migration/drill1/…`：`source-snapshot/baseline.db` 由 SQLite 只读 backup API
+  生成（源只读，未改真实库），SHA-256 `fa8f4c39…121706`；`working/work.db` 由 baseline 复制且 SHA 一致。
+- real vs baseline inventory 关键计数与版本完全一致（identical=True）。
+- `restore-verify`：从 immutable baseline 恢复到 `restored/restored.db`，SHA 与 baseline 完全一致、
+  quick_check ok、版本 e6f7a8b9c0d1、计数无差异，exit 0（证明恢复不依赖已迁移副本）。
+
+### 8.3 副本迁移结果（阻断）
+- preflight（working 副本）ok（quick_check/fk/revision=P38）。
+- `upgrade head`（working 副本）失败，exit 1：首个升级步骤
+  `alembic/versions/f2a3b4c5d6e7_p40_page_canonical_note_fields.py` 执行
+  `ALTER TABLE pages ADD COLUMN note_schema_version` 报 `duplicate column name: note_schema_version`
+  ——真实库物理上已含该列（schema 超前于 P38 revision）。失败后副本 `alembic_version` 仍为
+  e6f7a8b9c0d1（该步未部分生效）；完整 Alembic 日志留于会话 logs（未入库）。
+- 按授权不修改已发布 migration、不做手工 stamp/改 revision 绕过；working 副本标记为失败产物，
+  不继续反复修补。因此回填 dry-run/apply、postflight、downgrade-drill 依赖迁移后 schema，**未执行**。
+
+### 8.4 防误写与零修改证明
+- 负测：对真实库路径执行 `upgrade` / `backfill-apply` → 工具在写保护层拒绝并 exit 1（不触库）。
+- 演练结束后真实库复检与开始时逐项一致：SHA-256 `be2b6d6c…`、大小、mtime、revision=P38、quick_check、
+  计数全同，目录仍无 -wal/-shm；无任何真实库写入目标路径出现过。
+- 结论：**迁移到 head 属待决策阻断**（需 schema 归一/列去重或等价方案后另行授权），其余安全演练
+  （只读盘点、一致性快照、备份恢复验证、防误写）均通过。
+
+### 8.5 工具与门禁
+- 工具（可重复、只允许操作副本，写目标带 `--allowed-dir` + 真实库拒绝）：
+  `backend/phase9b_migration/`（guard/inventory/snapshot/migrate/backfill/postflight/recovery/main/README）。
+- 单测：`backend/tests/test_phase9b_migration_tools.py` → 33 passed，exit 0（合成 sqlite）。
+- 真实库复制演练仅用副本完成；未跑后端全量/前端 build/9A 浏览器套件。
