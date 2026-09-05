@@ -46,6 +46,7 @@ def _run_alembic(
     url = _sqlite_url(db_path)
     env = dict(os.environ)
     env["DATABASE_URL"] = url
+    env["PYTHONIOENCODING"] = "utf-8"
     cmd = [
         sys.executable, "-m", "alembic",
         "-x", f"database_url={url}",

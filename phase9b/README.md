@@ -176,3 +176,53 @@ cd backend
   `backend/phase9b_migration/`（guard/inventory/snapshot/migrate/backfill/postflight/recovery/main/README）。
 - 单测：`backend/tests/test_phase9b_migration_tools.py` → 33 passed，exit 0（合成 sqlite）。
 - 真实库复制演练仅用副本完成；未跑后端全量/前端 build/9A 浏览器套件。
+
+## 九、副本迁移兼容修复 + 完整演练（checkpoint：f690df3 → 本批，阻断解除）
+
+### 9.1 一次审查：baseline 实际 schema vs P40–P44（差异表）
+| 迁移 | 对象 | baseline 物理状态 | 处理 |
+|---|---|---|---|
+| P40 | pages 7 列（canonical 契约字段） | **已存在且等价**（VARCHAR(64/127)/TEXT，nullable） | 兼容跳过；缺失才创建（真实库曾在此 duplicate 失败） |
+| P41 | wiki_workspaces / notebook_workspace_bindings（表+CHECK+FK+索引） | 不存在 | 原样创建 |
+| P41 | wiki_pages.workspace_id + FK + ix 索引 | 不存在 | 创建；已存在则兼容补齐 FK/索引 |
+| P42 | knowledge_compile_* 三表（+CHECK/索引） | 不存在 | 原样创建 |
+| P43 | wiki_pages 6 个 skill 列 + 2 CHECK | 不存在 | 创建；已存在兼容补齐（CHECK 先校验数据） |
+| P44 | wiki_sections 6 列 + 2 CHECK + 部分唯一索引 | 不存在 | 创建；已存在兼容补齐/跳过等价索引 |
+| P44 | wiki_section_evidence_bindings（表） | 不存在 | 原样创建 |
+
+只修改实际需要兼容路径的 P40/P41/P43/P44（辅助函数独立于应用模型/schema guard：
+`backend/migration_compat.py`；PG 非 sqlite 分支保持原语义，未实测如实声明）。
+规则：缺失→创建；已存在且等价→保留；已存在不等价→受控失败；列存在不代表迁移完成
+（FK/CHECK/索引仍补齐）；新增约束前不自动清洗违规数据（违反即失败、数据保持）；
+不改业务值、不触发 worker/编译/外部调用；不改 revision/down_revision、不分叉、不 stamp。
+
+### 9.2 结果（真实数据副本演练，2026-09-05）
+- 真实库不变：SHA-256 `be2b6d6c…0cb66f`、大小/时间/alembic P38/quick/计数前后一致。
+- baseline 副本（immutable）→ 新 working copy：迁移 **upgrade head 成功（exit 0）**，
+  `alembic_version=a9b8c7d6e5f4`，preflight quick/fk 通过，`init_db` schema guard OK。
+- 数据摘要：baseline vs migrated `EQUAL=True`（pages 145 行 canonical 字段逐值、
+  行数与 evidence/图谱等计数完全一致；非敏感字段摘要，无正文/凭证）。
+- Workspace 回填（admin ACL 3 notebooks，同 ACL 各自独立默认 workspace）：
+  dry-run candidate=3（plan_hash `02e7bf…`）；apply #1 创建 binding=3；apply #2 幂等创建=0；
+  blocked/unknown=0。
+- postflight：`passed=true`；active binding 唯一、published wiki 无（真实 wiki=0，如实）、
+  数量未减少；**合成反例**在事务内建 notebook/ws/binding/wiki/revision/section/evidence/
+  evidence-binding 后 rollback（counts_after==before，rolled_back=true），与真实数据分开。
+- downgrade-drill（head → P38 → head）：exit 0；预存在表（notebooks/pages/evidence…）行数
+  零减少（defects 空）；P41/P42/P44 迁移新增表（含回填的 workspaces/bindings 3 行）随降级消失
+  = 预期（roundtrip 仅比较预存在表，delta 空）；quick/fk 全程通过；re-upgrade head exit 0。
+  原始物理超前状态的恢复以 immutable baseline restore 为准，二者分别报告、不混称无损回滚。
+- restore-verify：从 baseline 恢复副本 SHA 与 baseline 完全一致（`fa8f4c39…121706`）、quick/
+  版本/计数一致，exit 0（不依赖已迁移 working）。
+
+### 9.3 门禁（本批实际执行）
+- `backend/tests/test_phase9b_migrate_compat.py`：5 passed，exit 0
+  （干净 P38→head、部分新列提前等价→补齐成功、类型/nullable 不等价受控失败、列存在但
+  FK/索引补齐、违反新 CHECK 的数据→失败且不被清理）。
+- `backend/tests/test_phase9b_migration_tools.py`：33 passed，exit 0（guard/main/recovery 回归）。
+- 未跑后端全量 pytest、前端 build/浏览器套件、真实库任何写入。
+
+### 9.4 剩余阻断/未验证
+- PostgreSQL 迁移路径未实测（非 sqlite 分支保留原语义）。
+- 真实库 Wiki=0：workspace 一致性/图谱回填无历史样本；合成反例已单独标记。
+- 下一批如需把回填写入“标准 head schema”后的长期数据归并/删除矩阵，另行授权。

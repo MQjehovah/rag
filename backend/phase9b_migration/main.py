@@ -27,6 +27,14 @@ from pathlib import Path
 from phase9b_migration import backfill, guard, migrate, postflight, recovery, snapshot
 from phase9b_migration.inventory import inventory
 
+# Windows 控制台默认 GBK：强制 stdout/stderr 为 UTF-8 + replace，避免打印含
+# U+FFFD/中文的 alembic 合并输出时抛 UnicodeEncodeError（不影响文件写入）。
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001 - 非交互/无 reconfigure 环境忽略
+        pass
+
 # 写库/回填类命令：传入真实库一律拒绝（防误写）。
 _WRITE_LIKE_COMMANDS = {
     "snapshot", "upgrade", "downgrade", "backfill-dryrun", "backfill-apply",
@@ -97,6 +105,9 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("downgrade-drill", help="降级 → 评估 → 升回 head 演练")
     _add_common(p)
     p.add_argument("--rev", default=DEFAULT_DRILL_REV)
+    p.add_argument("--baseline-db", default=None,
+                   help="迁移前 baseline 库（用于区分预存在表 vs 迁移新增表；默认取会话 "
+                        "source-snapshot/baseline.db）")
 
     p = sub.add_parser("restore-verify", help="从 baseline 恢复并校验 sha/quick/版本")
     _add_common(p)
@@ -236,11 +247,17 @@ def _cmd_downgrade_drill(args) -> int:
         return 1
     allowed = guard.require_allowed_dir(args.allowed_dir)
     sess = _session(args)
+    baseline_db = args.baseline_db
+    if not baseline_db:
+        cand = os.path.join(sess["source_snapshot"], "baseline.db")
+        if os.path.exists(cand):
+            baseline_db = cand
     res = recovery.downgrade_drill(
         os.path.abspath(args.db), args.rev, allowed_dir=allowed,
         real_db=_real_db_arg(args),
         dest=os.path.join(sess["restored"], "downgrade.db"),
         log_path=os.path.join(sess["logs"], "alembic-downgrade-drill.log"),
+        baseline_db=baseline_db,
     )
     _print(res)
     return 0 if res.get("passed") else 1

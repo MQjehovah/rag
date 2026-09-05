@@ -33,9 +33,15 @@ SQLite 使用 batch_alter_table（本迁移同时兼容 PostgreSQL）。
 from __future__ import annotations
 
 from typing import Sequence, Union
-
 from alembic import op
 import sqlalchemy as sa
+
+from migration_compat import (
+    ensure_checks_sqlite,
+    ensure_columns_sqlite,
+    ensure_index,
+)
+
 
 revision: str = "a9b8c7d6e5f4"
 down_revision: Union[str, Sequence[str], None] = "d3e4f5a6b7c8"
@@ -81,9 +87,10 @@ def _drop_binding_indexes() -> None:
 
 
 def _create_section_partial_unique() -> None:
-    op.create_index(
+    ensure_index(
+        op, op.get_bind(), "wiki_sections",
         "ux_wiki_sections_revision_section_key",
-        "wiki_sections", ["revision_id", "section_key"],
+        ["revision_id", "section_key"],
         unique=True,
         sqlite_where=sa.text("section_key IS NOT NULL"),
         postgresql_where=sa.text("section_key IS NOT NULL"),
@@ -93,18 +100,20 @@ def _create_section_partial_unique() -> None:
 def upgrade() -> None:
     bind = op.get_bind()
     dialect = bind.dialect.name
+    checks = [
+        (
+            "ck_wiki_sections_validation_status",
+            "validation_status IS NULL OR validation_status IN ('pass','fail')",
+        ),
+        (
+            "ck_wiki_sections_section_key_nonempty",
+            "section_key IS NULL OR length(trim(section_key)) > 0",
+        ),
+    ]
     if dialect == "sqlite":
-        with op.batch_alter_table("wiki_sections") as batch_op:
-            for column in _SECTION_COLUMNS:
-                batch_op.add_column(column)
-            batch_op.create_check_constraint(
-                "ck_wiki_sections_validation_status",
-                "validation_status IS NULL OR validation_status IN ('pass','fail')",
-            )
-            batch_op.create_check_constraint(
-                "ck_wiki_sections_section_key_nonempty",
-                "section_key IS NULL OR length(trim(section_key)) > 0",
-            )
+        # 兼容：部分列/约束/部分唯一索引可能已物理存在 → 补齐缺失结构；不等价受控失败。
+        ensure_columns_sqlite(op, bind, "wiki_sections", _SECTION_COLUMNS)
+        ensure_checks_sqlite(op, bind, "wiki_sections", checks)
         _create_section_partial_unique()
     else:
         for column in _SECTION_COLUMNS:

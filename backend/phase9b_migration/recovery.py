@@ -17,12 +17,16 @@ from phase9b_migration import guard
 from phase9b_migration import inventory as _inv
 from phase9b_migration import migrate
 
-# 降级演练中的“核心数据表”：这类表行数若减少视为缺陷（迁移新增的托管表不在此列）。
-CORE_KEEP_TABLES = {
-    "notebooks", "notebook_groups", "pages", "page_chunks",
-    "wiki_pages", "wiki_revisions", "wiki_sections",
+# 降级演练语义（Phase 9B）：
+# - “预存在表” = 该表在迁移前 baseline 中已存在；其行数若在降级/再升级后减少 → 缺陷。
+# - 迁移新增表（P41 workspace/binding、P42 compile 三表、P44 section binding 等）在
+#   baseline 中不存在：随 downgrade 消失属预期（其行若为 post-migration 回填/业务产生，
+#   原始恢复以 immutable baseline 恢复验证为准，二者分别报告）。
+# 当调用方未提供 baseline_db 时，用下列“P38 迁移新增表”启发式兜底（仅适用 P38→head 链）。
+EXPECTED_POST_P38_TABLES = {
     "wiki_workspaces", "notebook_workspace_bindings",
-    "evidence_items", "users", "user_groups",
+    "knowledge_compile_runs", "knowledge_compile_stage_runs",
+    "knowledge_compile_artifacts", "wiki_section_evidence_bindings",
 }
 
 
@@ -59,16 +63,35 @@ def downgrade_drill(
     real_db=None,
     dest=None,
     log_path=None,
+    baseline_db=None,
 ) -> dict:
-    """降级 → 评估数据丢失 → 重新升回 head 的完整演练（全程在副本上进行）。"""
+    """降级 → 评估数据丢失 → 重新升回 head 的完整演练（全程在副本上进行）。
+
+    数据丢失评估以“迁移前 baseline 已存在的表”为准：预存在表行数减少 → 缺陷；
+    迁移新增表随 downgrade 消失 → 预期（不视为缺陷，也不要求 roundtrip 复现其数据）。
+    """
     migrated_db = os.path.abspath(str(migrated_db))
     dest = dest or _default_drill_dest(allowed_dir, "downgrade.db")
     out: dict = {"migrated_db": migrated_db, "rev": rev, "dest": dest}
+
+    baseline_counts = None
+    if baseline_db:
+        baseline_counts = _inv.read_only_counts(os.path.abspath(str(baseline_db)))
+        out["baseline_db"] = os.path.abspath(str(baseline_db))
 
     copy = copy_db(migrated_db, dest, allowed_dir=allowed_dir, real_db=real_db)
     out["copy"] = copy
     before = _inv.read_only_counts(dest)
     out["version_before_downgrade"] = migrate.current_version(dest)
+
+    # 预存在表集合：优先 baseline（真实）；否则对 P38→head 链用启发式（迁移新增表=预期消失）。
+    if baseline_counts is not None:
+        pre_existing = {t for t, c in baseline_counts.items()
+                        if c is not None and c != "unavailable"}
+        out["baseline_mode"] = "baseline_db"
+    else:
+        pre_existing = set(before) - EXPECTED_POST_P38_TABLES
+        out["baseline_mode"] = "heuristic_post_p38"
 
     # 降级
     downgraded = migrate.downgrade(dest, rev, allowed_dir=allowed_dir, real_db=real_db, log_path=log_path)
@@ -76,32 +99,34 @@ def downgrade_drill(
     after_dn = _inv.read_only_counts(dest)
     out["current_after_downgrade"] = migrate.current_version(dest)
 
-    # 数据丢失评估：核心表行数减少/被删 → 缺陷；纯迁移新增表消失 → 预期。
+    # 数据丢失评估：预存在表行数减少/被删 → 缺陷；迁移新增表消失 → 预期。
     delta = _table_delta(before, after_dn)
-    defects = {t: v for t, v in delta.items() if t in CORE_KEEP_TABLES}
-    expected = {t: v for t, v in delta.items() if t not in CORE_KEEP_TABLES}
+    defects = {t: v for t, v in delta.items() if t in pre_existing}
+    expected = {t: v for t, v in delta.items() if t not in pre_existing}
     quick_dn = _inv.run_quick_check(dest)
     fk_dn = _inv.run_fk_check(dest)
     out["loss_eval"] = {
         "defects": defects,
         "expected_removals": expected,
         "passed": not defects,
-        "note": "核心表行数减少=缺陷；迁移托管新表消失=预期；降级后通过 quick/fk",
+        "note": "预存在表行数减少=缺陷；迁移新增表消失=预期；降级后通过 quick/fk",
     }
     out["after_downgrade"] = {
         "quick_check": quick_dn, "foreign_key_check": fk_dn,
     }
 
-    # 重新升回 head
+    # 重新升回 head（迁移链可重入：版本==head、quick/fk 通过、预存在表数据未变）。
     upgraded = migrate.upgrade(dest, "head", allowed_dir=allowed_dir, real_db=real_db, log_path=log_path)
     out["re_upgrade"] = upgraded
     after_up = _inv.read_only_counts(dest)
     quick_up = _inv.run_quick_check(dest)
     fk_up = _inv.run_fk_check(dest)
-    roundtrip = _table_delta(before, after_up)
+    roundtrip = _table_delta({t: before[t] for t in before if t in pre_existing}, after_up)
+    roundtrip_expected = _table_delta({t: before[t] for t in before if t not in pre_existing}, after_up)
     version_now = migrate.current_version(dest)
     out["roundtrip"] = {
         "delta": roundtrip,
+        "expected_new_table_deltas": roundtrip_expected,
         "passed": not roundtrip and version_now == migrate.ALEMBIC_HEAD_EXPECTED
         and quick_up["passed"] and fk_up["passed"],
     }

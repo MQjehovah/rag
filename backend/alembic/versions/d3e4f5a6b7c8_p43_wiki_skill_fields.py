@@ -25,6 +25,9 @@ from typing import Sequence, Union
 from alembic import op
 import sqlalchemy as sa
 
+from migration_compat import ensure_checks_sqlite, ensure_columns_sqlite
+
+
 revision: str = "d3e4f5a6b7c8"
 down_revision: Union[str, Sequence[str], None] = "c2d3e4f5a6b7"
 branch_labels: Union[str, Sequence[str], None] = None
@@ -61,19 +64,18 @@ def _selected_by_condition() -> str:
 def upgrade() -> None:
     bind = op.get_bind()
     dialect = bind.dialect.name
+    checks = [
+        (
+            "ck_wiki_pages_skill_confidence",
+            "skill_confidence IS NULL OR "
+            "(skill_confidence >= 0.0 AND skill_confidence <= 1.0)",
+        ),
+        ("ck_wiki_pages_skill_selected_by", _selected_by_condition()),
+    ]
     if dialect == "sqlite":
-        with op.batch_alter_table("wiki_pages") as batch_op:
-            for column in _SKILL_COLUMNS:
-                batch_op.add_column(column)
-            batch_op.create_check_constraint(
-                "ck_wiki_pages_skill_confidence",
-                "skill_confidence IS NULL OR "
-                "(skill_confidence >= 0.0 AND skill_confidence <= 1.0)",
-            )
-            batch_op.create_check_constraint(
-                "ck_wiki_pages_skill_selected_by",
-                _selected_by_condition(),
-            )
+        # 兼容：部分列可能已物理存在且等价 → 保留并只补缺失列/缺失 CHECK；不等价受控失败。
+        ensure_columns_sqlite(op, bind, "wiki_pages", _SKILL_COLUMNS)
+        ensure_checks_sqlite(op, bind, "wiki_pages", checks)
     else:
         for column in _SKILL_COLUMNS:
             op.add_column("wiki_pages", column)

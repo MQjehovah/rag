@@ -24,6 +24,8 @@ from typing import Sequence, Union
 from alembic import op
 import sqlalchemy as sa
 
+from migration_compat import ensure_columns_sqlite
+
 
 revision: str = "f2a3b4c5d6e7"
 down_revision: Union[str, Sequence[str], None] = "e6f7a8b9c0d1"
@@ -46,11 +48,10 @@ def upgrade() -> None:
     ]
 
     if dialect == "sqlite":
-        with op.batch_alter_table("pages") as batch_op:
-            for col in new_columns:
-                batch_op.add_column(col)
+        # 兼容：若部分列已物理存在且等价 → 保留并只补缺失列；不等价 → 受控失败。
+        ensure_columns_sqlite(op, bind, "pages", new_columns)
     else:
-        # PostgreSQL：直接 ALTER TABLE ADD COLUMN（nullable 无默认值，安全）
+        # PostgreSQL：直接 ALTER TABLE ADD COLUMN（nullable 无默认值，安全）。
         for col in new_columns:
             op.add_column("pages", col)
 

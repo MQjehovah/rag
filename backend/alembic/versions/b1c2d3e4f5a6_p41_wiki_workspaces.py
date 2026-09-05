@@ -21,6 +21,12 @@ from typing import Sequence, Union
 from alembic import op
 import sqlalchemy as sa
 
+from migration_compat import (
+    ensure_columns_sqlite,
+    ensure_fk_sqlite,
+    ensure_index,
+)
+
 
 revision: str = "b1c2d3e4f5a6"
 down_revision: Union[str, Sequence[str], None] = "f2a3b4c5d6e7"
@@ -80,18 +86,17 @@ def upgrade() -> None:
         postgresql_where=sa.text("status = 'active'"),
     )
 
+    workspace_col = sa.Column("workspace_id", sa.String(36), nullable=True)
     if dialect == "sqlite":
-        with op.batch_alter_table("wiki_pages") as batch_op:
-            batch_op.add_column(sa.Column("workspace_id", sa.String(36), nullable=True))
-            batch_op.create_foreign_key(
-                "fk_wiki_pages_workspace_id",
-                "wiki_workspaces",
-                ["workspace_id"],
-                ["id"],
-                ondelete="SET NULL",
-            )
+        # 兼容：workspace_id 可能已物理存在且等价 → 保留；FK/索引缺失仍补齐。
+        ensure_columns_sqlite(op, bind, "wiki_pages", [workspace_col])
+        ensure_fk_sqlite(
+            op, bind, "wiki_pages",
+            "fk_wiki_pages_workspace_id", "wiki_workspaces",
+            ["workspace_id"], ["id"], ondelete="SET NULL",
+        )
     else:
-        op.add_column("wiki_pages", sa.Column("workspace_id", sa.String(36), nullable=True))
+        op.add_column("wiki_pages", workspace_col)
         op.create_foreign_key(
             "fk_wiki_pages_workspace_id",
             "wiki_pages",
@@ -100,7 +105,7 @@ def upgrade() -> None:
             ["id"],
             ondelete="SET NULL",
         )
-    op.create_index("ix_wiki_pages_workspace_id", "wiki_pages", ["workspace_id"])
+    ensure_index(op, bind, "wiki_pages", "ix_wiki_pages_workspace_id", ["workspace_id"])
 
 
 def downgrade() -> None:
