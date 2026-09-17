@@ -82,7 +82,6 @@ from app.models.database import (  # noqa: E402
 from phase9a import bootstrap_db as bdb  # noqa: E402
 from phase9a import fixtures  # noqa: E402
 
-_P44_REVISION = "a9b8c7d6e5f4"
 _PHASE9A_ROOT = _BACKEND.parent / ".phase9a"
 
 # ---- 跨进程短 lease 注入（settings env；生产默认不变）----
@@ -291,7 +290,8 @@ class Env:
         envmap["DATABASE_URL"] = self.db_url
         envmap["PYTHONIOENCODING"] = "utf-8"
         heads = bdb.alembic_single_head(bdb._BACKEND, envmap)
-        assert [h for h in heads.split("|") if h] == [_P44_REVISION], heads
+        from tests.alembic_head import current_alembic_head
+        assert [h for h in heads.split("|") if h] == [current_alembic_head()], heads
         bdb.alembic_upgrade_head(bdb._BACKEND, envmap)
 
         self.engine = create_engine(self.db_url, connect_args={"check_same_thread": False})

@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
-from app.api import pages, search, search_v2, upload, notebooks, auth, dingtalk, chat, organize, evidence, wiki, wiki_workspaces, wiki_compile, p7_flags, sources, model_health, rag_chat, debts_v4, v4_graph, dingtalk_folder_mappings, source_path_mappings, feedback_v4, wiki_skills
+from app.api import pages, search, search_v2, upload, notebooks, auth, dingtalk, chat, organize, evidence, wiki, wiki_workspaces, wiki_compile, p7_flags, sources, model_health, rag_chat, debts_v4, v4_graph, dingtalk_folder_mappings, source_path_mappings, feedback_v4, wiki_skills, evolution_console, evolution_admin
 
 app = FastAPI(
     title="Notes RAG System",
@@ -44,6 +44,8 @@ app.include_router(source_path_mappings.router)
 app.include_router(feedback_v4.router)
 app.include_router(wiki_skills.router)
 app.include_router(wiki_skills.wiki_skill_router)
+app.include_router(evolution_console.router)
+app.include_router(evolution_admin.router)
 
 
 @app.on_event("startup")

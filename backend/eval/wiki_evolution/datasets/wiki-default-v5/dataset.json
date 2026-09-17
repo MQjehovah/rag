@@ -1,0 +1,944 @@
+{
+  "dataset_version": "wiki-default-v5",
+  "domain": "wiki_compile.default",
+  "grader_version": "wiki-default-grader/v1",
+  "tasks": [
+    {
+      "task_id": "v5-op-001",
+      "dataset_version": "wiki-default-v5",
+      "domain": "wiki_compile.default",
+      "split": "train",
+      "group_id": "op-t1",
+      "input_snapshot_id": "v5-v5-op-001",
+      "instruction": "依据给定资料编写「汽轮机轴承座热装配」主题的 Wiki：覆盖汽轮机轴承座热装配相关要点；引用来源中的参数、版本与适用范围；结论必须与资料一致，禁止臆造与无证据补充；多资料冲突时按适用范围与判定标准处理。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v5.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "汽轮机轴承座热装配（流程资料）",
+      "wiki_category": "产品资料",
+      "source_family": "操作流程",
+      "sources": [
+        {
+          "doc_id": "d1",
+          "title": "汽轮机轴承座热装配",
+          "file": "v5-op-001.md"
+        }
+      ]
+    },
+    {
+      "task_id": "v5-op-002",
+      "dataset_version": "wiki-default-v5",
+      "domain": "wiki_compile.default",
+      "split": "train",
+      "group_id": "op-t1",
+      "input_snapshot_id": "v5-v5-op-002",
+      "instruction": "依据给定资料编写「服务器机房双路电源切换演练」主题的 Wiki：覆盖服务器机房双路电源切换演练相关要点；引用来源中的参数、版本与适用范围；结论必须与资料一致，禁止臆造与无证据补充；多资料冲突时按适用范围与判定标准处理。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v5.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "服务器机房双路电源切换演练（流程资料）",
+      "wiki_category": "产品资料",
+      "source_family": "操作流程",
+      "sources": [
+        {
+          "doc_id": "d1",
+          "title": "服务器机房双路电源切换演练",
+          "file": "v5-op-002.md"
+        }
+      ]
+    },
+    {
+      "task_id": "v5-op-003",
+      "dataset_version": "wiki-default-v5",
+      "domain": "wiki_compile.default",
+      "split": "val",
+      "group_id": "op-v1",
+      "input_snapshot_id": "v5-v5-op-003",
+      "instruction": "依据给定资料编写「无菌灌装线 CIP 清洗」主题的 Wiki：覆盖无菌灌装线 CIP 清洗相关要点；引用来源中的参数、版本与适用范围；结论必须与资料一致，禁止臆造与无证据补充；多资料冲突时按适用范围与判定标准处理。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v5.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "无菌灌装线 CIP 清洗（流程资料）",
+      "wiki_category": "产品资料",
+      "source_family": "操作流程",
+      "sources": [
+        {
+          "doc_id": "d1",
+          "title": "无菌灌装线 CIP 清洗",
+          "file": "v5-op-003.md"
+        }
+      ]
+    },
+    {
+      "task_id": "v5-op-004",
+      "dataset_version": "wiki-default-v5",
+      "domain": "wiki_compile.default",
+      "split": "val",
+      "group_id": "op-v1",
+      "input_snapshot_id": "v5-v5-op-004",
+      "instruction": "依据给定资料编写「自动化仓库堆垛机换型」主题的 Wiki：覆盖自动化仓库堆垛机换型相关要点；引用来源中的参数、版本与适用范围；结论必须与资料一致，禁止臆造与无证据补充；多资料冲突时按适用范围与判定标准处理。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v5.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "自动化仓库堆垛机换型（流程资料）",
+      "wiki_category": "产品资料",
+      "source_family": "操作流程",
+      "sources": [
+        {
+          "doc_id": "d1",
+          "title": "自动化仓库堆垛机换型",
+          "file": "v5-op-004.md"
+        }
+      ]
+    },
+    {
+      "task_id": "v5-op-005",
+      "dataset_version": "wiki-default-v5",
+      "domain": "wiki_compile.default",
+      "split": "val",
+      "group_id": "op-v2",
+      "input_snapshot_id": "v5-v5-op-005",
+      "instruction": "依据给定资料编写「深冷储罐倒罐作业」主题的 Wiki：覆盖深冷储罐倒罐作业相关要点；引用来源中的参数、版本与适用范围；结论必须与资料一致，禁止臆造与无证据补充；多资料冲突时按适用范围与判定标准处理。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v5.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "深冷储罐倒罐作业（流程资料）",
+      "wiki_category": "产品资料",
+      "source_family": "操作流程",
+      "sources": [
+        {
+          "doc_id": "d1",
+          "title": "深冷储罐倒罐作业",
+          "file": "v5-op-005.md"
+        }
+      ]
+    },
+    {
+      "task_id": "v5-op-006",
+      "dataset_version": "wiki-default-v5",
+      "domain": "wiki_compile.default",
+      "split": "test",
+      "group_id": "op-x1",
+      "input_snapshot_id": "v5-v5-op-006",
+      "instruction": "依据给定资料编写「牵引变压器有载分接开关检修」主题的 Wiki：覆盖牵引变压器有载分接开关检修相关要点；引用来源中的参数、版本与适用范围；结论必须与资料一致，禁止臆造与无证据补充；多资料冲突时按适用范围与判定标准处理。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v5.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "牵引变压器有载分接开关检修（流程资料）",
+      "wiki_category": "产品资料",
+      "source_family": "操作流程",
+      "sources": [
+        {
+          "doc_id": "d1",
+          "title": "牵引变压器有载分接开关检修",
+          "file": "v5-op-006.md"
+        }
+      ]
+    },
+    {
+      "task_id": "v5-op-007",
+      "dataset_version": "wiki-default-v5",
+      "domain": "wiki_compile.default",
+      "split": "test",
+      "group_id": "op-x1",
+      "input_snapshot_id": "v5-v5-op-007",
+      "instruction": "依据给定资料编写「高速包装线热缩膜机标定」主题的 Wiki：覆盖高速包装线热缩膜机标定相关要点；引用来源中的参数、版本与适用范围；结论必须与资料一致，禁止臆造与无证据补充；多资料冲突时按适用范围与判定标准处理。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v5.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "高速包装线热缩膜机标定（流程资料）",
+      "wiki_category": "产品资料",
+      "source_family": "操作流程",
+      "sources": [
+        {
+          "doc_id": "d1",
+          "title": "高速包装线热缩膜机标定",
+          "file": "v5-op-007.md"
+        }
+      ]
+    },
+    {
+      "task_id": "v5-op-008",
+      "dataset_version": "wiki-default-v5",
+      "domain": "wiki_compile.default",
+      "split": "test",
+      "group_id": "op-x1",
+      "input_snapshot_id": "v5-v5-op-008",
+      "instruction": "依据给定资料编写「消防泵组月度巡检」主题的 Wiki：覆盖消防泵组月度巡检相关要点；引用来源中的参数、版本与适用范围；结论必须与资料一致，禁止臆造与无证据补充；多资料冲突时按适用范围与判定标准处理。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v5.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "消防泵组月度巡检（流程资料）",
+      "wiki_category": "产品资料",
+      "source_family": "操作流程",
+      "sources": [
+        {
+          "doc_id": "d1",
+          "title": "消防泵组月度巡检",
+          "file": "v5-op-008.md"
+        }
+      ]
+    },
+    {
+      "task_id": "v5-cfg-009",
+      "dataset_version": "wiki-default-v5",
+      "domain": "wiki_compile.default",
+      "split": "train",
+      "group_id": "cfg-t1",
+      "input_snapshot_id": "v5-v5-cfg-009",
+      "instruction": "依据给定资料编写「网关设备 SNMP 采集参数」主题的 Wiki：覆盖网关设备 SNMP 采集参数相关要点；引用来源中的参数、版本与适用范围；结论必须与资料一致，禁止臆造与无证据补充；多资料冲突时按适用范围与判定标准处理。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v5.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "网关设备 SNMP 采集参数（约束资料）",
+      "wiki_category": "产品资料",
+      "source_family": "配置约束",
+      "sources": [
+        {
+          "doc_id": "d1",
+          "title": "网关设备 SNMP 采集参数",
+          "file": "v5-cfg-009.md"
+        }
+      ]
+    },
+    {
+      "task_id": "v5-cfg-010",
+      "dataset_version": "wiki-default-v5",
+      "domain": "wiki_compile.default",
+      "split": "train",
+      "group_id": "cfg-t1",
+      "input_snapshot_id": "v5-v5-cfg-010",
+      "instruction": "依据给定资料编写「消息队列消费者预取配置」主题的 Wiki：覆盖消息队列消费者预取配置相关要点；引用来源中的参数、版本与适用范围；结论必须与资料一致，禁止臆造与无证据补充；多资料冲突时按适用范围与判定标准处理。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v5.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "消息队列消费者预取配置（约束资料）",
+      "wiki_category": "产品资料",
+      "source_family": "配置约束",
+      "sources": [
+        {
+          "doc_id": "d1",
+          "title": "消息队列消费者预取配置",
+          "file": "v5-cfg-010.md"
+        }
+      ]
+    },
+    {
+      "task_id": "v5-cfg-011",
+      "dataset_version": "wiki-default-v5",
+      "domain": "wiki_compile.default",
+      "split": "train",
+      "group_id": "cfg-t1",
+      "input_snapshot_id": "v5-v5-cfg-011",
+      "instruction": "依据给定资料编写「温控仪表报警死区」主题的 Wiki：覆盖温控仪表报警死区相关要点；引用来源中的参数、版本与适用范围；结论必须与资料一致，禁止臆造与无证据补充；多资料冲突时按适用范围与判定标准处理。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v5.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "温控仪表报警死区（约束资料）",
+      "wiki_category": "产品资料",
+      "source_family": "配置约束",
+      "sources": [
+        {
+          "doc_id": "d1",
+          "title": "温控仪表报警死区",
+          "file": "v5-cfg-011.md"
+        }
+      ]
+    },
+    {
+      "task_id": "v5-cfg-012",
+      "dataset_version": "wiki-default-v5",
+      "domain": "wiki_compile.default",
+      "split": "train",
+      "group_id": "cfg-t1",
+      "input_snapshot_id": "v5-v5-cfg-012",
+      "instruction": "依据给定资料编写「备份窗口与保留策略」主题的 Wiki：覆盖备份窗口与保留策略相关要点；引用来源中的参数、版本与适用范围；结论必须与资料一致，禁止臆造与无证据补充；多资料冲突时按适用范围与判定标准处理。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v5.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "备份窗口与保留策略（约束资料）",
+      "wiki_category": "产品资料",
+      "source_family": "配置约束",
+      "sources": [
+        {
+          "doc_id": "d1",
+          "title": "备份窗口与保留策略",
+          "file": "v5-cfg-012.md"
+        }
+      ]
+    },
+    {
+      "task_id": "v5-cfg-013",
+      "dataset_version": "wiki-default-v5",
+      "domain": "wiki_compile.default",
+      "split": "train",
+      "group_id": "cfg-t1",
+      "input_snapshot_id": "v5-v5-cfg-013",
+      "instruction": "依据给定资料编写「负载均衡会话保持」主题的 Wiki：覆盖负载均衡会话保持相关要点；引用来源中的参数、版本与适用范围；结论必须与资料一致，禁止臆造与无证据补充；多资料冲突时按适用范围与判定标准处理。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v5.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "负载均衡会话保持（约束资料）",
+      "wiki_category": "产品资料",
+      "source_family": "配置约束",
+      "sources": [
+        {
+          "doc_id": "d1",
+          "title": "负载均衡会话保持",
+          "file": "v5-cfg-013.md"
+        }
+      ]
+    },
+    {
+      "task_id": "v5-cfg-014",
+      "dataset_version": "wiki-default-v5",
+      "domain": "wiki_compile.default",
+      "split": "train",
+      "group_id": "cfg-t1",
+      "input_snapshot_id": "v5-v5-cfg-014",
+      "instruction": "依据给定资料编写「工控屏亮度与休眠」主题的 Wiki：覆盖工控屏亮度与休眠相关要点；引用来源中的参数、版本与适用范围；结论必须与资料一致，禁止臆造与无证据补充；多资料冲突时按适用范围与判定标准处理。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v5.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "工控屏亮度与休眠（约束资料）",
+      "wiki_category": "产品资料",
+      "source_family": "配置约束",
+      "sources": [
+        {
+          "doc_id": "d1",
+          "title": "工控屏亮度与休眠",
+          "file": "v5-cfg-014.md"
+        }
+      ]
+    },
+    {
+      "task_id": "v5-cfg-015",
+      "dataset_version": "wiki-default-v5",
+      "domain": "wiki_compile.default",
+      "split": "val",
+      "group_id": "cfg-v1",
+      "input_snapshot_id": "v5-v5-cfg-015",
+      "instruction": "依据给定资料编写「网关设备 SNMP 采集参数（变体 A：只读陷阱端口）」主题的 Wiki：覆盖网关设备 SNMP 采集参数（变体 A：只读陷阱端口）相关要点；引用来源中的参数、版本与适用范围；结论必须与资料一致，禁止臆造与无证据补充；多资料冲突时按适用范围与判定标准处理。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v5.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "网关设备 SNMP 采集参数（变体 A：只读陷阱端口）（约束资料）",
+      "wiki_category": "产品资料",
+      "source_family": "配置约束",
+      "sources": [
+        {
+          "doc_id": "d1",
+          "title": "网关设备 SNMP 采集参数（变体 A：只读陷阱端口）",
+          "file": "v5-cfg-015.md"
+        }
+      ]
+    },
+    {
+      "task_id": "v5-cfg-016",
+      "dataset_version": "wiki-default-v5",
+      "domain": "wiki_compile.default",
+      "split": "val",
+      "group_id": "cfg-v1",
+      "input_snapshot_id": "v5-v5-cfg-016",
+      "instruction": "依据给定资料编写「消息队列消费者预取配置（变体 B：延迟队列）」主题的 Wiki：覆盖消息队列消费者预取配置（变体 B：延迟队列）相关要点；引用来源中的参数、版本与适用范围；结论必须与资料一致，禁止臆造与无证据补充；多资料冲突时按适用范围与判定标准处理。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v5.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "消息队列消费者预取配置（变体 B：延迟队列）（约束资料）",
+      "wiki_category": "产品资料",
+      "source_family": "配置约束",
+      "sources": [
+        {
+          "doc_id": "d1",
+          "title": "消息队列消费者预取配置（变体 B：延迟队列）",
+          "file": "v5-cfg-016.md"
+        }
+      ]
+    },
+    {
+      "task_id": "v5-cfg-017",
+      "dataset_version": "wiki-default-v5",
+      "domain": "wiki_compile.default",
+      "split": "val",
+      "group_id": "cfg-v1",
+      "input_snapshot_id": "v5-v5-cfg-017",
+      "instruction": "依据给定资料编写「温控仪表报警死区（变体 B：多段设定）」主题的 Wiki：覆盖温控仪表报警死区（变体 B：多段设定）相关要点；引用来源中的参数、版本与适用范围；结论必须与资料一致，禁止臆造与无证据补充；多资料冲突时按适用范围与判定标准处理。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v5.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "温控仪表报警死区（变体 B：多段设定）（约束资料）",
+      "wiki_category": "产品资料",
+      "source_family": "配置约束",
+      "sources": [
+        {
+          "doc_id": "d1",
+          "title": "温控仪表报警死区（变体 B：多段设定）",
+          "file": "v5-cfg-017.md"
+        }
+      ]
+    },
+    {
+      "task_id": "v5-cfg-018",
+      "dataset_version": "wiki-default-v5",
+      "domain": "wiki_compile.default",
+      "split": "test",
+      "group_id": "cfg-x1",
+      "input_snapshot_id": "v5-v5-cfg-018",
+      "instruction": "依据给定资料编写「采集网关日志转发」主题的 Wiki：覆盖采集网关日志转发相关要点；引用来源中的参数、版本与适用范围；结论必须与资料一致，禁止臆造与无证据补充；多资料冲突时按适用范围与判定标准处理。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v5.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "采集网关日志转发（约束资料）",
+      "wiki_category": "产品资料",
+      "source_family": "配置约束",
+      "sources": [
+        {
+          "doc_id": "d1",
+          "title": "采集网关日志转发",
+          "file": "v5-cfg-018.md"
+        }
+      ]
+    },
+    {
+      "task_id": "v5-cfg-019",
+      "dataset_version": "wiki-default-v5",
+      "domain": "wiki_compile.default",
+      "split": "test",
+      "group_id": "cfg-x1",
+      "input_snapshot_id": "v5-v5-cfg-019",
+      "instruction": "依据给定资料编写「缓存集群内存上限」主题的 Wiki：覆盖缓存集群内存上限相关要点；引用来源中的参数、版本与适用范围；结论必须与资料一致，禁止臆造与无证据补充；多资料冲突时按适用范围与判定标准处理。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v5.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "缓存集群内存上限（约束资料）",
+      "wiki_category": "产品资料",
+      "source_family": "配置约束",
+      "sources": [
+        {
+          "doc_id": "d1",
+          "title": "缓存集群内存上限",
+          "file": "v5-cfg-019.md"
+        }
+      ]
+    },
+    {
+      "task_id": "v5-cfg-020",
+      "dataset_version": "wiki-default-v5",
+      "domain": "wiki_compile.default",
+      "split": "test",
+      "group_id": "cfg-x1",
+      "input_snapshot_id": "v5-v5-cfg-020",
+      "instruction": "依据给定资料编写「视频接入码率与关键帧」主题的 Wiki：覆盖视频接入码率与关键帧相关要点；引用来源中的参数、版本与适用范围；结论必须与资料一致，禁止臆造与无证据补充；多资料冲突时按适用范围与判定标准处理。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v5.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "视频接入码率与关键帧（约束资料）",
+      "wiki_category": "产品资料",
+      "source_family": "配置约束",
+      "sources": [
+        {
+          "doc_id": "d1",
+          "title": "视频接入码率与关键帧",
+          "file": "v5-cfg-020.md"
+        }
+      ]
+    },
+    {
+      "task_id": "v5-mig-021",
+      "dataset_version": "wiki-default-v5",
+      "domain": "wiki_compile.default",
+      "split": "train",
+      "group_id": "mig-t1",
+      "input_snapshot_id": "v5-v5-mig-021",
+      "instruction": "依据给定资料编写「订单接口鉴权协议升级」主题的 Wiki：覆盖订单接口鉴权协议升级相关要点；引用来源中的参数、版本与适用范围；结论必须与资料一致，禁止臆造与无证据补充；多资料冲突时按适用范围与判定标准处理。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v5.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "订单接口鉴权协议升级（迁移资料）",
+      "wiki_category": "产品资料",
+      "source_family": "版本迁移",
+      "sources": [
+        {
+          "doc_id": "v1",
+          "title": "订单接口鉴权协议升级 v1",
+          "file": "v5-mig-021-v1.md",
+          "product_version": "v1"
+        },
+        {
+          "doc_id": "v2",
+          "title": "订单接口鉴权协议升级 v2",
+          "file": "v5-mig-021-v2.md",
+          "product_version": "v2"
+        }
+      ]
+    },
+    {
+      "task_id": "v5-mig-022",
+      "dataset_version": "wiki-default-v5",
+      "domain": "wiki_compile.default",
+      "split": "train",
+      "group_id": "mig-t1",
+      "input_snapshot_id": "v5-v5-mig-022",
+      "instruction": "依据给定资料编写「缓存键命名空间迁移」主题的 Wiki：覆盖缓存键命名空间迁移相关要点；引用来源中的参数、版本与适用范围；结论必须与资料一致，禁止臆造与无证据补充；多资料冲突时按适用范围与判定标准处理。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v5.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "缓存键命名空间迁移（迁移资料）",
+      "wiki_category": "产品资料",
+      "source_family": "版本迁移",
+      "sources": [
+        {
+          "doc_id": "v1",
+          "title": "缓存键命名空间迁移 v1",
+          "file": "v5-mig-022-v1.md",
+          "product_version": "v1"
+        },
+        {
+          "doc_id": "v2",
+          "title": "缓存键命名空间迁移 v2",
+          "file": "v5-mig-022-v2.md",
+          "product_version": "v2"
+        }
+      ]
+    },
+    {
+      "task_id": "v5-mig-023",
+      "dataset_version": "wiki-default-v5",
+      "domain": "wiki_compile.default",
+      "split": "val",
+      "group_id": "mig-v1",
+      "input_snapshot_id": "v5-v5-mig-023",
+      "instruction": "依据给定资料编写「报表引擎公式语法升级」主题的 Wiki：覆盖报表引擎公式语法升级相关要点；引用来源中的参数、版本与适用范围；结论必须与资料一致，禁止臆造与无证据补充；多资料冲突时按适用范围与判定标准处理。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v5.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "报表引擎公式语法升级（迁移资料）",
+      "wiki_category": "产品资料",
+      "source_family": "版本迁移",
+      "sources": [
+        {
+          "doc_id": "v1",
+          "title": "报表引擎公式语法升级 v1",
+          "file": "v5-mig-023-v1.md",
+          "product_version": "v1"
+        },
+        {
+          "doc_id": "v2",
+          "title": "报表引擎公式语法升级 v2",
+          "file": "v5-mig-023-v2.md",
+          "product_version": "v2"
+        }
+      ]
+    },
+    {
+      "task_id": "v5-mig-024",
+      "dataset_version": "wiki-default-v5",
+      "domain": "wiki_compile.default",
+      "split": "val",
+      "group_id": "mig-v1",
+      "input_snapshot_id": "v5-v5-mig-024",
+      "instruction": "依据给定资料编写「设备固件配置项迁移」主题的 Wiki：覆盖设备固件配置项迁移相关要点；引用来源中的参数、版本与适用范围；结论必须与资料一致，禁止臆造与无证据补充；多资料冲突时按适用范围与判定标准处理。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v5.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "设备固件配置项迁移（迁移资料）",
+      "wiki_category": "产品资料",
+      "source_family": "版本迁移",
+      "sources": [
+        {
+          "doc_id": "v1",
+          "title": "设备固件配置项迁移 v1",
+          "file": "v5-mig-024-v1.md",
+          "product_version": "v1"
+        },
+        {
+          "doc_id": "v2",
+          "title": "设备固件配置项迁移 v2",
+          "file": "v5-mig-024-v2.md",
+          "product_version": "v2"
+        }
+      ]
+    },
+    {
+      "task_id": "v5-mig-025",
+      "dataset_version": "wiki-default-v5",
+      "domain": "wiki_compile.default",
+      "split": "test",
+      "group_id": "mig-x1",
+      "input_snapshot_id": "v5-v5-mig-025",
+      "instruction": "依据给定资料编写「消息体信封格式迁移」主题的 Wiki：覆盖消息体信封格式迁移相关要点；引用来源中的参数、版本与适用范围；结论必须与资料一致，禁止臆造与无证据补充；多资料冲突时按适用范围与判定标准处理。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v5.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "消息体信封格式迁移（迁移资料）",
+      "wiki_category": "产品资料",
+      "source_family": "版本迁移",
+      "sources": [
+        {
+          "doc_id": "v1",
+          "title": "消息体信封格式迁移 v1",
+          "file": "v5-mig-025-v1.md",
+          "product_version": "v1"
+        },
+        {
+          "doc_id": "v2",
+          "title": "消息体信封格式迁移 v2",
+          "file": "v5-mig-025-v2.md",
+          "product_version": "v2"
+        }
+      ]
+    },
+    {
+      "task_id": "v5-mig-026",
+      "dataset_version": "wiki-default-v5",
+      "domain": "wiki_compile.default",
+      "split": "test",
+      "group_id": "mig-x1",
+      "input_snapshot_id": "v5-v5-mig-026",
+      "instruction": "依据给定资料编写「日志字段脱敏规则升级」主题的 Wiki：覆盖日志字段脱敏规则升级相关要点；引用来源中的参数、版本与适用范围；结论必须与资料一致，禁止臆造与无证据补充；多资料冲突时按适用范围与判定标准处理。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v5.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "日志字段脱敏规则升级（迁移资料）",
+      "wiki_category": "产品资料",
+      "source_family": "版本迁移",
+      "sources": [
+        {
+          "doc_id": "v1",
+          "title": "日志字段脱敏规则升级 v1",
+          "file": "v5-mig-026-v1.md",
+          "product_version": "v1"
+        },
+        {
+          "doc_id": "v2",
+          "title": "日志字段脱敏规则升级 v2",
+          "file": "v5-mig-026-v2.md",
+          "product_version": "v2"
+        }
+      ]
+    },
+    {
+      "task_id": "v5-mig-027",
+      "dataset_version": "wiki-default-v5",
+      "domain": "wiki_compile.default",
+      "split": "test",
+      "group_id": "mig-x1",
+      "input_snapshot_id": "v5-v5-mig-027",
+      "instruction": "依据给定资料编写「镜像仓库签名校验升级」主题的 Wiki：覆盖镜像仓库签名校验升级相关要点；引用来源中的参数、版本与适用范围；结论必须与资料一致，禁止臆造与无证据补充；多资料冲突时按适用范围与判定标准处理。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v5.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "镜像仓库签名校验升级（迁移资料）",
+      "wiki_category": "产品资料",
+      "source_family": "版本迁移",
+      "sources": [
+        {
+          "doc_id": "v1",
+          "title": "镜像仓库签名校验升级 v1",
+          "file": "v5-mig-027-v1.md",
+          "product_version": "v1"
+        },
+        {
+          "doc_id": "v2",
+          "title": "镜像仓库签名校验升级 v2",
+          "file": "v5-mig-027-v2.md",
+          "product_version": "v2"
+        }
+      ]
+    },
+    {
+      "task_id": "v5-ts-028",
+      "dataset_version": "wiki-default-v5",
+      "domain": "wiki_compile.default",
+      "split": "val",
+      "group_id": "ts-v1",
+      "input_snapshot_id": "v5-v5-ts-028",
+      "instruction": "依据给定资料编写「应用偶发超时」主题的 Wiki：覆盖应用偶发超时相关要点；引用来源中的参数、版本与适用范围；结论必须与资料一致，禁止臆造与无证据补充；多资料冲突时按适用范围与判定标准处理。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v5.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "应用偶发超时（排查资料）",
+      "wiki_category": "产品资料",
+      "source_family": "故障排查",
+      "sources": [
+        {
+          "doc_id": "d1",
+          "title": "应用偶发超时",
+          "file": "v5-ts-028.md"
+        }
+      ]
+    },
+    {
+      "task_id": "v5-ts-029",
+      "dataset_version": "wiki-default-v5",
+      "domain": "wiki_compile.default",
+      "split": "val",
+      "group_id": "ts-v1",
+      "input_snapshot_id": "v5-v5-ts-029",
+      "instruction": "依据给定资料编写「磁盘只读报警」主题的 Wiki：覆盖磁盘只读报警相关要点；引用来源中的参数、版本与适用范围；结论必须与资料一致，禁止臆造与无证据补充；多资料冲突时按适用范围与判定标准处理。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v5.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "磁盘只读报警（排查资料）",
+      "wiki_category": "产品资料",
+      "source_family": "故障排查",
+      "sources": [
+        {
+          "doc_id": "d1",
+          "title": "磁盘只读报警",
+          "file": "v5-ts-029.md"
+        }
+      ]
+    },
+    {
+      "task_id": "v5-ts-030",
+      "dataset_version": "wiki-default-v5",
+      "domain": "wiki_compile.default",
+      "split": "val",
+      "group_id": "ts-v1",
+      "input_snapshot_id": "v5-v5-ts-030",
+      "instruction": "依据给定资料编写「链路丢包定位」主题的 Wiki：覆盖链路丢包定位相关要点；引用来源中的参数、版本与适用范围；结论必须与资料一致，禁止臆造与无证据补充；多资料冲突时按适用范围与判定标准处理。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v5.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "链路丢包定位（排查资料）",
+      "wiki_category": "产品资料",
+      "source_family": "故障排查",
+      "sources": [
+        {
+          "doc_id": "d1",
+          "title": "链路丢包定位",
+          "file": "v5-ts-030.md"
+        }
+      ]
+    },
+    {
+      "task_id": "v5-ts-031",
+      "dataset_version": "wiki-default-v5",
+      "domain": "wiki_compile.default",
+      "split": "test",
+      "group_id": "ts-x1",
+      "input_snapshot_id": "v5-v5-ts-031",
+      "instruction": "依据给定资料编写「冷库温度漂移」主题的 Wiki：覆盖冷库温度漂移相关要点；引用来源中的参数、版本与适用范围；结论必须与资料一致，禁止臆造与无证据补充；多资料冲突时按适用范围与判定标准处理。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v5.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "冷库温度漂移（排查资料）",
+      "wiki_category": "产品资料",
+      "source_family": "故障排查",
+      "sources": [
+        {
+          "doc_id": "d1",
+          "title": "冷库温度漂移",
+          "file": "v5-ts-031.md"
+        }
+      ]
+    },
+    {
+      "task_id": "v5-ts-032",
+      "dataset_version": "wiki-default-v5",
+      "domain": "wiki_compile.default",
+      "split": "test",
+      "group_id": "ts-x1",
+      "input_snapshot_id": "v5-v5-ts-032",
+      "instruction": "依据给定资料编写「机械臂抖动」主题的 Wiki：覆盖机械臂抖动相关要点；引用来源中的参数、版本与适用范围；结论必须与资料一致，禁止臆造与无证据补充；多资料冲突时按适用范围与判定标准处理。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v5.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "机械臂抖动（排查资料）",
+      "wiki_category": "产品资料",
+      "source_family": "故障排查",
+      "sources": [
+        {
+          "doc_id": "d1",
+          "title": "机械臂抖动",
+          "file": "v5-ts-032.md"
+        }
+      ]
+    },
+    {
+      "task_id": "v5-ts-033",
+      "dataset_version": "wiki-default-v5",
+      "domain": "wiki_compile.default",
+      "split": "test",
+      "group_id": "ts-x1",
+      "input_snapshot_id": "v5-v5-ts-033",
+      "instruction": "依据给定资料编写「ES 集群红盘」主题的 Wiki：覆盖ES 集群红盘相关要点；引用来源中的参数、版本与适用范围；结论必须与资料一致，禁止臆造与无证据补充；多资料冲突时按适用范围与判定标准处理。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v5.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "ES 集群红盘（排查资料）",
+      "wiki_category": "产品资料",
+      "source_family": "故障排查",
+      "sources": [
+        {
+          "doc_id": "d1",
+          "title": "ES 集群红盘",
+          "file": "v5-ts-033.md"
+        }
+      ]
+    },
+    {
+      "task_id": "v5-conf-034",
+      "dataset_version": "wiki-default-v5",
+      "domain": "wiki_compile.default",
+      "split": "val",
+      "group_id": "conf-v1",
+      "input_snapshot_id": "v5-v5-conf-034",
+      "instruction": "依据给定资料编写「通用防静电规范与洁净室例外」主题的 Wiki：覆盖通用防静电规范与洁净室例外相关要点；引用来源中的参数、版本与适用范围；结论必须与资料一致，禁止臆造与无证据补充；多资料冲突时按适用范围与判定标准处理。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v5.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "通用防静电规范与洁净室例外（冲突资料）",
+      "wiki_category": "产品资料",
+      "source_family": "多资料冲突与适用范围",
+      "sources": [
+        {
+          "doc_id": "d1",
+          "title": "通用规范 v5-conf-034",
+          "file": "v5-conf-034-a.md"
+        },
+        {
+          "doc_id": "d2",
+          "title": "例外条款 v5-conf-034",
+          "file": "v5-conf-034-b.md"
+        }
+      ]
+    },
+    {
+      "task_id": "v5-conf-035",
+      "dataset_version": "wiki-default-v5",
+      "domain": "wiki_compile.default",
+      "split": "val",
+      "group_id": "conf-v1",
+      "input_snapshot_id": "v5-v5-conf-035",
+      "instruction": "依据给定资料编写「压力容器探伤周期通用与高炉煤气例外」主题的 Wiki：覆盖压力容器探伤周期通用与高炉煤气例外相关要点；引用来源中的参数、版本与适用范围；结论必须与资料一致，禁止臆造与无证据补充；多资料冲突时按适用范围与判定标准处理。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v5.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "压力容器探伤周期通用与高炉煤气例外（冲突资料）",
+      "wiki_category": "产品资料",
+      "source_family": "多资料冲突与适用范围",
+      "sources": [
+        {
+          "doc_id": "d1",
+          "title": "通用规范 v5-conf-035",
+          "file": "v5-conf-035-a.md"
+        },
+        {
+          "doc_id": "d2",
+          "title": "例外条款 v5-conf-035",
+          "file": "v5-conf-035-b.md"
+        }
+      ]
+    },
+    {
+      "task_id": "v5-conf-036",
+      "dataset_version": "wiki-default-v5",
+      "domain": "wiki_compile.default",
+      "split": "val",
+      "group_id": "conf-v1",
+      "input_snapshot_id": "v5-v5-conf-036",
+      "instruction": "依据给定资料编写「通用密码策略与遗留系统例外」主题的 Wiki：覆盖通用密码策略与遗留系统例外相关要点；引用来源中的参数、版本与适用范围；结论必须与资料一致，禁止臆造与无证据补充；多资料冲突时按适用范围与判定标准处理。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v5.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "通用密码策略与遗留系统例外（冲突资料）",
+      "wiki_category": "产品资料",
+      "source_family": "多资料冲突与适用范围",
+      "sources": [
+        {
+          "doc_id": "d1",
+          "title": "通用规范 v5-conf-036",
+          "file": "v5-conf-036-a.md"
+        },
+        {
+          "doc_id": "d2",
+          "title": "例外条款 v5-conf-036",
+          "file": "v5-conf-036-b.md"
+        }
+      ]
+    },
+    {
+      "task_id": "v5-conf-037",
+      "dataset_version": "wiki-default-v5",
+      "domain": "wiki_compile.default",
+      "split": "test",
+      "group_id": "conf-x1",
+      "input_snapshot_id": "v5-v5-conf-037",
+      "instruction": "依据给定资料编写「通用地线阻值与变电所接地网例外」主题的 Wiki：覆盖通用地线阻值与变电所接地网例外相关要点；引用来源中的参数、版本与适用范围；结论必须与资料一致，禁止臆造与无证据补充；多资料冲突时按适用范围与判定标准处理。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v5.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "通用地线阻值与变电所接地网例外（冲突资料）",
+      "wiki_category": "产品资料",
+      "source_family": "多资料冲突与适用范围",
+      "sources": [
+        {
+          "doc_id": "d1",
+          "title": "通用规范 v5-conf-037",
+          "file": "v5-conf-037-a.md"
+        },
+        {
+          "doc_id": "d2",
+          "title": "例外条款 v5-conf-037",
+          "file": "v5-conf-037-b.md"
+        }
+      ]
+    },
+    {
+      "task_id": "v5-conf-038",
+      "dataset_version": "wiki-default-v5",
+      "domain": "wiki_compile.default",
+      "split": "test",
+      "group_id": "conf-x1",
+      "input_snapshot_id": "v5-v5-conf-038",
+      "instruction": "依据给定资料编写「通用灭菌参数与高海拔医院例外」主题的 Wiki：覆盖通用灭菌参数与高海拔医院例外相关要点；引用来源中的参数、版本与适用范围；结论必须与资料一致，禁止臆造与无证据补充；多资料冲突时按适用范围与判定标准处理。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v5.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "通用灭菌参数与高海拔医院例外（冲突资料）",
+      "wiki_category": "产品资料",
+      "source_family": "多资料冲突与适用范围",
+      "sources": [
+        {
+          "doc_id": "d1",
+          "title": "通用规范 v5-conf-038",
+          "file": "v5-conf-038-a.md"
+        },
+        {
+          "doc_id": "d2",
+          "title": "例外条款 v5-conf-038",
+          "file": "v5-conf-038-b.md"
+        }
+      ]
+    },
+    {
+      "task_id": "v5-conf-039",
+      "dataset_version": "wiki-default-v5",
+      "domain": "wiki_compile.default",
+      "split": "test",
+      "group_id": "conf-x1",
+      "input_snapshot_id": "v5-v5-conf-039",
+      "instruction": "依据给定资料编写「通用埋地管道防腐与冻土区例外」主题的 Wiki：覆盖通用埋地管道防腐与冻土区例外相关要点；引用来源中的参数、版本与适用范围；结论必须与资料一致，禁止臆造与无证据补充；多资料冲突时按适用范围与判定标准处理。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v5.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "通用埋地管道防腐与冻土区例外（冲突资料）",
+      "wiki_category": "产品资料",
+      "source_family": "多资料冲突与适用范围",
+      "sources": [
+        {
+          "doc_id": "d1",
+          "title": "通用规范 v5-conf-039",
+          "file": "v5-conf-039-a.md"
+        },
+        {
+          "doc_id": "d2",
+          "title": "例外条款 v5-conf-039",
+          "file": "v5-conf-039-b.md"
+        }
+      ]
+    }
+  ]
+}

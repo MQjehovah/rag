@@ -1,0 +1,96 @@
+{
+  "grader_v2_version": "wiki-default-grader/v2-prototype-2",
+  "status": "human_labels_approved",
+  "note": "A1–A5 已由 human-project-owner 于 2026-09-08 批准。used_for_development=false；仅建立人工参考标签，不代表真实模型校准，不允许业务晋升。一旦依据这些样例修改实现，必须把本文件标记为 used_for_development=true，且后续独立验收需另留一组未被看过的样例。",
+  "used_for_development": false,
+  "reserved_for_future_independent_acceptance": false,
+  "samples": [
+    {
+      "id": "A1",
+      "category": "faithful_synonym",
+      "ground_truth": "good",
+      "source_excerpt": "资料：联轴器对中采用激光对中仪，径向偏差限值 0.05 mm，轴向偏差限值 0.05 mm。",
+      "candidate_text": "采用激光对中仪完成轴系对中，径向与轴向的允许偏差均以 0.05 mm 为上限。",
+      "checks": [
+        "数值 0.05 mm 是否存在（A 格式级）",
+        "同义表述是否忠实覆盖来源（C 级）"
+      ],
+      "suggested_verdict": "pass（待人工核验后确认）",
+      "rationale": "数值一致、语义忠实，仅措辞不同；供对照同义误拒绝。",
+      "disputes": [
+        "「对中」与「轴系对中」是否等价",
+        "限值表述（0.05 mm 上限）与来源一致"
+      ]
+    },
+    {
+      "id": "A2",
+      "category": "negation_or_causal_opposite",
+      "ground_truth": "bad",
+      "source_excerpt": "资料：防火墙吞吐验证步骤为先禁 ping、后开 https 流量计并观察计数增长。",
+      "candidate_text": "步骤：先禁 ping，再开 https 流量计；注意：本步骤不统计 https 计数，也不作为放行依据。",
+      "checks": [
+        "关键词与步骤动作是否齐全（A 格式级）",
+        "因果方向是否被否定颠倒（C 级）"
+      ],
+      "suggested_verdict": "fail（待人工核验后确认）",
+      "rationale": "内容齐全但「不作为放行依据」与来源结论相反；格式检查不应误通过。",
+      "disputes": [
+        "否定句是否确实颠倒结论",
+        "是否需要来源句级引证"
+      ]
+    },
+    {
+      "id": "A3",
+      "category": "unit_mixup",
+      "ground_truth": "bad",
+      "source_excerpt": "资料：充电桩输入电压范围 200–240 V。",
+      "candidate_text": "输入电压范围 200–240 mV（毫伏）。",
+      "checks": [
+        "单位归一化是否识别 mV 不等于 V（A 格式级，原型应判 fail）",
+        "结论是否整体错误（C 级）"
+      ],
+      "suggested_verdict": "fail（待人工核验后确认）",
+      "rationale": "数值 200–240 存在但单位错误；若被误通过即为单位级误通过。",
+      "disputes": [
+        "范围写法 200–240 与单点检查的差异"
+      ]
+    },
+    {
+      "id": "A4",
+      "category": "rule_vs_exception_scope",
+      "ground_truth": "bad",
+      "source_excerpt": "资料：通用车间地垫用导电型 10^4–10^6 Ω；百级洁净室例外用导静电型 10^6–10^9 Ω。",
+      "candidate_text": "通用车间采用导静电型（上限 10^9 Ω 级）；洁净室例外采用导电型（10^4 Ω 级）。",
+      "checks": [
+        "两组数值/词是否齐全（A 格式级）",
+        "适用范围是否张冠李戴（C 级）"
+      ],
+      "suggested_verdict": "fail（待人工核验后确认）",
+      "rationale": "数值齐全但适用对象互换；验证是否被误通过。",
+      "disputes": [
+        "数量级写法（10^4 级）是否需要显式数值才算齐全"
+      ]
+    },
+    {
+      "id": "A5",
+      "category": "version_mixup",
+      "ground_truth": "bad",
+      "source_excerpt": "资料：v1 令牌有效期 3600 s；v2 令牌有效期 7200 s。",
+      "candidate_text": "v2 区段：令牌有效期 7200 s（未提供 v1 区段与 3600 s 对照）。",
+      "checks": [
+        "版本区段是否齐全（A 结构级，原型应判 fail）",
+        "跨版本说明是否充分（C 级）"
+      ],
+      "suggested_verdict": "fail（待人工核验后确认）",
+      "rationale": "缺少 v1 区段无法核对版本迁移差异；版本对照不完整。",
+      "disputes": [
+        "是否要求输出 v1 基线段落，还是仅说明迁移差异即可"
+      ]
+    }
+  ],
+  "human_reviewed_at": "2026-09-08",
+  "reviewer": "human-project-owner",
+  "review_store": "eval/wiki_evolution/calibration/v2-acceptance-reviews.jsonl",
+  "approval_record_hash": "9d0ee74e69156cd80ab2cd7302041010ba40c7f39356793006b31c6758741459",
+  "independent_acceptance_consumed": true
+}

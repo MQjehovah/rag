@@ -383,17 +383,33 @@ class WikiSynthesisSnapshot:
     workspace_id: str | None = None
 
 
-async def call_wiki_llm_json(messages: list, context: str = "", timeout: float = 120.0) -> dict:
+# OpenAI 兼容 chat completions 的输出长度字段。供应商拒绝该参数 → HTTP 4xx →
+# raise_for_status 上抛 LLMServiceUnavailable（明确失败，不静默移除限制后继续发送）。
+_MAX_OUTPUT_TOKENS_FIELD = "max_tokens"
+
+
+async def call_wiki_llm_json(messages: list, context: str = "",
+                             timeout: float = 120.0,
+                             max_output_tokens: int | None = None) -> dict:
     """Wiki 专用的严格 LLM 调用，区分服务不可用与非法响应。
 
     - 未配置 / 401 / 403 / 500 / 网络失败 / 超时 → 抛 LLMServiceUnavailable。
     - 请求成功但空响应 / 非 JSON → 返回 {}（由调用方判 invalid_response）。
+    - max_output_tokens 仅在显式给定时发送（OpenAI 兼容字段 max_tokens），
+      未给定 → 载荷与既有行为完全一致。
 
     不改变 call_llm_json 的默认行为（其他调用方继续返回 {}）。
     """
     if not settings.llm_api_url:
         raise LLMServiceUnavailable("llm not configured")
 
+    payload = {
+        "model": settings.llm_model,
+        "messages": messages,
+        "stream": False,
+    }
+    if max_output_tokens is not None:
+        payload[_MAX_OUTPUT_TOKENS_FIELD] = int(max_output_tokens)
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.post(
@@ -402,11 +418,7 @@ async def call_wiki_llm_json(messages: list, context: str = "", timeout: float =
                     "Authorization": f"Bearer {settings.llm_api_key}",
                     "Content-Type": "application/json",
                 },
-                json={
-                    "model": settings.llm_model,
-                    "messages": messages,
-                    "stream": False,
-                },
+                json=payload,
             )
             resp.raise_for_status()
             data = resp.json()

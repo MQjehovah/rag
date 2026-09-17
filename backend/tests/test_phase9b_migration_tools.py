@@ -623,3 +623,84 @@ class TestMain:
         ])
         assert rc == 1
         assert called["dry"] is False
+
+
+# ---------------------------------------------------------------------------
+# 运维 head / drill 父版本防复发（P53；不得再把 P44 当作当前 head）
+# ---------------------------------------------------------------------------
+
+_P44_HISTORICAL = "a9b8c7d6e5f4"
+
+
+class TestOpsHeadGate:
+    def test_expected_head_is_unique_script_head_and_drill_is_parent(self):
+        from tests.alembic_head import alembic_script_directory, current_alembic_heads
+
+        heads = current_alembic_heads()
+        assert len(heads) == 1, heads
+        assert heads[0] == migrate.ALEMBIC_HEAD_EXPECTED
+        assert migrate.ALEMBIC_HEAD_EXPECTED != _P44_HISTORICAL
+        parent = alembic_script_directory().get_revision(heads[0]).down_revision
+        assert isinstance(parent, str), parent
+        assert parent == main_mod.DEFAULT_DRILL_REV
+        assert parent != heads[0]
+        assert main_mod.DEFAULT_DRILL_REV != "d3e4f5a6b7c8"
+
+    def test_p53_db_preflight_postflight_recovery_not_false_p44(
+            self, tmp_path):
+        allowed = tmp_path / "allowed"
+        allowed.mkdir()
+        real = tmp_path / "notes.db"
+        real.write_bytes(b"fake-real")
+        db = allowed / "p53.db"
+        sqlite3.connect(str(db)).close()
+        migrate.upgrade(
+            str(db), "head", allowed_dir=str(allowed), real_db=str(real))
+        assert migrate.current_version(str(db)) == migrate.ALEMBIC_HEAD_EXPECTED
+        assert migrate.current_version(str(db)) != _P44_HISTORICAL
+
+        pre = migrate.preflight(str(db))
+        assert pre["expected_head"] == migrate.ALEMBIC_HEAD_EXPECTED
+        assert pre["head_matches"] is True
+        assert pre["current_revision"] == migrate.ALEMBIC_HEAD_EXPECTED
+
+        pf = postflight.run_postflight(
+            str(db), allowed_dir=str(allowed), real_db=str(real))
+        assert pf["passed"] is True
+
+        ver = recovery.restore_verify(
+            str(db), allowed_dir=str(allowed), real_db=str(real))
+        assert ver["passed"] is True
+        assert ver["versions"]["baseline"] == migrate.ALEMBIC_HEAD_EXPECTED
+        assert ver["versions"]["restored"] == migrate.ALEMBIC_HEAD_EXPECTED
+
+        drill = recovery.downgrade_drill(
+            str(db), main_mod.DEFAULT_DRILL_REV,
+            allowed_dir=str(allowed), real_db=str(real))
+        assert drill["final"]["expected_head"] == migrate.ALEMBIC_HEAD_EXPECTED
+        assert drill["final"]["current_version"] == migrate.ALEMBIC_HEAD_EXPECTED
+        assert drill["roundtrip"]["passed"] is True
+        assert drill["passed"] is True
+
+    def test_write_protections_still_refuse_real_db(self, tmp_path, monkeypatch):
+        real = tmp_path / "notes.db"
+        real.write_bytes(b"fake")
+        with pytest.raises(guard.WriteGuardError):
+            migrate.upgrade(
+                str(real), "head", allowed_dir=str(tmp_path), real_db=str(real))
+        with pytest.raises(guard.WriteGuardError):
+            postflight.run_postflight(
+                str(real), allowed_dir=str(tmp_path), real_db=str(real))
+        called = {"drill": False}
+
+        def _boom(*_a, **_k):
+            called["drill"] = True
+            raise AssertionError("不应真正执行 downgrade-drill")
+
+        monkeypatch.setattr(recovery, "downgrade_drill", _boom)
+        rc = main_mod.main([
+            "downgrade-drill", "--db", str(real),
+            "--allowed-dir", str(tmp_path), "--real-db", str(real),
+        ])
+        assert rc == 1
+        assert called["drill"] is False

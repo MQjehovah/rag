@@ -1,0 +1,134 @@
+{
+  "dataset_version": "wiki-default-v3",
+  "domain": "wiki_compile.default",
+  "grader_version": "wiki-default-grader/v1",
+  "description": "阶段 5 门控演示数据集：仅含两个独立 val 任务（组 val-a/val-b），用于基线/提升/持平/退化/invalid 的端到端门控演示。评分参考含 STRICT-V1 标记短语：仅当注入技能指令要求 STRICT-V1 时模拟模型才在输出中加入该标记（同一模拟模型与配置；非按标签预设分数）。",
+  "tasks": [
+    {
+      "task_id": "v3-train-01",
+      "dataset_version": "wiki-default-v3",
+      "domain": "wiki_compile.default",
+      "split": "train",
+      "group_id": "doc-family-titan810v3-train",
+      "input_snapshot_id": "v3-train-snap-01",
+      "instruction": "训练任务 01：生成覆盖适用条件与操作步骤的 Wiki（阶段5 演示读取）。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v3.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "Titan 810 训练主题 01",
+      "wiki_category": "操作指南",
+      "sources": [
+        {
+          "doc_id": "a1",
+          "title": "Titan 810 电池模组安装手册（通用）",
+          "file": "a1.md"
+        }
+      ]
+    },
+    {
+      "task_id": "v3-train-02",
+      "dataset_version": "wiki-default-v3",
+      "domain": "wiki_compile.default",
+      "split": "train",
+      "group_id": "doc-family-titan810v3-train",
+      "input_snapshot_id": "v3-train-snap-02",
+      "instruction": "训练任务 02：生成覆盖适用条件与操作步骤的 Wiki（阶段5 演示读取）。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v3.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "Titan 810 训练主题 02",
+      "wiki_category": "操作指南",
+      "sources": [
+        {
+          "doc_id": "a1",
+          "title": "Titan 810 电池模组安装手册（通用）",
+          "file": "a1.md"
+        }
+      ]
+    },
+    {
+      "task_id": "v3-train-03",
+      "dataset_version": "wiki-default-v3",
+      "domain": "wiki_compile.default",
+      "split": "train",
+      "group_id": "doc-family-titan810v3-train",
+      "input_snapshot_id": "v3-train-snap-03",
+      "instruction": "训练任务 03：生成覆盖适用条件与操作步骤的 Wiki（阶段5 演示读取）。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v3.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "Titan 810 训练主题 03",
+      "wiki_category": "操作指南",
+      "sources": [
+        {
+          "doc_id": "a1",
+          "title": "Titan 810 电池模组安装手册（通用）",
+          "file": "a1.md"
+        }
+      ]
+    },
+    {
+      "task_id": "v3-train-04",
+      "dataset_version": "wiki-default-v3",
+      "domain": "wiki_compile.default",
+      "split": "train",
+      "group_id": "doc-family-titan810v3-train",
+      "input_snapshot_id": "v3-train-snap-04",
+      "instruction": "训练任务 04：生成覆盖适用条件与操作步骤的 Wiki（阶段5 演示读取）。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v3.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "Titan 810 训练主题 04",
+      "wiki_category": "操作指南",
+      "sources": [
+        {
+          "doc_id": "a1",
+          "title": "Titan 810 电池模组安装手册（通用）",
+          "file": "a1.md"
+        }
+      ]
+    },
+    {
+      "task_id": "v3-val-a",
+      "dataset_version": "wiki-default-v3",
+      "domain": "wiki_compile.default",
+      "split": "val",
+      "group_id": "doc-family-titan810v3-val-a",
+      "input_snapshot_id": "v3-snap-a",
+      "instruction": "根据资料生成 Wiki 正文：覆盖适用条件与关键参数。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v3.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "Titan 810 电池模组安装与安全（v3a）",
+      "wiki_category": "操作指南",
+      "sources": [
+        {
+          "doc_id": "a1",
+          "title": "Titan 810 电池模组安装手册（通用）",
+          "file": "a1.md"
+        }
+      ]
+    },
+    {
+      "task_id": "v3-val-b",
+      "dataset_version": "wiki-default-v3",
+      "domain": "wiki_compile.default",
+      "split": "val",
+      "group_id": "doc-family-titan810v3-val-b",
+      "input_snapshot_id": "v3-snap-b",
+      "instruction": "根据资料生成 Wiki 正文：覆盖适用条件与关键参数。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v3.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "Titan 810 电池模组检修参数（v3b）",
+      "wiki_category": "操作指南",
+      "sources": [
+        {
+          "doc_id": "d1",
+          "title": "Titan 810 电池模组关键参数清单",
+          "file": "d1.md"
+        }
+      ]
+    }
+  ]
+}

@@ -161,6 +161,58 @@ class Settings(BaseSettings):
     # Phase 7D：wiki.default 生产 active pipeline version（只允许 "2"/"3"；未知值启动失败）。
     wiki_pipeline_active_version: str = "3"
 
+    # 阶段 8A：演化实验只读控制台（服务端受控根映射，JSON 对象 {root_id: 绝对目录}）。
+    wikiskill_console_enabled: bool = False
+    wikiskill_console_roots: str = ""
+
+    # 阶段 8C：演化运行控制（创建/启动/暂停/恢复/取消，仅管理员；写实验根）。
+    # 独立于只读开关：即使 console 只读开启，控制写端点仍默认关闭。
+    wikiskill_evolution_admin_enabled: bool = False
+    # 真实模式启动白名单（本轮默认 False：真实执行未授权；模拟不受影响）。
+    wikiskill_evolution_admin_real_enabled: bool = False
+    # 模拟证据晋升旁路（仅隔离测试环境可开启；生产默认 False，请求参数不能开启）。
+    wikiskill_evolution_allow_simulated_promotion: bool = False
+    # 业务晋升环境："production"（默认）| "isolated-test"。
+    # production 下本包不开放业务晋升资格（真实供应商/校准/批准独立待办），即使
+    # 误设模拟旁路与请求 allow_simulated=true 也一律拒绝；"isolated-test" 仅供
+    # 隔离测试夹具建立受控资格（记录永不标为真实效果）。
+    wikiskill_promotion_env: str = "production"
+
+    # 允许发送请求的供应商端点（空格/逗号分隔 host[:port] 或完整 URL；空 → 仅
+    # 允许 settings.llm_api_url 与 wikiskill_reviewer_api_url 的 host）。
+    # 凭据通过“服务端受控端点 + 全局密钥”绑定：任意地址不得搭配全局密钥发送；
+    # 冻结/恢复路径在发送前仍校验该名单（防 settings/override 漂移外联）。
+    wikiskill_allowed_llm_endpoints: str = ""
+
+    # 受控凭据—端点映射（JSON）：{ "<provider_id>": {
+    #   "credential_env": "<密钥所在环境变量名（非秘密引用）>",
+    #   "endpoints": ["scheme://host[:port]/allowed/path…"],  # 含路径前缀
+    #   "allow_insecure": false } }。
+    # provider/config ID、凭据引用、允许端点显式关联；冻结记录只存非秘密标识。
+    # 为空 → 兼容模式：沿用 llm_api_key/llm_api_url（仍受 allowed 名单约束）。
+    wikiskill_credential_providers: str = ""
+    # real 角色默认 provider_id（credential_providers 非空时生效；可按角色 override）
+    wikiskill_default_provider: str = ""
+    # 正式 real 路径门禁：必须使用受控 provider 映射（executor/maintainer/proposer，
+    # review=v2 时评审角色也须绑定），不允许因 providers 未配置自动落入旧全局
+    # key 模式。旧记录可读/展示；不满足契约的真实启动在首个请求前拒绝。
+    wikiskill_require_provider_binding: bool = True
+    # 评审角色使用的 provider_id（review=v2；须在 credential_providers 内且其
+    # endpoints 覆盖评审端点；credential_env 为评审密钥的非秘密引用）
+    wikiskill_reviewer_provider: str = ""
+
+    # 阶段 8D：业务编译读取作用域内的 WikiSkill 业务绑定（默认 False → 旧行为不变）。
+    wikiskill_business_compile_enabled: bool = False
+
+    # Grader v2 语义评审模型（独立显式配置：绝不自动沿用执行模型）。
+    # 缺 model_id / api_url / prompt_version → real 评审 fail closed。
+    wikiskill_reviewer_model_id: str = ""
+    wikiskill_reviewer_api_url: str = ""
+    wikiskill_reviewer_prompt_version: str = ""
+    wikiskill_reviewer_timeout: float = 60.0
+    wikiskill_reviewer_retries: int = 1
+    wikiskill_reviewer_max_output_tokens: int | None = None
+
     # Phase 9B：KnowledgeCompileRun worker lease/heartbeat/poll/renew 时长接线
     # （纯配置，默认值=现值 300/300/2.0/30.0，生产行为不变）。跨进程故障恢复测试
     # 经这些 env 注入短 lease 以加速 stale 判定。executor.claim_by_id 与

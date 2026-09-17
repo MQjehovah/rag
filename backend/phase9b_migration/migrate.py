@@ -17,8 +17,9 @@ from pathlib import Path
 
 from phase9b_migration import guard
 
-# 唯一 head（backend/alembic/versions/a9b8c7d6e5f4_p44_...py）。若仓库 head 变更须同步更新。
-ALEMBIC_HEAD_EXPECTED = "a9b8c7d6e5f4"
+# 运维安全门：显式固定当前唯一 head（P54）。仓库 head 变更时必须同步更新本常量，
+# 不得改为运行时动态接受任意 head（避免误把分叉/过期副本当成已对齐）。
+ALEMBIC_HEAD_EXPECTED = "5a94d0e3b2c8"
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 

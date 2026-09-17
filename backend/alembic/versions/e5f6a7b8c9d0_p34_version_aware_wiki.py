@@ -58,9 +58,10 @@ def upgrade() -> None:
     _add_column("wiki_sections", "diff_notice", sa.Text(), inspector)
 
     # 回填：summary → common；facts/body → unversioned；locked → protected。
+    # Boolean 字面量用 TRUE/FALSE（PG 严格；SQLite 同样接受）。
     op.execute(
         "UPDATE wiki_sections SET "
-        "version_label = 'common', is_common = 1, "
+        "version_label = 'common', is_common = TRUE, "
         "content_origin = COALESCE(content_origin, 'auto'), "
         "merge_policy = COALESCE(merge_policy, 'auto'), "
         "version_status = 'confirmed', version_confidence = 1.0 "
@@ -68,18 +69,18 @@ def upgrade() -> None:
     )
     op.execute(
         "UPDATE wiki_sections SET "
-        "version_label = 'unversioned', is_common = 0, "
+        "version_label = 'unversioned', is_common = FALSE, "
         "content_origin = COALESCE(content_origin, 'auto'), "
-        "merge_policy = CASE WHEN locked = 1 THEN 'protected' ELSE 'auto' END, "
+        "merge_policy = CASE WHEN locked = TRUE THEN 'protected' ELSE 'auto' END, "
         "version_status = 'unversioned', version_confidence = 0.0 "
         "WHERE (section_type IN ('facts', 'body')) AND version_label IS NULL"
     )
     # 其余历史 Section（entities/evidence/gaps 等）也归入 unversioned，不猜测版本。
     op.execute(
         "UPDATE wiki_sections SET "
-        "version_label = 'unversioned', is_common = 0, "
+        "version_label = 'unversioned', is_common = FALSE, "
         "content_origin = COALESCE(content_origin, 'auto'), "
-        "merge_policy = CASE WHEN locked = 1 THEN 'protected' ELSE 'auto' END, "
+        "merge_policy = CASE WHEN locked = TRUE THEN 'protected' ELSE 'auto' END, "
         "version_status = 'unversioned', version_confidence = 0.0 "
         "WHERE version_label IS NULL"
     )

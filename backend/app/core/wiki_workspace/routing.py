@@ -120,10 +120,13 @@ def ensure_notebook_workspace(db: Session, notebook: Notebook) -> WikiWorkspace 
         # 该 notebook 默认私用空间的 workspace 已被归档 → 不自动向其写入新内容（fail closed）
         return None
     if workspace is None:
+        # 新自动工作区：优先用 Notebook 名称；空名才回退 scope_id。
+        # 复用已有 workspace 时不得改名（避免覆盖管理员手工名称）。
+        notebook_title = (getattr(notebook, "name", None) or "").strip()
         workspace = WikiWorkspace(
             id=str(uuid.uuid4()),
             key=key,
-            name=scope_id,
+            name=notebook_title or scope_id,
             description=None,
             acl_scope=access_control.acl_json_for_scope(scope),
             scope_id=scope_id,

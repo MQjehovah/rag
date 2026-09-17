@@ -48,9 +48,11 @@ def upgrade() -> None:
 
     # 显式回填（V4 Phase C 最后一次补漏第 7 点）：
     # 现有 Page 必须进入 Page 驱动 Wiki 初始构建范围。
-    op.execute("UPDATE pages SET wiki_dirty = 1 WHERE wiki_dirty IS NULL")
+    # TRUE/FALSE 同时兼容 SQLite 与 PostgreSQL；整数 1/0 在 PG boolean 列会
+    # DatatypeMismatch（SQLite 把 Boolean 存成 INTEGER，因此此前未暴露）。
+    op.execute("UPDATE pages SET wiki_dirty = TRUE WHERE wiki_dirty IS NULL")
     # 旧 Wiki 默认不脏（等来源更新再触发）。
-    op.execute("UPDATE wiki_pages SET dirty = 0 WHERE dirty IS NULL")
+    op.execute("UPDATE wiki_pages SET dirty = FALSE WHERE dirty IS NULL")
 
 
 def downgrade() -> None:

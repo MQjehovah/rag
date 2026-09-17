@@ -1,0 +1,114 @@
+{
+  "dataset_version": "wiki-default-v2",
+  "domain": "wiki_compile.default",
+  "grader_version": "wiki-default-grader/v1",
+  "description": "阶段 4 数据集版本 v2：install 家族在独立 group/workspace 下提供 4 个不同 train 任务（满足提议者 ≥4 条不同训练轨迹前置），另有独立 val/test 组。group 'doc-family-titan810v2-install' 派生独立 workspace，不与 v1 经验/轨迹混用。",
+  "tasks": [
+    {
+      "task_id": "v2-install-01",
+      "dataset_version": "wiki-default-v2",
+      "domain": "wiki_compile.default",
+      "split": "train",
+      "group_id": "doc-family-titan810v2-install",
+      "input_snapshot_id": "v2-snap-01",
+      "instruction": "根据资料生成 Wiki 正文：覆盖适用条件、前置条件与操作步骤，关键参数与来源一致，禁止引入资料外事实。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v2.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "Titan 810 电池模组安装与安全",
+      "wiki_category": "操作指南",
+      "sources": [
+        {"doc_id": "a1", "title": "Titan 810 电池模组安装手册（通用）", "file": "a1.md"},
+        {"doc_id": "a2", "title": "Titan 810 电池模组安全与电压公告", "file": "a2.md"}
+      ]
+    },
+    {
+      "task_id": "v2-install-02",
+      "dataset_version": "wiki-default-v2",
+      "domain": "wiki_compile.default",
+      "split": "train",
+      "group_id": "doc-family-titan810v2-install",
+      "input_snapshot_id": "v2-snap-02",
+      "instruction": "生成 Wiki：须包含适用条件、前置条件、完整操作步骤与关键参数；若资料含禁止事项须写入注意节。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v2.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "Titan 810 电池模组安装与安全（含注意节）",
+      "wiki_category": "操作指南",
+      "sources": [
+        {"doc_id": "a1", "title": "Titan 810 电池模组安装手册（通用）", "file": "a1.md"},
+        {"doc_id": "a2", "title": "Titan 810 电池模组安全与电压公告", "file": "a2.md"}
+      ]
+    },
+    {
+      "task_id": "v2-install-03",
+      "dataset_version": "wiki-default-v2",
+      "domain": "wiki_compile.default",
+      "split": "train",
+      "group_id": "doc-family-titan810v2-install",
+      "input_snapshot_id": "v2-snap-03",
+      "instruction": "分步骤生成 Wiki：先列适用条件与前置条件，再列操作步骤，最后列关键参数；每个要点回指来源。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v2.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "Titan 810 电池模组安装与安全（分步）",
+      "wiki_category": "操作指南",
+      "sources": [
+        {"doc_id": "a1", "title": "Titan 810 电池模组安装手册（通用）", "file": "a1.md"},
+        {"doc_id": "a2", "title": "Titan 810 电池模组安全与电压公告", "file": "a2.md"}
+      ]
+    },
+    {
+      "task_id": "v2-install-04",
+      "dataset_version": "wiki-default-v2",
+      "domain": "wiki_compile.default",
+      "split": "train",
+      "group_id": "doc-family-titan810v2-install",
+      "input_snapshot_id": "v2-snap-04",
+      "instruction": "生成 Wiki 正文：强调来源一致性，关键值（扭矩/电压限值）必须与资料逐字一致，禁止改写数值。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v2.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "Titan 810 电池模组安装与安全（数值一致）",
+      "wiki_category": "操作指南",
+      "sources": [
+        {"doc_id": "a1", "title": "Titan 810 电池模组安装手册（通用）", "file": "a1.md"},
+        {"doc_id": "a2", "title": "Titan 810 电池模组安全与电压公告", "file": "a2.md"}
+      ]
+    },
+    {
+      "task_id": "v2-val-01",
+      "dataset_version": "wiki-default-v2",
+      "domain": "wiki_compile.default",
+      "split": "val",
+      "group_id": "doc-family-titan810v2-val",
+      "input_snapshot_id": "v2-snap-val",
+      "instruction": "根据资料生成 Wiki：覆盖关键参数清单。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v2.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "Titan 810 电池模组关键参数（v2 验证）",
+      "wiki_category": "产品资料",
+      "sources": [
+        {"doc_id": "d1", "title": "Titan 810 电池模组关键参数清单", "file": "d1.md"}
+      ]
+    },
+    {
+      "task_id": "v2-test-01",
+      "dataset_version": "wiki-default-v2",
+      "domain": "wiki_compile.default",
+      "split": "test",
+      "group_id": "doc-family-titan810v2-test",
+      "input_snapshot_id": "v2-snap-test",
+      "instruction": "根据资料生成 Wiki：关键参数与来源一致。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v2.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "Titan 810 电池模组关键参数（v2 测试）",
+      "wiki_category": "产品资料",
+      "sources": [
+        {"doc_id": "d1", "title": "Titan 810 电池模组关键参数清单", "file": "d1.md"}
+      ]
+    }
+  ]
+}

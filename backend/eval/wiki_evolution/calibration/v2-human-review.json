@@ -1,0 +1,11 @@
+{
+  "grader_v2_version": "wiki-default-grader/v2-prototype-1",
+  "note": "人工验收集骨架：与校准开发集分离；待人工或独立模型给出最终判定后才填入 entries。",
+  "pending_review_sample_ids": ["S1", "S3", "S4", "S7", "S8", "S10"],
+  "human_verdict_schema": {
+    "sample_id": "",
+    "human_verdict": "pass|fail|unable",
+    "notes": ""
+  },
+  "entries": []
+}

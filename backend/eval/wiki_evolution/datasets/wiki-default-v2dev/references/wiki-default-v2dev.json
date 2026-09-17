@@ -1,0 +1,277 @@
+{
+ "dataset_version": "wiki-default-v2dev",
+ "vd2-train-01": {
+  "v2_spec": {
+   "claims": [
+    {
+     "cid": "t1v",
+     "subject": "供电电压",
+     "predicate": "为",
+     "object": "220",
+     "unit": "V"
+    },
+    {
+     "cid": "t1t",
+     "subject": "温度",
+     "predicate": "为",
+     "object": "25",
+     "unit": "°C"
+    }
+   ],
+   "coverage": [
+    {
+     "topic": "操作步骤"
+    },
+    {
+     "topic": "巡检"
+    }
+   ],
+   "conflicts": []
+  },
+  "v2_forbidden": [],
+  "expected_points": [],
+  "forbidden": []
+ },
+ "vd2-train-02": {
+  "v2_spec": {
+   "claims": [
+    {
+     "cid": "t2v",
+     "subject": "供电电压",
+     "predicate": "为",
+     "object": "220",
+     "unit": "V"
+    },
+    {
+     "cid": "t2t",
+     "subject": "温度",
+     "predicate": "为",
+     "object": "25",
+     "unit": "°C"
+    }
+   ],
+   "coverage": [
+    {
+     "topic": "操作步骤"
+    },
+    {
+     "topic": "巡检"
+    }
+   ],
+   "conflicts": []
+  },
+  "v2_forbidden": [],
+  "expected_points": [],
+  "forbidden": []
+ },
+ "vd2-train-03": {
+  "v2_spec": {
+   "claims": [
+    {
+     "cid": "t3v",
+     "subject": "供电电压",
+     "predicate": "为",
+     "object": "220",
+     "unit": "V"
+    },
+    {
+     "cid": "t3t",
+     "subject": "温度",
+     "predicate": "为",
+     "object": "25",
+     "unit": "°C"
+    }
+   ],
+   "coverage": [
+    {
+     "topic": "操作步骤"
+    },
+    {
+     "topic": "巡检"
+    }
+   ],
+   "conflicts": []
+  },
+  "v2_forbidden": [],
+  "expected_points": [],
+  "forbidden": []
+ },
+ "vd2-train-04": {
+  "v2_spec": {
+   "claims": [
+    {
+     "cid": "t4v",
+     "subject": "供电电压",
+     "predicate": "为",
+     "object": "220",
+     "unit": "V"
+    },
+    {
+     "cid": "t4t",
+     "subject": "温度",
+     "predicate": "为",
+     "object": "25",
+     "unit": "°C"
+    }
+   ],
+   "coverage": [
+    {
+     "topic": "操作步骤"
+    },
+    {
+     "topic": "巡检"
+    }
+   ],
+   "conflicts": []
+  },
+  "v2_forbidden": [],
+  "expected_points": [],
+  "forbidden": []
+ },
+ "vd2-train-05": {
+  "v2_spec": {
+   "claims": [
+    {
+     "cid": "t5v",
+     "subject": "供电电压",
+     "predicate": "为",
+     "object": "220",
+     "unit": "V"
+    },
+    {
+     "cid": "t5t",
+     "subject": "温度",
+     "predicate": "为",
+     "object": "25",
+     "unit": "°C"
+    }
+   ],
+   "coverage": [
+    {
+     "topic": "操作步骤"
+    },
+    {
+     "topic": "巡检"
+    }
+   ],
+   "conflicts": []
+  },
+  "v2_forbidden": [],
+  "expected_points": [],
+  "forbidden": []
+ },
+ "vd2-val-pass": {
+  "v2_spec": {
+   "claims": [
+    {
+     "cid": "voltage",
+     "subject": "供电电压",
+     "predicate": "为",
+     "object": "220",
+     "unit": "V"
+    },
+    {
+     "cid": "temp",
+     "subject": "温度",
+     "predicate": "为",
+     "object": "25",
+     "unit": "°C"
+    }
+   ],
+   "coverage": [
+    {
+     "topic": "操作步骤"
+    },
+    {
+     "topic": "适用条件"
+    }
+   ],
+   "conflicts": []
+  },
+  "v2_forbidden": [],
+  "expected_points": [],
+  "forbidden": []
+ },
+ "vd2-val-fail": {
+  "v2_spec": {
+   "claims": [
+    {
+     "cid": "temp_lim",
+     "subject": "温度上限",
+     "predicate": "≤",
+     "object": 40,
+     "unit": "°C"
+    },
+    {
+     "cid": "voltage",
+     "subject": "供电电压",
+     "predicate": "为",
+     "object": "220",
+     "unit": "V"
+    }
+   ],
+   "coverage": [
+    {
+     "topic": "故障排查"
+    }
+   ],
+   "conflicts": []
+  },
+  "v2_forbidden": [],
+  "expected_points": [],
+  "forbidden": []
+ },
+ "vd2-val-versioned": {
+  "v2_spec": {
+   "claims": [
+    {
+     "cid": "v50",
+     "subject": "频率 v1.0",
+     "predicate": "支持",
+     "object": "50",
+     "unit": "",
+     "version": "v1.0"
+    },
+    {
+     "cid": "v60",
+     "subject": "频率 v1.1",
+     "predicate": "支持",
+     "object": "60",
+     "unit": "",
+     "version": "v1.1"
+    }
+   ],
+   "coverage": [
+    {
+     "topic": "版本 v1.1"
+    }
+   ],
+   "conflicts": []
+  },
+  "v2_forbidden": [
+   "60Hz 泄漏进 v1.0"
+  ],
+  "expected_points": [],
+  "forbidden": [
+   "60Hz 泄漏进 v1.0"
+  ]
+ },
+ "vd2-val-fail2": {
+  "v2_spec": {
+   "claims": [
+    {
+     "cid": "cable8",
+     "subject": "线缆直径",
+     "predicate": "≥",
+     "object": 8,
+     "unit": "mm"
+    }
+   ],
+   "coverage": [],
+   "conflicts": []
+  },
+  "v2_forbidden": [],
+  "expected_points": [],
+  "forbidden": []
+ }
+}

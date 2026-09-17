@@ -10,6 +10,8 @@ from typing import Sequence, Union
 from alembic import op
 import sqlalchemy as sa
 
+from migration_compat import drop_columns_compat
+
 
 revision: str = "a2b3c4d5e6f7"
 down_revision: Union[str, Sequence[str], None] = "f1a2b3c4d5e6"
@@ -28,8 +30,7 @@ def upgrade() -> None:
                     "UPDATE query_logs SET card_citations=ko_citations "
                     "WHERE card_citations IS NULL AND ko_citations IS NOT NULL"
                 ))
-            with op.batch_alter_table("query_logs", recreate="always") as batch:
-                batch.drop_column("ko_citations")
+            drop_columns_compat(op, "query_logs", ["ko_citations"])
     if inspector.has_table("runtime_feature_flags"):
         bind.execute(sa.text(
             "DELETE FROM runtime_feature_flags WHERE name='legacy_search_visible'"

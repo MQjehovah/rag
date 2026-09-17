@@ -4,7 +4,10 @@
 //   1) 前端 acceptance dev server 运行在 3001：cd frontend && npm run dev:acceptance
 //   2) Chrome/Edge 可用（CHROME_PATH 可覆盖；默认取本机 Chrome）
 // 运行：node frontend/tests/workspace-navigation/accept.mjs
-// 环境变量（可选）：FRONT_URL / MOCK_PORT / CDP_PORT / SHOTS_DIR
+// 环境变量（可选）：FRONT_URL / MOCK_PORT / CDP_PORT / SHOTS_DIR / ONLY
+//   ONLY=R11           仅跑 R11（Wiki 任务列表/页面滚动）
+//   ONLY=R12           仅跑 R12（工作区重名显示）
+//   ONLY=R10,R11       仅跑列出的场景；默认不设则完整运行全部场景
 // 退出码：
 //   0  = 所有预期场景执行且全部通过
 //   1  = 存在失败断言 / 驱动异常 / 启动失败 / 未执行完预期场景 / 空结果
@@ -14,6 +17,7 @@
 //   NEG_ERROR=1  node accept.mjs   # 注入驱动异常
 //
 // 验收场景（真实用户路径，禁止手工 pushState 制造历史）：
+//   R11 管理员 20 条编译任务：列表内部滚动 + 分页栏固定 + wiki-page 页面滚动（桌面/窄屏）
 //   R1  工作区列表首次 500 → 点击“重试”→ 完整恢复 ready
 //   R2  无权限 workspace URL → 用户从选择器主动切到可见工作区
 //   R3  真实选择器 A→B，再浏览器后退/前进恢复（列表不混杂）
@@ -51,8 +55,14 @@ const results = []
 const LOGF = path.join(os.tmpdir(), 'wiki-workspace-nav.log')
 const NEG_ASSERT = process.env.NEG_ASSERT === '1'
 const NEG_ERROR = process.env.NEG_ERROR === '1'
+const ONLY = (process.env.ONLY || '').split(',').map((s) => s.trim()).filter(Boolean)
+const VISUAL_DIR = path.join(__dirname, 'visual-r11')
 let driverFailed = false
 let summarized = false
+
+function allowScenario(id) {
+  return ONLY.length === 0 || ONLY.includes(id)
+}
 
 function summarize() {
   if (summarized) return null
@@ -161,6 +171,16 @@ async function shot(cdp, name) {
     fs.writeFileSync(file, Buffer.from(r.data, 'base64'))
     return file
   } catch (e) { return 'shot-failed:' + e.message }
+}
+async function shotVisual(cdp, name) {
+  const file = await shot(cdp, name)
+  try {
+    fs.mkdirSync(VISUAL_DIR, { recursive: true })
+    if (file && !String(file).startsWith('shot-failed')) {
+      fs.copyFileSync(file, path.join(VISUAL_DIR, name + '.png'))
+    }
+  } catch {}
+  return file
 }
 async function setViewport(cdp, width, height, mobile = false) {
   await cdp.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile })
@@ -286,8 +306,130 @@ async function catalogTitles(cdp) {
   return evaluate(cdp, `[...document.querySelectorAll('.catalog-item .catalog-title')].map(el => el.textContent.trim())`)
 }
 
+const SCROLL_PROBE = `(() => {
+  const visIn = (el, box) => {
+    if (!el || !box) return false;
+    const er = el.getBoundingClientRect();
+    const cr = box.getBoundingClientRect();
+    return er.width > 0 && er.height > 0 && er.bottom > cr.top + 1 && er.top < cr.bottom - 1;
+  };
+  const inWin = (el) => {
+    if (!el) return false;
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0 && r.bottom > 0 && r.top < window.innerHeight && r.right > 0 && r.left < window.innerWidth;
+  };
+  const page = document.querySelector('.wiki-page');
+  const list = document.querySelector('.arp-list-scroll');
+  const footer = document.querySelector('.arp-footer');
+  const panel = document.querySelector('.admin-runs-panel');
+  const first = document.querySelector('.compile-run-row[data-run-id="cr-r11-01"]');
+  const last = document.querySelector('.compile-run-row[data-run-id="cr-r11-20"]');
+  const gm = document.querySelector('.global-manage');
+  const body = document.querySelector('.wiki-body');
+  const catalog = document.querySelector('.catalog-pane') || document.querySelector('.empty-tip');
+  const pc = page ? getComputedStyle(page) : null;
+  const lc = list ? getComputedStyle(list) : null;
+  const bc = body ? getComputedStyle(body) : null;
+  return {
+    innerW: window.innerWidth,
+    innerH: window.innerHeight,
+    docW: document.documentElement.scrollWidth,
+    runCount: document.querySelectorAll('.compile-run-row').length,
+    arpBody: !!document.querySelector('.arp-body'),
+    page: page ? { scrollHeight: page.scrollHeight, clientHeight: page.clientHeight, scrollTop: page.scrollTop, overflowY: pc.overflowY, overflowX: pc.overflowX, height: pc.height } : null,
+    list: list ? { scrollHeight: list.scrollHeight, clientHeight: list.clientHeight, scrollTop: list.scrollTop, overflowY: lc.overflowY } : null,
+    wikiBodyMinH: body ? parseFloat(bc.minHeight) || 0 : 0,
+    wikiBodyFlex: body ? bc.flex : '',
+    footerInWin: inWin(footer),
+    footerInPanel: visIn(footer, panel),
+    firstInList: visIn(first, list),
+    lastInList: visIn(last, list),
+    gmInWin: inWin(gm),
+    bodyInWin: inWin(body),
+    catalogInWin: inWin(catalog),
+    stages: document.querySelectorAll('.run-stage-row').length,
+    collapsed: !!(panel && panel.classList.contains('is-collapsed')),
+    text: document.body ? document.body.innerText : '',
+  };
+})()`
+
+async function scrollProbe(cdp) {
+  return evaluate(cdp, SCROLL_PROBE)
+}
+async function setElScrollTop(cdp, selector, value) {
+  return evaluate(cdp, `(() => {
+    const el = document.querySelector(${JSON.stringify(selector)});
+    if (!el) return null;
+    el.scrollTop = ${JSON.stringify(value)};
+    return { scrollTop: el.scrollTop, scrollHeight: el.scrollHeight, clientHeight: el.clientHeight };
+  })()`)
+}
+async function scrollElBy(cdp, selector, delta) {
+  return evaluate(cdp, `(() => {
+    const el = document.querySelector(${JSON.stringify(selector)});
+    if (!el) return null;
+    const before = el.scrollTop;
+    el.scrollTop = before + ${Number(delta)};
+    return { before, after: el.scrollTop, scrollHeight: el.scrollHeight, clientHeight: el.clientHeight };
+  })()`)
+}
+async function scrollElToEnd(cdp, selector) {
+  return evaluate(cdp, `(() => {
+    const el = document.querySelector(${JSON.stringify(selector)});
+    if (!el) return null;
+    el.scrollTop = el.scrollHeight;
+    return { scrollTop: el.scrollTop, scrollHeight: el.scrollHeight, clientHeight: el.clientHeight };
+  })()`)
+}
+async function scrollIntoViewInPage(cdp, selector) {
+  return evaluate(cdp, `(() => {
+    const el = document.querySelector(${JSON.stringify(selector)});
+    if (!el) return false;
+    el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0 && r.bottom > 0 && r.top < window.innerHeight;
+  })()`)
+}
+async function clickCss(cdp, selector) {
+  return evaluate(cdp, `(() => {
+    const el = document.querySelector(${JSON.stringify(selector)});
+    if (!el) return false;
+    el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    return true;
+  })()`)
+}
+
 async function mockControl(patch) {
   await fetch(`http://127.0.0.1:${MOCK_PORT}/__control`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) })
+}
+async function mockRequestLog() {
+  const r = await fetch(`http://127.0.0.1:${MOCK_PORT}/__log`)
+  return (await r.json()).log || []
+}
+async function resetMockLog() {
+  await fetch(`http://127.0.0.1:${MOCK_PORT}/__reset-log`)
+}
+async function workspaceOptionTexts(cdp) {
+  await evaluate(cdp, `(() => {
+    const sel = document.querySelector('.workspace-bar .el-select');
+    if (!sel) return 'no-select';
+    const t = sel.querySelector('.el-select__wrapper') || sel;
+    t.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    return 'clicked';
+  })()`)
+  await sleep(220)
+  const texts = await evaluate(cdp, `[...document.querySelectorAll('.el-select-dropdown__item')]
+    .filter(el => el.offsetParent !== null)
+    .map(el => (el.textContent || '').trim())`)
+  await evaluate(cdp, `document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))`)
+  await sleep(120)
+  return texts || []
+}
+async function currentWorkspaceLabelText(cdp) {
+  return evaluate(cdp, `(() => {
+    const el = document.querySelector('.ws-current-name');
+    return el ? el.textContent.trim() : '';
+  })()`)
 }
 async function resetAllControl() {
   await mockControl({
@@ -343,8 +485,11 @@ async function main() {
 
     let ok = false
     let s
+    const runFull = ONLY.length === 0
+    if (ONLY.length) LOG(`[FILTER] ONLY=${ONLY.join(',')}`)
 
     // ===== R1：工作区列表首次 500 → 重试 → 完整恢复 =====
+    if (runFull) {
     await resetAllControl()
     await setToken(cdp, 'tok-eng')
     await mockControl({ errorWorkspaces: true })
@@ -548,8 +693,10 @@ async function main() {
     record('R9 快速连续导航后停留在最新 Workspace（旧恢复不覆盖）', ok, `c1=${c1} c2=${c2}`)
     await shot(cdp, 'r9-rapid-nav')
     await resetAllControl()
+    } // end runFull R1-R9
 
     // ===== R10：320px 打开主题 + 管理员绑定面板，无横向溢出 =====
+    if (allowScenario('R10')) {
     await resetAllControl()
     await setToken(cdp, 'tok-admin')
     await setViewport(cdp, 320, 800, false)
@@ -568,8 +715,10 @@ async function main() {
     record('R10 320px 主题+管理员绑定面板可用且无横向溢出', ok, JSON.stringify(ov))
     await shot(cdp, 'r10-narrow-admin-detail')
     await clearViewport(cdp)
+    } // end R10
 
     // ===== W1：详情初次读取严格拒绝错误 workspace_id（other/empty/null/absent） =====
+    if (runFull) {
     for (const mode of ['other', 'empty', 'null', 'absent']) {
       await resetAllControl()
       await setToken(cdp, 'tok-both')
@@ -670,6 +819,202 @@ async function main() {
       && f3cats.length === 1 && f3cats[0] === '接线规范' && f3body.includes('操作步骤')
     record('F3b 刷新后 pageId/Workspace/筛选一致（正文可继续阅读）', ok, `cats=${JSON.stringify(f3cats)}`)
     await shot(cdp, 'f3-refresh-consistent')
+    } // end runFull W1-F3
+
+    // ===== R11：20 条编译任务 — 列表内部滚动 + 分页栏固定 + wiki-page 页面滚动 =====
+    if (allowScenario('R11')) {
+      await resetAllControl()
+      await setToken(cdp, 'tok-admin')
+      await setViewport(cdp, 1920, 1080, false)
+      await goto(cdp, `${FRONT}/knowledge/wiki/p-eng-1?workspace_id=ws-eng`, '当前工作区编译任务')
+      const ready11 = await waitForText(cdp, '当前页 20 条', 10000)
+      await waitForText(cdp, '全工作区匹配', 4000)
+      await sleep(400)
+
+      let p0 = await scrollProbe(cdp)
+      const labelsOk = ready11 && p0.text.includes('当前页 20 条') && p0.text.includes('全工作区匹配') && p0.runCount === 20
+      record('R11a 桌面显示当前页20条与全工作区匹配', labelsOk, `runs=${p0.runCount} ready=${ready11}`)
+
+      const oyOk = (v) => ['auto', 'scroll', 'overlay'].includes(v)
+      const listOverflows = !!(p0.list && p0.list.scrollHeight > p0.list.clientHeight && oyOk(p0.list.overflowY))
+      record('R11b 任务列表 scrollHeight>clientHeight 且 overflow-y 可滚动', listOverflows, JSON.stringify(p0.list))
+
+      await setElScrollTop(cdp, '.arp-list-scroll', 0)
+      const listDelta = await scrollElBy(cdp, '.arp-list-scroll', 280)
+      const listScrolled = !!(listDelta && listDelta.after > listDelta.before)
+      record('R11c 设置列表 scrollTop 后数值增加', listScrolled, JSON.stringify(listDelta))
+
+      await setElScrollTop(cdp, '.arp-list-scroll', 0)
+      await sleep(80)
+      const atTop = await scrollProbe(cdp)
+      await scrollElToEnd(cdp, '.arp-list-scroll')
+      await sleep(80)
+      const atEnd = await scrollProbe(cdp)
+      const firstLastOk = atTop.firstInList && atEnd.lastInList
+      record('R11d 列表滚动可访问第1条与第20条任务', firstLastOk,
+        `topFirst=${atTop.firstInList} endLast=${atEnd.lastInList} footerTop=${atTop.footerInPanel} footerEnd=${atEnd.footerInPanel}`)
+
+      const footerStable = atTop.footerInPanel && atEnd.footerInPanel
+      record('R11e 列表滚动前后分页栏均可见', footerStable, `before=${atTop.footerInPanel} after=${atEnd.footerInPanel}`)
+
+      await setElScrollTop(cdp, '.arp-list-scroll', 0)
+      await setElScrollTop(cdp, '.wiki-page', 0)
+      await sleep(80)
+      p0 = await scrollProbe(cdp)
+      const pageOverflows = !!(p0.page && p0.page.scrollHeight > p0.page.clientHeight && oyOk(p0.page.overflowY))
+      const pageDelta = await scrollElBy(cdp, '.wiki-page', 240)
+      const pageScrolled = !!(pageDelta && pageDelta.after > pageDelta.before)
+      record('R11f wiki-page 超高可滚动且 scrollTop 增加', pageOverflows && pageScrolled,
+        JSON.stringify({ page: p0.page, delta: pageDelta, wikiBodyMinH: p0.wikiBodyMinH }))
+
+      const gmReach = await scrollIntoViewInPage(cdp, '.global-manage')
+      const bodyReach = await scrollIntoViewInPage(cdp, '.wiki-body')
+      const afterPage = await scrollProbe(cdp)
+      record('R11g 页面滚动后全局管理与主题区可进入视口', gmReach && bodyReach,
+        `gm=${gmReach} body=${bodyReach} bodyInWin=${afterPage.bodyInWin} gmInWin=${afterPage.gmInWin}`)
+
+      const catalogReach = await scrollIntoViewInPage(cdp, '.catalog-pane')
+      const notCropped = catalogReach && afterPage.wikiBodyMinH >= 360
+      record('R11h 主题目录/主题区不被永久裁切', notCropped, `catalog=${catalogReach} minH=${afterPage.wikiBodyMinH}`)
+
+      await setElScrollTop(cdp, '.wiki-page', 0)
+      await sleep(80)
+      await shotVisual(cdp, 'r11-desktop-1920x1080')
+
+      const collapsedClick = await clickCss(cdp, '.arp-toggle')
+      await sleep(250)
+      const collapsed = await scrollProbe(cdp)
+      const collapseOk = collapsedClick && !collapsed.arpBody && collapsed.collapsed
+      record('R11i 收起后 arp-body 消失且布局恢复', collapseOk, `arpBody=${collapsed.arpBody} collapsed=${collapsed.collapsed}`)
+
+      const expandClick = await clickCss(cdp, '.arp-toggle')
+      await waitForCss(cdp, '.arp-body', 4000)
+      await waitForText(cdp, '当前页 20 条', 4000)
+      const expandRow = await clickCss(cdp, '.compile-run-row[data-run-id="cr-r11-01"] .run-head')
+      const stagesReady = await waitForText(cdp, 'wiki-compile', 6000)
+      await waitForText(cdp, 'wiki-validate', 4000)
+      await sleep(200)
+      const afterStage = await scrollProbe(cdp)
+      await setElScrollTop(cdp, '.arp-list-scroll', 0)
+      const stageListDelta = await scrollElBy(cdp, '.arp-list-scroll', 120)
+      const stageOk = expandRow && stagesReady && afterStage.stages >= 2 && afterStage.footerInPanel
+        && afterStage.list && afterStage.list.scrollHeight > afterStage.list.clientHeight
+        && stageListDelta && stageListDelta.after > stageListDelta.before
+      record('R11j 展开任务阶段后仍可滚动且分页栏可见', stageOk,
+        JSON.stringify({ stages: afterStage.stages, footer: afterStage.footerInPanel, list: afterStage.list, delta: stageListDelta }))
+
+      await setViewport(cdp, 1366, 768, false)
+      await goto(cdp, `${FRONT}/knowledge/wiki/p-eng-1?workspace_id=ws-eng`, '当前页 20 条')
+      await sleep(400)
+      await scrollIntoViewInPage(cdp, '.arp-footer')
+      await sleep(80)
+      await shotVisual(cdp, 'r11-desktop-1366x768')
+
+      async function assertNarrow(width, height, shotName) {
+        await setViewport(cdp, width, height, false)
+        await goto(cdp, `${FRONT}/knowledge/wiki/p-eng-1?workspace_id=ws-eng`, '当前页 20 条')
+        await sleep(400)
+        await scrollIntoViewInPage(cdp, '.arp-footer')
+        await sleep(80)
+        if (shotName) await shotVisual(cdp, shotName)
+        const noHScroll = await evaluate(cdp, `document.documentElement.scrollWidth <= window.innerWidth + 2`)
+        const pageEnd = await scrollElToEnd(cdp, '.wiki-page')
+        const maxScrollTop = pageEnd ? pageEnd.scrollHeight - pageEnd.clientHeight : 0
+        const pageCanEnd = !!(
+          pageEnd
+          && pageEnd.scrollHeight > pageEnd.clientHeight
+          && pageEnd.scrollTop > 0
+          && Math.abs(pageEnd.scrollTop - maxScrollTop) <= 2
+        )
+        const footerReach = await scrollIntoViewInPage(cdp, '.arp-footer')
+        const gmN = await scrollIntoViewInPage(cdp, '.global-manage')
+        const detailN = await scrollIntoViewInPage(cdp, '.detail-pane') || await scrollIntoViewInPage(cdp, '.wiki-body')
+        const n = await scrollProbe(cdp)
+        const okN = noHScroll && pageCanEnd && footerReach && gmN && detailN && n.docW <= n.innerW + 2
+        record(`R11k ${width}x${height} 无整页横滚且分页/全局管理/主题可到达`, okN,
+          JSON.stringify({ noHScroll, pageEnd, maxScrollTop, pageCanEnd, footerReach, gmN, detailN, docW: n.docW, innerW: n.innerW, page: n.page }))
+        return okN
+      }
+      await assertNarrow(390, 844, 'r11-narrow-390x844')
+      await assertNarrow(320, 800, '')
+      await clearViewport(cdp)
+    }
+
+    // ===== R12：工作区重名显示（隔离 mock，三个 admin 可区分 + 短 ID 兜底） =====
+    if (allowScenario('R12')) {
+      await resetAllControl()
+      await setToken(cdp, 'tok-admin')
+      await clearViewport(cdp)
+      await setViewport(cdp, 1400, 900, false)
+      await goto(cdp, `${FRONT}/knowledge/wiki?workspace_id=ws-eng`, '工程工作区')
+      await waitForText(cdp, '当前工作区编译任务', 8000)
+      await evaluate(cdp, `(() => {
+        window.__r12Errors = [];
+        window.addEventListener('error', (e) => window.__r12Errors.push(String(e.message || e)));
+        window.addEventListener('unhandledrejection', (e) => window.__r12Errors.push(String(e.reason || 'rejection')));
+        return 'ok';
+      })()`)
+      const opts = await workspaceOptionTexts(cdp)
+      const adminOnly = (opts || []).filter((t) => t === 'admin')
+      const hasFae = opts.includes('FAE 内部知识库')
+      const hasProduct = opts.includes('产品手册库')
+      const hasSalesLib = opts.includes('销售线索库')
+      const dingA = opts.includes('钉钉知识库 · 11111111')
+      const dingB = opts.includes('钉钉知识库 · 22222222')
+      record('R12a 下拉框不再出现三个无法区分的 admin', adminOnly.length === 0, JSON.stringify(opts))
+      record('R12b 三个 Notebook 名称均可见且不同', hasFae && hasProduct && hasSalesLib,
+        `fae=${hasFae} product=${hasProduct} sales=${hasSalesLib}`)
+      record('R12c 相同 display_name 的两项均带不同短 ID', dingA && dingB, JSON.stringify(opts.filter((t) => t.includes('钉钉'))))
+
+      const targets = [
+        { id: '32520e35-1111-4000-8000-00000000000a', label: 'FAE 内部知识库' },
+        { id: '9b8c7d6e-2222-4000-8000-00000000000b', label: '产品手册库' },
+        { id: 'abcdef01-3333-4000-8000-00000000000c', label: '销售线索库' },
+      ]
+      const selectEvidence = []
+      let selectOk = true
+      for (const t of targets) {
+        await resetMockLog()
+        const chosen = await chooseWorkspace(cdp, t.label)
+        await sleep(500)
+        const url = await currentUrl(cdp)
+        const current = await currentWorkspaceLabelText(cdp)
+        const log = await mockRequestLog()
+        const wikiCalls = log.filter((e) => e.path === '/api/wiki' && e.ws === t.id)
+        const idInUrl = url.includes(`workspace_id=${t.id}`)
+        const labelMatch = current === t.label
+        selectOk = selectOk && chosen === 'ok' && idInUrl && labelMatch && wikiCalls.length > 0
+        selectEvidence.push({ id: t.id, chosen, idInUrl, current, wikiCalls: wikiCalls.length })
+      }
+      record('R12d 逐个选择后 URL/请求使用完整 workspace.id 且当前名称与选项一致', selectOk, JSON.stringify(selectEvidence))
+
+      const last = targets[targets.length - 1]
+      await goto(cdp, await currentUrl(cdp), last.label)
+      await sleep(300)
+      const afterRefreshUrl = await currentUrl(cdp)
+      const afterRefreshLabel = await currentWorkspaceLabelText(cdp)
+      record('R12e 刷新后仍保持正确工作区', afterRefreshUrl.includes(`workspace_id=${last.id}`) && afterRefreshLabel === last.label,
+        `url=${afterRefreshUrl} label=${afterRefreshLabel}`)
+
+      const pageText = await bodyText(cdp)
+      const leaked = pageText.includes('ws_nb_') || pageText.includes('acl_scope') || pageText.includes('scope_id') || pageText.includes('created_by')
+      record('R12f 页面不显示 workspace key/ACL/scope_id', !leaked)
+
+      const cons = await evaluate(cdp, `window.__r12Errors || []`)
+      record('R12g 控制台无 error', Array.isArray(cons) && cons.length === 0, JSON.stringify(cons))
+
+      const layout = await evaluate(cdp, `(() => {
+        const page = document.querySelector('.wiki-page');
+        const panel = document.querySelector('.admin-runs-panel');
+        const cs = page ? getComputedStyle(page) : null;
+        return {
+          overflowY: cs ? cs.overflowY : '',
+          overflowX: cs ? cs.overflowX : '',
+          hasPanel: !!panel,
+        };
+      })()`)
+      record('R12h R11 滚动结构未被破坏', layout.overflowY === 'auto' && layout.overflowX === 'hidden' && layout.hasPanel, JSON.stringify(layout))
+    }
   } catch (e) {
     LOG('driver error: ' + (e && e.stack ? e.stack : String(e)))
     driverFailed = true

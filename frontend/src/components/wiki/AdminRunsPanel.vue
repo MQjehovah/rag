@@ -1,5 +1,5 @@
 <template>
-  <section class="admin-runs-panel">
+  <section class="admin-runs-panel" :class="{ 'is-collapsed': collapsed }">
     <div class="arp-head">
       <span class="arp-title">当前工作区编译任务</span>
       <el-tag
@@ -33,13 +33,14 @@
       <div v-else-if="runs.length === 0" class="arp-state">当前工作区暂无编译任务</div>
 
       <template v-else>
-        <div class="arp-list">
-          <div
-            v-for="run in runs"
-            :key="run.id"
-            class="compile-run-row"
-            :data-run-id="run.id"
-          >
+        <div class="arp-list-scroll">
+          <div class="arp-list">
+            <div
+              v-for="run in runs"
+              :key="run.id"
+              class="compile-run-row"
+              :data-run-id="run.id"
+            >
             <div class="run-head" @click="toggleExpand(run)">
               <code class="run-pipeline">{{ run.pipeline_key || '未知流水线' }}</code>
               <el-tag v-if="run.pipeline_version" size="small" type="info" effect="plain">
@@ -111,6 +112,7 @@
                   <div v-if="st.safe_error_message" class="run-stage-error">{{ st.safe_error_message }}</div>
                 </div>
               </div>
+            </div>
             </div>
           </div>
         </div>
@@ -562,6 +564,12 @@ onBeforeUnmount(() => {
   border-radius: 8px;
   background: #fafbfc;
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.admin-runs-panel:not(.is-collapsed) {
+  max-height: clamp(300px, 55vh, 620px);
 }
 .arp-head {
   display: flex;
@@ -569,6 +577,7 @@ onBeforeUnmount(() => {
   gap: 8px;
   padding: 8px 12px;
   flex-wrap: wrap;
+  flex: 0 0 auto;
 }
 .arp-title {
   font-size: 13px;
@@ -585,7 +594,10 @@ onBeforeUnmount(() => {
 .arp-body {
   border-top: 1px solid #f3f4f6;
   padding: 10px 12px;
-  min-height: 40px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
 }
 .arp-state {
   font-size: 12px;
@@ -604,6 +616,13 @@ onBeforeUnmount(() => {
   color: #b45309;
   background: #fffbeb;
   border-radius: 6px;
+}
+.arp-list-scroll {
+  overflow-x: hidden;
+  overflow-y: auto;
+  min-height: 0;
+  flex: 1 1 auto;
+  scrollbar-gutter: stable;
 }
 .arp-list {
   display: flex;
@@ -717,6 +736,12 @@ onBeforeUnmount(() => {
   justify-content: space-between;
   gap: 8px;
   flex-wrap: wrap;
+  flex: 0 0 auto;
+}
+@media (max-width: 720px) {
+  .admin-runs-panel:not(.is-collapsed) {
+    max-height: clamp(240px, 52vh, 480px);
+  }
 }
 .arp-footer-info {
   display: flex;

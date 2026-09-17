@@ -1,0 +1,226 @@
+{
+  "S1": {
+    "expected_points": [
+      {
+        "id": "p_c1",
+        "kind": "value",
+        "value": "断电"
+      },
+      {
+        "id": "cov_前置条件",
+        "kind": "phrase",
+        "text": "前置条件"
+      }
+    ],
+    "forbidden": []
+  },
+  "S2": {
+    "expected_points": [
+      {
+        "id": "p_c1",
+        "kind": "value",
+        "value": "0.1 mm"
+      },
+      {
+        "id": "cov_前置条件",
+        "kind": "phrase",
+        "text": "前置条件"
+      },
+      {
+        "id": "cov_同轴度",
+        "kind": "phrase",
+        "text": "同轴度"
+      }
+    ],
+    "forbidden": []
+  },
+  "S3": {
+    "expected_points": [
+      {
+        "id": "p_c1",
+        "kind": "value",
+        "value": "断电"
+      },
+      {
+        "id": "cov_前置条件",
+        "kind": "phrase",
+        "text": "前置条件"
+      },
+      {
+        "id": "cov_操作步骤",
+        "kind": "phrase",
+        "text": "操作步骤"
+      },
+      {
+        "id": "cov_验收",
+        "kind": "phrase",
+        "text": "验收"
+      }
+    ],
+    "forbidden": []
+  },
+  "S4": {
+    "expected_points": [
+      {
+        "id": "p_c1",
+        "kind": "value",
+        "value": "0.5 Ω"
+      },
+      {
+        "id": "cov_接地",
+        "kind": "phrase",
+        "text": "接地"
+      }
+    ],
+    "forbidden": []
+  },
+  "S5": {
+    "expected_points": [
+      {
+        "id": "p_c1",
+        "kind": "value",
+        "value": "60 V"
+      },
+      {
+        "id": "cov_扭矩",
+        "kind": "phrase",
+        "text": "扭矩"
+      }
+    ],
+    "forbidden": []
+  },
+  "S6": {
+    "expected_points": [
+      {
+        "id": "v_in_c_old",
+        "kind": "value_in_version",
+        "value": "3600 s",
+        "version": "v1"
+      },
+      {
+        "id": "a_in_c_old_v2",
+        "kind": "absent_in_version",
+        "value": "3600 s",
+        "version": "v2"
+      },
+      {
+        "id": "v_in_c_new",
+        "kind": "value_in_version",
+        "value": "7200 s",
+        "version": "v2"
+      },
+      {
+        "id": "a_in_c_new_v1",
+        "kind": "absent_in_version",
+        "value": "7200 s",
+        "version": "v1"
+      }
+    ],
+    "forbidden": []
+  },
+  "S7": {
+    "expected_points": [
+      {
+        "id": "p_c1",
+        "kind": "value",
+        "value": "10000 Ω"
+      },
+      {
+        "id": "p_c2",
+        "kind": "value",
+        "value": "100000000 Ω"
+      },
+      {
+        "id": "cov_洁净室",
+        "kind": "phrase",
+        "text": "洁净室"
+      }
+    ],
+    "forbidden": []
+  },
+  "S8": {
+    "expected_points": [
+      {
+        "id": "p_c1",
+        "kind": "value",
+        "value": "每周"
+      }
+    ],
+    "forbidden": []
+  },
+  "S9": {
+    "expected_points": [
+      {
+        "id": "p_c1",
+        "kind": "value",
+        "value": "阈值告警"
+      },
+      {
+        "id": "cov_预防建议",
+        "kind": "phrase",
+        "text": "预防建议"
+      },
+      {
+        "id": "cov_故障现象",
+        "kind": "phrase",
+        "text": "故障现象"
+      }
+    ],
+    "forbidden": []
+  },
+  "S10": {
+    "expected_points": [
+      {
+        "id": "p_c1",
+        "kind": "value",
+        "value": "上限"
+      },
+      {
+        "id": "cov_故障现象",
+        "kind": "phrase",
+        "text": "故障现象"
+      },
+      {
+        "id": "cov_修复动作",
+        "kind": "phrase",
+        "text": "修复动作"
+      }
+    ],
+    "forbidden": []
+  },
+  "S11": {
+    "expected_points": [
+      {
+        "id": "p_c1",
+        "kind": "value",
+        "value": "0.5 Ω"
+      },
+      {
+        "id": "cov_接地",
+        "kind": "phrase",
+        "text": "接地"
+      }
+    ],
+    "forbidden": []
+  },
+  "S12": {
+    "expected_points": [
+      {
+        "id": "p_c1",
+        "kind": "value",
+        "value": "4 min"
+      },
+      {
+        "id": "p_c2",
+        "kind": "value",
+        "value": "6 min"
+      },
+      {
+        "id": "cov_高海拔",
+        "kind": "phrase",
+        "text": "高海拔"
+      }
+    ],
+    "forbidden": []
+  }
+}

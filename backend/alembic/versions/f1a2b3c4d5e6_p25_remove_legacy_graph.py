@@ -10,6 +10,8 @@ from typing import Sequence, Union
 from alembic import op
 import sqlalchemy as sa
 
+from migration_compat import drop_columns_compat
+
 
 revision: str = "f1a2b3c4d5e6"
 down_revision: Union[str, Sequence[str], None] = "e0f1a2b3c4d5"
@@ -30,9 +32,7 @@ def upgrade() -> None:
         columns = {column["name"] for column in inspector.get_columns("conflict_tasks")}
         remove = [name for name in ("ko_ids", "resolved_ko_id") if name in columns]
         if remove:
-            with op.batch_alter_table("conflict_tasks", recreate="always") as batch:
-                for name in remove:
-                    batch.drop_column(name)
+            drop_columns_compat(op, "conflict_tasks", remove)
 
 
 def downgrade() -> None:

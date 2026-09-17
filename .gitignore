@@ -8,6 +8,8 @@ __pycache__/
 .pytest_tmp/
 .pytest_tmp*/
 .pytest_tmp_work/
+backend/.pytest_*_tmp/
+backend/.pytest_runtime/
 backend/.coverage
 backend/data/
 backend/.venv/
@@ -16,8 +18,16 @@ dist/
 node_modules/
 backend/server.*.log
 frontend/server.*.log
+frontend/codex-review-frontend.*.log
 runtime-logs/
 backend/tests/fixtures/p17_sample.jpg
+
+# 本地运行、迁移和验收产物
+/data/
+/tmp/
+/backend/tmp/
+/backend/reports/
+/frontend/tests/workspace-navigation/visual-r11/
 
 .env
 .env.local
@@ -32,3 +42,8 @@ backend/.phase9b_migration/
 # 仅供本地查看的开发文档
 TITAN810_RAG_优化清单.md
 钉钉文档同步开发记录.md
+
+# WikiSkill 阶段 1 离线评测运行时产物（实验库/快照/轨迹，一律不入库）
+backend/eval/wiki_evolution/runtime/
+backend/eval/wiki_evolution/gate*/
+backend/eval/wiki_evolution/exp7root/

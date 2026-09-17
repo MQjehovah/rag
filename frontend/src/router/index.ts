@@ -28,6 +28,7 @@ const routes: RouteRecordRaw[] = [
       { path: 'retrieval', component: () => import('../views/Search.vue'), meta: { requiresAuth: true, requiredRoles: ['system_admin'], title: '检索评测' } },
       { path: 'flags', component: () => import('../views/admin/FeatureFlags.vue'), meta: { requiresAuth: true, requiredRoles: ['system_admin'], title: 'Feature Flag' } },
       { path: 'model-health', component: () => import('../views/admin/ModelHealth.vue'), meta: { requiresAuth: true, requiredRoles: ['system_admin'], title: '模型健康' } },
+      { path: 'evolution', component: () => import('../views/admin/EvolutionConsole.vue'), meta: { requiresAuth: true, requiredRoles: ['system_admin'], title: '演化实验控制台' } },
     ],
   },
 

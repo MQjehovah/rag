@@ -17,16 +17,20 @@ from alembic import context
 # 让 env.py 在 backend/ 下直接运行（alembic 命令的 cwd）时能 import app
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.config import settings  # noqa: E402
 from app.models.database import Base  # noqa: E402
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
 config = context.config
 
-# 数据库地址：settings 优先，-x database_url= 可覆盖
+# 数据库地址：显式 -x database_url= 优先，且此时不加载 app.config/.env，
+# 避免隔离验收误连生产库。未提供 -x 时才回退 settings.database_url。
 x_args = context.get_x_argument(as_dictionary=True)
-database_url = x_args.get("database_url") or settings.database_url
+if x_args.get("database_url"):
+    database_url = x_args["database_url"]
+else:
+    from app.config import settings  # noqa: E402
+    database_url = settings.database_url
 config.set_main_option("sqlalchemy.url", database_url)
 
 # Interpret the config file for Python logging.

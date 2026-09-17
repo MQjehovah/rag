@@ -12,6 +12,7 @@ import http from './http'
 export interface WikiWorkspaceSummary {
   id: string
   name: string
+  display_name?: string | null
   description?: string | null
   status: string
   created_at?: string | null

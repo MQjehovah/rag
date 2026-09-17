@@ -1,0 +1,491 @@
+{
+  "dataset_version": "wiki-default-v4",
+  "domain": "wiki_compile.default",
+  "grader_version": "wiki-default-grader/v1",
+  "tasks": [
+    {
+      "task_id": "v4e-t-01",
+      "dataset_version": "wiki-default-v4",
+      "domain": "wiki_compile.default",
+      "split": "train",
+      "group_id": "doc-family-v4e-train",
+      "input_snapshot_id": "v4-v4e-t-01",
+      "instruction": "根据资料生成 Wiki：覆盖适用条件、前置条件、操作步骤与关键参数，数值与来源一致。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v4.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "Titan 模组参数 v4e-t-01",
+      "wiki_category": "产品资料",
+      "sources": [
+        {
+          "doc_id": "d1",
+          "title": "资料 v4e-t-01",
+          "file": "v4e-t-01.md",
+          "product_version": "2.0"
+        }
+      ]
+    },
+    {
+      "task_id": "v4e-t-02",
+      "dataset_version": "wiki-default-v4",
+      "domain": "wiki_compile.default",
+      "split": "train",
+      "group_id": "doc-family-v4e-train",
+      "input_snapshot_id": "v4-v4e-t-02",
+      "instruction": "根据资料生成 Wiki：覆盖适用条件、前置条件、操作步骤与关键参数，数值与来源一致。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v4.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "Titan 模组参数 v4e-t-02",
+      "wiki_category": "产品资料",
+      "sources": [
+        {
+          "doc_id": "d1",
+          "title": "资料 v4e-t-02",
+          "file": "v4e-t-02.md",
+          "product_version": "2.0"
+        }
+      ]
+    },
+    {
+      "task_id": "v4e-t-03",
+      "dataset_version": "wiki-default-v4",
+      "domain": "wiki_compile.default",
+      "split": "train",
+      "group_id": "doc-family-v4e-train",
+      "input_snapshot_id": "v4-v4e-t-03",
+      "instruction": "根据资料生成 Wiki：覆盖适用条件、前置条件、操作步骤与关键参数，数值与来源一致。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v4.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "Titan 模组参数 v4e-t-03",
+      "wiki_category": "产品资料",
+      "sources": [
+        {
+          "doc_id": "d1",
+          "title": "资料 v4e-t-03",
+          "file": "v4e-t-03.md",
+          "product_version": "3.0"
+        }
+      ]
+    },
+    {
+      "task_id": "v4e-t-04",
+      "dataset_version": "wiki-default-v4",
+      "domain": "wiki_compile.default",
+      "split": "train",
+      "group_id": "doc-family-v4e-train",
+      "input_snapshot_id": "v4-v4e-t-04",
+      "instruction": "根据资料生成 Wiki：覆盖适用条件、前置条件、操作步骤与关键参数，数值与来源一致。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v4.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "Titan 模组参数 v4e-t-04",
+      "wiki_category": "产品资料",
+      "sources": [
+        {
+          "doc_id": "d1",
+          "title": "资料 v4e-t-04",
+          "file": "v4e-t-04.md",
+          "product_version": "3.0"
+        }
+      ]
+    },
+    {
+      "task_id": "v4e-t-05",
+      "dataset_version": "wiki-default-v4",
+      "domain": "wiki_compile.default",
+      "split": "train",
+      "group_id": "doc-family-v4e-train",
+      "input_snapshot_id": "v4-v4e-t-05",
+      "instruction": "根据资料生成 Wiki：覆盖适用条件、前置条件、操作步骤与关键参数，数值与来源一致。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v4.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "Titan 模组参数 v4e-t-05",
+      "wiki_category": "产品资料",
+      "sources": [
+        {
+          "doc_id": "d1",
+          "title": "资料 v4e-t-05",
+          "file": "v4e-t-05.md",
+          "product_version": "2.0"
+        }
+      ]
+    },
+    {
+      "task_id": "v4e-t-06",
+      "dataset_version": "wiki-default-v4",
+      "domain": "wiki_compile.default",
+      "split": "train",
+      "group_id": "doc-family-v4e-train",
+      "input_snapshot_id": "v4-v4e-t-06",
+      "instruction": "根据资料生成 Wiki：覆盖适用条件、前置条件、操作步骤与关键参数，数值与来源一致。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v4.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "Titan 模组参数 v4e-t-06",
+      "wiki_category": "产品资料",
+      "sources": [
+        {
+          "doc_id": "d1",
+          "title": "资料 v4e-t-06",
+          "file": "v4e-t-06.md",
+          "product_version": "3.0"
+        }
+      ]
+    },
+    {
+      "task_id": "v4e-v-01",
+      "dataset_version": "wiki-default-v4",
+      "domain": "wiki_compile.default",
+      "split": "val",
+      "group_id": "doc-family-v4e-val-a",
+      "input_snapshot_id": "v4-v4e-v-01",
+      "instruction": "根据资料生成 Wiki：覆盖适用条件、前置条件、操作步骤与关键参数，数值与来源一致。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v4.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "Titan 模组参数 v4e-v-01",
+      "wiki_category": "产品资料",
+      "sources": [
+        {
+          "doc_id": "d1",
+          "title": "资料 v4e-v-01",
+          "file": "v4e-v-01.md",
+          "product_version": "2.0"
+        }
+      ]
+    },
+    {
+      "task_id": "v4e-v-02",
+      "dataset_version": "wiki-default-v4",
+      "domain": "wiki_compile.default",
+      "split": "val",
+      "group_id": "doc-family-v4e-val-a",
+      "input_snapshot_id": "v4-v4e-v-02",
+      "instruction": "根据资料生成 Wiki：覆盖适用条件、前置条件、操作步骤与关键参数，数值与来源一致。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v4.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "Titan 模组参数 v4e-v-02",
+      "wiki_category": "产品资料",
+      "sources": [
+        {
+          "doc_id": "d1",
+          "title": "资料 v4e-v-02",
+          "file": "v4e-v-02.md",
+          "product_version": "3.0"
+        }
+      ]
+    },
+    {
+      "task_id": "v4e-v-03",
+      "dataset_version": "wiki-default-v4",
+      "domain": "wiki_compile.default",
+      "split": "val",
+      "group_id": "doc-family-v4e-val-a",
+      "input_snapshot_id": "v4-v4e-v-03",
+      "instruction": "根据资料生成 Wiki：覆盖适用条件、前置条件、操作步骤与关键参数，数值与来源一致。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v4.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "Titan 模组参数 v4e-v-03",
+      "wiki_category": "产品资料",
+      "sources": [
+        {
+          "doc_id": "d1",
+          "title": "资料 v4e-v-03",
+          "file": "v4e-v-03.md",
+          "product_version": "3.0"
+        }
+      ]
+    },
+    {
+      "task_id": "v4e-v-04",
+      "dataset_version": "wiki-default-v4",
+      "domain": "wiki_compile.default",
+      "split": "val",
+      "group_id": "doc-family-v4e-val-a",
+      "input_snapshot_id": "v4-v4e-v-04",
+      "instruction": "根据资料生成 Wiki：覆盖适用条件、前置条件、操作步骤与关键参数，数值与来源一致。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v4.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "Titan 模组参数 v4e-v-04",
+      "wiki_category": "产品资料",
+      "sources": [
+        {
+          "doc_id": "d1",
+          "title": "资料 v4e-v-04",
+          "file": "v4e-v-04.md",
+          "product_version": "2.0"
+        }
+      ]
+    },
+    {
+      "task_id": "v4e-v-05",
+      "dataset_version": "wiki-default-v4",
+      "domain": "wiki_compile.default",
+      "split": "val",
+      "group_id": "doc-family-v4e-val-b",
+      "input_snapshot_id": "v4-v4e-v-05",
+      "instruction": "根据资料生成 Wiki：覆盖适用条件、前置条件、操作步骤与关键参数，数值与来源一致。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v4.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "Titan 模组参数 v4e-v-05",
+      "wiki_category": "产品资料",
+      "sources": [
+        {
+          "doc_id": "d1",
+          "title": "资料 v4e-v-05",
+          "file": "v4e-v-05.md",
+          "product_version": "3.0"
+        }
+      ]
+    },
+    {
+      "task_id": "v4e-v-06",
+      "dataset_version": "wiki-default-v4",
+      "domain": "wiki_compile.default",
+      "split": "val",
+      "group_id": "doc-family-v4e-val-b",
+      "input_snapshot_id": "v4-v4e-v-06",
+      "instruction": "根据资料生成 Wiki：覆盖适用条件、前置条件、操作步骤与关键参数，数值与来源一致。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v4.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "Titan 模组参数 v4e-v-06",
+      "wiki_category": "产品资料",
+      "sources": [
+        {
+          "doc_id": "d1",
+          "title": "资料 v4e-v-06",
+          "file": "v4e-v-06.md",
+          "product_version": "2.0"
+        }
+      ]
+    },
+    {
+      "task_id": "v4e-v-07",
+      "dataset_version": "wiki-default-v4",
+      "domain": "wiki_compile.default",
+      "split": "val",
+      "group_id": "doc-family-v4e-val-b",
+      "input_snapshot_id": "v4-v4e-v-07",
+      "instruction": "根据资料生成 Wiki：覆盖适用条件、前置条件、操作步骤与关键参数，数值与来源一致。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v4.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "Titan 模组参数 v4e-v-07",
+      "wiki_category": "产品资料",
+      "sources": [
+        {
+          "doc_id": "d1",
+          "title": "资料 v4e-v-07",
+          "file": "v4e-v-07.md",
+          "product_version": "3.0"
+        }
+      ]
+    },
+    {
+      "task_id": "v4e-v-08",
+      "dataset_version": "wiki-default-v4",
+      "domain": "wiki_compile.default",
+      "split": "val",
+      "group_id": "doc-family-v4e-val-b",
+      "input_snapshot_id": "v4-v4e-v-08",
+      "instruction": "根据资料生成 Wiki：覆盖适用条件、前置条件、操作步骤与关键参数，数值与来源一致。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v4.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "Titan 模组参数 v4e-v-08",
+      "wiki_category": "产品资料",
+      "sources": [
+        {
+          "doc_id": "d1",
+          "title": "资料 v4e-v-08",
+          "file": "v4e-v-08.md",
+          "product_version": "3.0"
+        }
+      ]
+    },
+    {
+      "task_id": "v4e-x-01",
+      "dataset_version": "wiki-default-v4",
+      "domain": "wiki_compile.default",
+      "split": "test",
+      "group_id": "doc-family-v4e-test-x",
+      "input_snapshot_id": "v4-v4e-x-01",
+      "instruction": "根据资料生成 Wiki：覆盖适用条件、前置条件、操作步骤与关键参数，数值与来源一致。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v4.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "Titan 模组参数 v4e-x-01",
+      "wiki_category": "产品资料",
+      "sources": [
+        {
+          "doc_id": "d1",
+          "title": "资料 v4e-x-01",
+          "file": "v4e-x-01.md",
+          "product_version": "2.0"
+        }
+      ]
+    },
+    {
+      "task_id": "v4e-x-02",
+      "dataset_version": "wiki-default-v4",
+      "domain": "wiki_compile.default",
+      "split": "test",
+      "group_id": "doc-family-v4e-test-x",
+      "input_snapshot_id": "v4-v4e-x-02",
+      "instruction": "根据资料生成 Wiki：覆盖适用条件、前置条件、操作步骤与关键参数，数值与来源一致。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v4.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "Titan 模组参数 v4e-x-02",
+      "wiki_category": "产品资料",
+      "sources": [
+        {
+          "doc_id": "d1",
+          "title": "资料 v4e-x-02",
+          "file": "v4e-x-02.md",
+          "product_version": "3.0"
+        }
+      ]
+    },
+    {
+      "task_id": "v4e-x-03",
+      "dataset_version": "wiki-default-v4",
+      "domain": "wiki_compile.default",
+      "split": "test",
+      "group_id": "doc-family-v4e-test-x",
+      "input_snapshot_id": "v4-v4e-x-03",
+      "instruction": "根据资料生成 Wiki：覆盖适用条件、前置条件、操作步骤与关键参数，数值与来源一致。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v4.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "Titan 模组参数 v4e-x-03",
+      "wiki_category": "产品资料",
+      "sources": [
+        {
+          "doc_id": "d1",
+          "title": "资料 v4e-x-03",
+          "file": "v4e-x-03.md",
+          "product_version": "2.0"
+        }
+      ]
+    },
+    {
+      "task_id": "v4e-x-04",
+      "dataset_version": "wiki-default-v4",
+      "domain": "wiki_compile.default",
+      "split": "test",
+      "group_id": "doc-family-v4e-test-x",
+      "input_snapshot_id": "v4-v4e-x-04",
+      "instruction": "根据资料生成 Wiki：覆盖适用条件、前置条件、操作步骤与关键参数，数值与来源一致。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v4.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "Titan 模组参数 v4e-x-04",
+      "wiki_category": "产品资料",
+      "sources": [
+        {
+          "doc_id": "d1",
+          "title": "资料 v4e-x-04",
+          "file": "v4e-x-04.md",
+          "product_version": "3.0"
+        }
+      ]
+    },
+    {
+      "task_id": "v4e-x-05",
+      "dataset_version": "wiki-default-v4",
+      "domain": "wiki_compile.default",
+      "split": "test",
+      "group_id": "doc-family-v4e-test-y",
+      "input_snapshot_id": "v4-v4e-x-05",
+      "instruction": "根据资料生成 Wiki：覆盖适用条件、前置条件、操作步骤与关键参数，数值与来源一致。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v4.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "Titan 模组参数 v4e-x-05",
+      "wiki_category": "产品资料",
+      "sources": [
+        {
+          "doc_id": "d1",
+          "title": "资料 v4e-x-05",
+          "file": "v4e-x-05.md",
+          "product_version": "3.0"
+        }
+      ]
+    },
+    {
+      "task_id": "v4e-x-06",
+      "dataset_version": "wiki-default-v4",
+      "domain": "wiki_compile.default",
+      "split": "test",
+      "group_id": "doc-family-v4e-test-y",
+      "input_snapshot_id": "v4-v4e-x-06",
+      "instruction": "根据资料生成 Wiki：覆盖适用条件、前置条件、操作步骤与关键参数，数值与来源一致。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v4.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "Titan 模组参数 v4e-x-06",
+      "wiki_category": "产品资料",
+      "sources": [
+        {
+          "doc_id": "d1",
+          "title": "资料 v4e-x-06",
+          "file": "v4e-x-06.md",
+          "product_version": "2.0"
+        }
+      ]
+    },
+    {
+      "task_id": "v4e-x-07",
+      "dataset_version": "wiki-default-v4",
+      "domain": "wiki_compile.default",
+      "split": "test",
+      "group_id": "doc-family-v4e-test-y",
+      "input_snapshot_id": "v4-v4e-x-07",
+      "instruction": "根据资料生成 Wiki：覆盖适用条件、前置条件、操作步骤与关键参数，数值与来源一致。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v4.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "Titan 模组参数 v4e-x-07",
+      "wiki_category": "产品资料",
+      "sources": [
+        {
+          "doc_id": "d1",
+          "title": "资料 v4e-x-07",
+          "file": "v4e-x-07.md",
+          "product_version": "3.0"
+        }
+      ]
+    },
+    {
+      "task_id": "v4e-x-08",
+      "dataset_version": "wiki-default-v4",
+      "domain": "wiki_compile.default",
+      "split": "test",
+      "group_id": "doc-family-v4e-test-y",
+      "input_snapshot_id": "v4-v4e-x-08",
+      "instruction": "根据资料生成 Wiki：覆盖适用条件、前置条件、操作步骤与关键参数，数值与来源一致。",
+      "grader_version": "wiki-default-grader/v1",
+      "reference_ref": "wiki-default-v4.json",
+      "trigger": "manual_rebuild",
+      "wiki_title": "Titan 模组参数 v4e-x-08",
+      "wiki_category": "产品资料",
+      "sources": [
+        {
+          "doc_id": "d1",
+          "title": "资料 v4e-x-08",
+          "file": "v4e-x-08.md",
+          "product_version": "3.0"
+        }
+      ]
+    }
+  ]
+}

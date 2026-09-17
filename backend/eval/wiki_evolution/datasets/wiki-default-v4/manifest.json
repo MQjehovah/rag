@@ -1,0 +1,47 @@
+{
+  "dataset_version": "wiki-default-v4",
+  "generation": "synthetic parameterized templates (stage 7A)",
+  "groups": {
+    "train": "doc-family-v4e-train",
+    "val": {
+      "val-a": "doc-family-v4e-val-a",
+      "val-b": "doc-family-v4e-val-b"
+    },
+    "test": {
+      "test-x": "doc-family-v4e-test-x",
+      "test-y": "doc-family-v4e-test-y"
+    }
+  },
+  "task_count": 22,
+  "split_counts": {
+    "train": 6,
+    "val": 8,
+    "test": 8
+  },
+  "external_validity_limits": "合成资料，非真实生产文档；首次用于阶段 7 实验，未参与阶段 0–6 任何调试/回归（未见测试集）。",
+  "exposure": "never exposed before v4 generation",
+  "file_hashes": {
+    "sources\\v4e-t-01.md": "3ab589690266d464b5770783b1d6b17ea25e91915f62f05a060e96e6df9ad4d9",
+    "sources\\v4e-t-02.md": "5e8c98a8532d6b4d75d3e697fcac57b1eca0a48714dcb834cb2bb67e4e44def6",
+    "sources\\v4e-t-03.md": "393d81e0dc8585743acc53da3d789b038c4487cf210a3cddc99aed16c7b43638",
+    "sources\\v4e-t-04.md": "d46dee4e2db040becb1568eaa63d555467ab15e260692fe7386697ad2a7b7f03",
+    "sources\\v4e-t-05.md": "7fa542d5e3f98e4c6cfee6e18448111f10c2da786ea0de4d80e0194368d3ad2e",
+    "sources\\v4e-t-06.md": "06ce7a83e42e565055021040afeecdf23713408b0338653ea3b9e9c70d4f61e5",
+    "sources\\v4e-v-01.md": "9756d4a15387c80b06296277e644f141d3a393853fc23f21eaf5efc85346a47e",
+    "sources\\v4e-v-02.md": "33266007119b6def401e00286a0f363edbbaae1302271d296fcaa1fc32a94a33",
+    "sources\\v4e-v-03.md": "ff5d1f5aecd68ffb0c3aff709a7d908fcd7873a834ed1333533ecddeecf76b00",
+    "sources\\v4e-v-04.md": "37572960630687185089eb4cd1d3e10bab00fc603fed95e8967f9d1211b829be",
+    "sources\\v4e-v-05.md": "dd4bf641f64b4fadc8348a7295d5a3a16359541a89c3e9391d6c5abacb7efb23",
+    "sources\\v4e-v-06.md": "f11067ce0064977ce4e7c58e02b0f6645606e2438ef0f8f51576a7bde252083d",
+    "sources\\v4e-v-07.md": "29d9549f588046a87edf08ab7a8b475b09609d11b349c9006097f6b4c603051e",
+    "sources\\v4e-v-08.md": "ae21bd754e99cc4978dfc0e2897264e6d759644c6f9233949f946fa3f64434b0",
+    "sources\\v4e-x-01.md": "ef66bc3bed297b9190a0eb1646c09b48ded862b33cf3fcc63031ef2200689ad6",
+    "sources\\v4e-x-02.md": "7cd8f45e3c1de5036f23587123c05458a74d7de299932ee45f75851961c3f5dd",
+    "sources\\v4e-x-03.md": "f3fdbf8b6a85870e72b5c682ddf8bc62ce38fabf639ecfbcd07d618901d03ad5",
+    "sources\\v4e-x-04.md": "1e96d2f63e0a6149234dae495a066a2bbae64ae6b169017f4a67bda7dff16203",
+    "sources\\v4e-x-05.md": "c99d83f08235b5c83bebdc89a034a4a01bb8675d07c436b4598fe9d3ccd6c125",
+    "sources\\v4e-x-06.md": "3f4bb1a2634f11505e3108d743f6e8157b8a91d21432f3b36ff07cd9e8b1675d",
+    "sources\\v4e-x-07.md": "60f957aa544978c4ba59a1ccea8a0858e416c4b6c8e02cd2338c77a1adffa4e8",
+    "sources\\v4e-x-08.md": "e01765619046306e11d84eb9907ba0489bbbaa3fed3297e9b7b291672e3c5c19"
+  }
+}

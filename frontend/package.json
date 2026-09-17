@@ -6,6 +6,7 @@
     "dev": "vite",
     "dev:acceptance": "vite --mode acceptance",
     "build": "vue-tsc && vite build",
+    "test:unit": "node tests/unit/run.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

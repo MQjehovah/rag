@@ -1,0 +1,596 @@
+{
+  "v4e-t-01": {
+    "expected_points": [
+      {
+        "id": "p1",
+        "kind": "phrase",
+        "text": "适用条件"
+      },
+      {
+        "id": "p2",
+        "kind": "value",
+        "value": "25 N·m"
+      },
+      {
+        "id": "p3",
+        "kind": "value",
+        "value": "60V"
+      },
+      {
+        "id": "p4",
+        "kind": "phrase",
+        "text": "步骤1"
+      }
+    ],
+    "forbidden": [
+      "120V"
+    ]
+  },
+  "v4e-t-02": {
+    "expected_points": [
+      {
+        "id": "p1",
+        "kind": "phrase",
+        "text": "适用条件"
+      },
+      {
+        "id": "p2",
+        "kind": "value",
+        "value": "25 N·m"
+      },
+      {
+        "id": "p3",
+        "kind": "value",
+        "value": "60V"
+      },
+      {
+        "id": "p4",
+        "kind": "phrase",
+        "text": "步骤1"
+      }
+    ],
+    "forbidden": [
+      "120V"
+    ]
+  },
+  "v4e-t-03": {
+    "expected_points": [
+      {
+        "id": "p1",
+        "kind": "phrase",
+        "text": "适用条件"
+      },
+      {
+        "id": "p2",
+        "kind": "value",
+        "value": "28 N·m"
+      },
+      {
+        "id": "p3",
+        "kind": "value",
+        "value": "60V"
+      },
+      {
+        "id": "p4",
+        "kind": "phrase",
+        "text": "步骤1"
+      }
+    ],
+    "forbidden": [
+      "120V"
+    ]
+  },
+  "v4e-t-04": {
+    "expected_points": [
+      {
+        "id": "p1",
+        "kind": "phrase",
+        "text": "适用条件"
+      },
+      {
+        "id": "p2",
+        "kind": "value",
+        "value": "32 N·m"
+      },
+      {
+        "id": "p3",
+        "kind": "value",
+        "value": "48V"
+      },
+      {
+        "id": "p4",
+        "kind": "phrase",
+        "text": "步骤1"
+      }
+    ],
+    "forbidden": [
+      "120V"
+    ]
+  },
+  "v4e-t-05": {
+    "expected_points": [
+      {
+        "id": "p1",
+        "kind": "phrase",
+        "text": "适用条件"
+      },
+      {
+        "id": "p2",
+        "kind": "value",
+        "value": "25 N·m"
+      },
+      {
+        "id": "p3",
+        "kind": "value",
+        "value": "60V"
+      },
+      {
+        "id": "p4",
+        "kind": "phrase",
+        "text": "步骤1"
+      }
+    ],
+    "forbidden": [
+      "120V"
+    ]
+  },
+  "v4e-t-06": {
+    "expected_points": [
+      {
+        "id": "p1",
+        "kind": "phrase",
+        "text": "适用条件"
+      },
+      {
+        "id": "p2",
+        "kind": "value",
+        "value": "28 N·m"
+      },
+      {
+        "id": "p3",
+        "kind": "value",
+        "value": "60V"
+      },
+      {
+        "id": "p4",
+        "kind": "phrase",
+        "text": "步骤1"
+      }
+    ],
+    "forbidden": [
+      "120V"
+    ]
+  },
+  "v4e-v-01": {
+    "expected_points": [
+      {
+        "id": "p1",
+        "kind": "phrase",
+        "text": "适用条件"
+      },
+      {
+        "id": "p2",
+        "kind": "value",
+        "value": "25 N·m"
+      },
+      {
+        "id": "p3",
+        "kind": "value",
+        "value": "60V"
+      },
+      {
+        "id": "p4",
+        "kind": "phrase",
+        "text": "步骤1"
+      }
+    ],
+    "forbidden": [
+      "120V"
+    ]
+  },
+  "v4e-v-02": {
+    "expected_points": [
+      {
+        "id": "p1",
+        "kind": "phrase",
+        "text": "适用条件"
+      },
+      {
+        "id": "p2",
+        "kind": "value",
+        "value": "28 N·m"
+      },
+      {
+        "id": "p3",
+        "kind": "value",
+        "value": "60V"
+      },
+      {
+        "id": "p4",
+        "kind": "phrase",
+        "text": "步骤1"
+      }
+    ],
+    "forbidden": [
+      "120V"
+    ]
+  },
+  "v4e-v-03": {
+    "expected_points": [
+      {
+        "id": "p1",
+        "kind": "phrase",
+        "text": "适用条件"
+      },
+      {
+        "id": "p2",
+        "kind": "value",
+        "value": "32 N·m"
+      },
+      {
+        "id": "p3",
+        "kind": "value",
+        "value": "48V"
+      },
+      {
+        "id": "p4",
+        "kind": "phrase",
+        "text": "步骤1"
+      }
+    ],
+    "forbidden": [
+      "120V"
+    ]
+  },
+  "v4e-v-04": {
+    "expected_points": [
+      {
+        "id": "p1",
+        "kind": "phrase",
+        "text": "适用条件"
+      },
+      {
+        "id": "p2",
+        "kind": "value",
+        "value": "25 N·m"
+      },
+      {
+        "id": "p3",
+        "kind": "value",
+        "value": "60V"
+      },
+      {
+        "id": "p4",
+        "kind": "phrase",
+        "text": "步骤1"
+      }
+    ],
+    "forbidden": [
+      "120V"
+    ]
+  },
+  "v4e-v-05": {
+    "expected_points": [
+      {
+        "id": "p1",
+        "kind": "phrase",
+        "text": "适用条件"
+      },
+      {
+        "id": "p2",
+        "kind": "value",
+        "value": "28 N·m"
+      },
+      {
+        "id": "p3",
+        "kind": "value",
+        "value": "48V"
+      },
+      {
+        "id": "p4",
+        "kind": "phrase",
+        "text": "步骤1"
+      }
+    ],
+    "forbidden": [
+      "120V"
+    ]
+  },
+  "v4e-v-06": {
+    "expected_points": [
+      {
+        "id": "p1",
+        "kind": "phrase",
+        "text": "适用条件"
+      },
+      {
+        "id": "p2",
+        "kind": "value",
+        "value": "25 N·m"
+      },
+      {
+        "id": "p3",
+        "kind": "value",
+        "value": "60V"
+      },
+      {
+        "id": "p4",
+        "kind": "phrase",
+        "text": "步骤1"
+      }
+    ],
+    "forbidden": [
+      "120V"
+    ]
+  },
+  "v4e-v-07": {
+    "expected_points": [
+      {
+        "id": "p1",
+        "kind": "phrase",
+        "text": "适用条件"
+      },
+      {
+        "id": "p2",
+        "kind": "value",
+        "value": "32 N·m"
+      },
+      {
+        "id": "p3",
+        "kind": "value",
+        "value": "60V"
+      },
+      {
+        "id": "p4",
+        "kind": "phrase",
+        "text": "步骤1"
+      }
+    ],
+    "forbidden": [
+      "120V"
+    ]
+  },
+  "v4e-v-08": {
+    "expected_points": [
+      {
+        "id": "p1",
+        "kind": "phrase",
+        "text": "适用条件"
+      },
+      {
+        "id": "p2",
+        "kind": "value",
+        "value": "28 N·m"
+      },
+      {
+        "id": "p3",
+        "kind": "value",
+        "value": "48V"
+      },
+      {
+        "id": "p4",
+        "kind": "phrase",
+        "text": "步骤1"
+      }
+    ],
+    "forbidden": [
+      "120V"
+    ]
+  },
+  "v4e-x-01": {
+    "expected_points": [
+      {
+        "id": "p1",
+        "kind": "phrase",
+        "text": "适用条件"
+      },
+      {
+        "id": "p2",
+        "kind": "value",
+        "value": "25 N·m"
+      },
+      {
+        "id": "p3",
+        "kind": "value",
+        "value": "60V"
+      },
+      {
+        "id": "p4",
+        "kind": "phrase",
+        "text": "步骤1"
+      }
+    ],
+    "forbidden": [
+      "120V"
+    ]
+  },
+  "v4e-x-02": {
+    "expected_points": [
+      {
+        "id": "p1",
+        "kind": "phrase",
+        "text": "适用条件"
+      },
+      {
+        "id": "p2",
+        "kind": "value",
+        "value": "28 N·m"
+      },
+      {
+        "id": "p3",
+        "kind": "value",
+        "value": "60V"
+      },
+      {
+        "id": "p4",
+        "kind": "phrase",
+        "text": "步骤1"
+      }
+    ],
+    "forbidden": [
+      "120V"
+    ]
+  },
+  "v4e-x-03": {
+    "expected_points": [
+      {
+        "id": "p1",
+        "kind": "phrase",
+        "text": "适用条件"
+      },
+      {
+        "id": "p2",
+        "kind": "value",
+        "value": "25 N·m"
+      },
+      {
+        "id": "p3",
+        "kind": "value",
+        "value": "48V"
+      },
+      {
+        "id": "p4",
+        "kind": "phrase",
+        "text": "步骤1"
+      }
+    ],
+    "forbidden": [
+      "120V"
+    ]
+  },
+  "v4e-x-04": {
+    "expected_points": [
+      {
+        "id": "p1",
+        "kind": "phrase",
+        "text": "适用条件"
+      },
+      {
+        "id": "p2",
+        "kind": "value",
+        "value": "32 N·m"
+      },
+      {
+        "id": "p3",
+        "kind": "value",
+        "value": "60V"
+      },
+      {
+        "id": "p4",
+        "kind": "phrase",
+        "text": "步骤1"
+      }
+    ],
+    "forbidden": [
+      "120V"
+    ]
+  },
+  "v4e-x-05": {
+    "expected_points": [
+      {
+        "id": "p1",
+        "kind": "phrase",
+        "text": "适用条件"
+      },
+      {
+        "id": "p2",
+        "kind": "value",
+        "value": "28 N·m"
+      },
+      {
+        "id": "p3",
+        "kind": "value",
+        "value": "48V"
+      },
+      {
+        "id": "p4",
+        "kind": "phrase",
+        "text": "步骤1"
+      }
+    ],
+    "forbidden": [
+      "120V"
+    ]
+  },
+  "v4e-x-06": {
+    "expected_points": [
+      {
+        "id": "p1",
+        "kind": "phrase",
+        "text": "适用条件"
+      },
+      {
+        "id": "p2",
+        "kind": "value",
+        "value": "25 N·m"
+      },
+      {
+        "id": "p3",
+        "kind": "value",
+        "value": "60V"
+      },
+      {
+        "id": "p4",
+        "kind": "phrase",
+        "text": "步骤1"
+      }
+    ],
+    "forbidden": [
+      "120V"
+    ]
+  },
+  "v4e-x-07": {
+    "expected_points": [
+      {
+        "id": "p1",
+        "kind": "phrase",
+        "text": "适用条件"
+      },
+      {
+        "id": "p2",
+        "kind": "value",
+        "value": "32 N·m"
+      },
+      {
+        "id": "p3",
+        "kind": "value",
+        "value": "48V"
+      },
+      {
+        "id": "p4",
+        "kind": "phrase",
+        "text": "步骤1"
+      }
+    ],
+    "forbidden": [
+      "120V"
+    ]
+  },
+  "v4e-x-08": {
+    "expected_points": [
+      {
+        "id": "p1",
+        "kind": "phrase",
+        "text": "适用条件"
+      },
+      {
+        "id": "p2",
+        "kind": "value",
+        "value": "28 N·m"
+      },
+      {
+        "id": "p3",
+        "kind": "value",
+        "value": "60V"
+      },
+      {
+        "id": "p4",
+        "kind": "phrase",
+        "text": "步骤1"
+      }
+    ],
+    "forbidden": [
+      "120V"
+    ]
+  }
+}

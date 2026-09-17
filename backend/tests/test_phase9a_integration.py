@@ -78,8 +78,9 @@ from app.models.database import (  # noqa: E402
 )
 from phase9a import bootstrap_db as bdb  # noqa: E402
 from phase9a import fixtures  # noqa: E402
+from phase9b_migration.migrate import ALEMBIC_HEAD_EXPECTED
 
-_P44_REVISION = "a9b8c7d6e5f4"
+_HEAD_REVISION = ALEMBIC_HEAD_EXPECTED
 _WIKI_IDS = list(fixtures.WIKI_OK_IDS) + [fixtures.WIKI_FAIL_ID]
 # 默认 wiki 的 revision sections（v1 _append_revision 产 summary + facts）。
 _WIKI_DEFAULT_OK = (fixtures.WIKI_DEFAULT_ID, fixtures.WIKI_SALES_ID)
@@ -144,7 +145,7 @@ class Env:
         envmap["DATABASE_URL"] = self.db_url
         envmap["PYTHONIOENCODING"] = "utf-8"
         heads = bdb.alembic_single_head(bdb._BACKEND, envmap)
-        assert [h for h in heads.split("|") if h] == [_P44_REVISION], heads
+        assert [h for h in heads.split("|") if h] == [_HEAD_REVISION], heads
         bdb.alembic_upgrade_head(bdb._BACKEND, envmap)
 
         # 2) 连接（pragma 与生产 sqlite 对齐）。
@@ -317,7 +318,7 @@ def test_smoke_alembic_seed_and_login(env: Env):
     from sqlalchemy import text as sa_text
 
     row = env.db.execute(sa_text("SELECT version_num FROM alembic_version")).fetchone()
-    assert row[0] == _P44_REVISION
+    assert row[0] == _HEAD_REVISION
     env.db.expire_all()
     assert env.db.query(User).count() == 3
     assert env.db.query(UserGroup).count() == sum(len(g) for g in fixtures.USERS.values())

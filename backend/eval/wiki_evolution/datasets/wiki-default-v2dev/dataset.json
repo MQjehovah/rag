@@ -1,0 +1,473 @@
+{
+ "dataset_version": "wiki-default-v2dev",
+ "domain": "wiki_compile.default",
+ "grader_version": "wiki-default-grader/v2-prototype-2",
+ "description": "Grader v2 接线专用开发样例（非效果/校准数据；v2_spec 私有评分要求仅供评分端读取）。train 5（单家族，满足提议者 ≥4不同轨迹前置）、val 4（pass / 温度上限 fail / 版本归属 / 结构性 fail2 占位非满分 / 单位别名）。",
+ "tasks": [
+  {
+   "task_id": "vd2-train-01",
+   "dataset_version": "wiki-default-v2dev",
+   "domain": "wiki_compile.default",
+   "split": "train",
+   "group_id": "dev-v2-family-train",
+   "input_snapshot_id": "wiki-default-v2dev-snap-vd2-train-01",
+   "instruction": "根据资料生成 Wiki 正文：覆盖适用条件、操作步骤与关键参数，数值单位须与来源一致；禁止引入资料外事实。",
+   "grader_version": "wiki-default-grader/v2-prototype-2",
+   "reference_ref": "wiki-default-v2dev.json",
+   "trigger": "manual_rebuild",
+   "wiki_title": "V300 安装与巡检 1",
+   "wiki_category": "操作指南",
+   "sources": [
+    {
+     "doc_id": "d1",
+     "title": "d1",
+     "file": "d1.md"
+    },
+    {
+     "doc_id": "d2",
+     "title": "d2",
+     "file": "d2.md"
+    }
+   ],
+   "v2_spec": {
+    "claims": [
+     {
+      "cid": "t1v",
+      "subject": "供电电压",
+      "predicate": "为",
+      "object": "220",
+      "unit": "V"
+     },
+     {
+      "cid": "t1t",
+      "subject": "温度",
+      "predicate": "为",
+      "object": "25",
+      "unit": "°C"
+     }
+    ],
+    "coverage": [
+     {
+      "topic": "操作步骤"
+     },
+     {
+      "topic": "巡检"
+     }
+    ],
+    "conflicts": []
+   },
+   "v2_forbidden": []
+  },
+  {
+   "task_id": "vd2-train-02",
+   "dataset_version": "wiki-default-v2dev",
+   "domain": "wiki_compile.default",
+   "split": "train",
+   "group_id": "dev-v2-family-train",
+   "input_snapshot_id": "wiki-default-v2dev-snap-vd2-train-02",
+   "instruction": "根据资料生成 Wiki 正文：覆盖适用条件、操作步骤与关键参数，数值单位须与来源一致；禁止引入资料外事实。",
+   "grader_version": "wiki-default-grader/v2-prototype-2",
+   "reference_ref": "wiki-default-v2dev.json",
+   "trigger": "manual_rebuild",
+   "wiki_title": "V300 安装与巡检 2",
+   "wiki_category": "操作指南",
+   "sources": [
+    {
+     "doc_id": "d1",
+     "title": "d1",
+     "file": "d1.md"
+    },
+    {
+     "doc_id": "d2",
+     "title": "d2",
+     "file": "d2.md"
+    }
+   ],
+   "v2_spec": {
+    "claims": [
+     {
+      "cid": "t2v",
+      "subject": "供电电压",
+      "predicate": "为",
+      "object": "220",
+      "unit": "V"
+     },
+     {
+      "cid": "t2t",
+      "subject": "温度",
+      "predicate": "为",
+      "object": "25",
+      "unit": "°C"
+     }
+    ],
+    "coverage": [
+     {
+      "topic": "操作步骤"
+     },
+     {
+      "topic": "巡检"
+     }
+    ],
+    "conflicts": []
+   },
+   "v2_forbidden": []
+  },
+  {
+   "task_id": "vd2-train-03",
+   "dataset_version": "wiki-default-v2dev",
+   "domain": "wiki_compile.default",
+   "split": "train",
+   "group_id": "dev-v2-family-train",
+   "input_snapshot_id": "wiki-default-v2dev-snap-vd2-train-03",
+   "instruction": "根据资料生成 Wiki 正文：覆盖适用条件、操作步骤与关键参数，数值单位须与来源一致；禁止引入资料外事实。",
+   "grader_version": "wiki-default-grader/v2-prototype-2",
+   "reference_ref": "wiki-default-v2dev.json",
+   "trigger": "manual_rebuild",
+   "wiki_title": "V300 安装与巡检 3",
+   "wiki_category": "操作指南",
+   "sources": [
+    {
+     "doc_id": "d1",
+     "title": "d1",
+     "file": "d1.md"
+    },
+    {
+     "doc_id": "d2",
+     "title": "d2",
+     "file": "d2.md"
+    }
+   ],
+   "v2_spec": {
+    "claims": [
+     {
+      "cid": "t3v",
+      "subject": "供电电压",
+      "predicate": "为",
+      "object": "220",
+      "unit": "V"
+     },
+     {
+      "cid": "t3t",
+      "subject": "温度",
+      "predicate": "为",
+      "object": "25",
+      "unit": "°C"
+     }
+    ],
+    "coverage": [
+     {
+      "topic": "操作步骤"
+     },
+     {
+      "topic": "巡检"
+     }
+    ],
+    "conflicts": []
+   },
+   "v2_forbidden": []
+  },
+  {
+   "task_id": "vd2-train-04",
+   "dataset_version": "wiki-default-v2dev",
+   "domain": "wiki_compile.default",
+   "split": "train",
+   "group_id": "dev-v2-family-train",
+   "input_snapshot_id": "wiki-default-v2dev-snap-vd2-train-04",
+   "instruction": "根据资料生成 Wiki 正文：覆盖适用条件、操作步骤与关键参数，数值单位须与来源一致；禁止引入资料外事实。",
+   "grader_version": "wiki-default-grader/v2-prototype-2",
+   "reference_ref": "wiki-default-v2dev.json",
+   "trigger": "manual_rebuild",
+   "wiki_title": "V300 安装与巡检 4",
+   "wiki_category": "操作指南",
+   "sources": [
+    {
+     "doc_id": "d1",
+     "title": "d1",
+     "file": "d1.md"
+    },
+    {
+     "doc_id": "d2",
+     "title": "d2",
+     "file": "d2.md"
+    }
+   ],
+   "v2_spec": {
+    "claims": [
+     {
+      "cid": "t4v",
+      "subject": "供电电压",
+      "predicate": "为",
+      "object": "220",
+      "unit": "V"
+     },
+     {
+      "cid": "t4t",
+      "subject": "温度",
+      "predicate": "为",
+      "object": "25",
+      "unit": "°C"
+     }
+    ],
+    "coverage": [
+     {
+      "topic": "操作步骤"
+     },
+     {
+      "topic": "巡检"
+     }
+    ],
+    "conflicts": []
+   },
+   "v2_forbidden": []
+  },
+  {
+   "task_id": "vd2-train-05",
+   "dataset_version": "wiki-default-v2dev",
+   "domain": "wiki_compile.default",
+   "split": "train",
+   "group_id": "dev-v2-family-train",
+   "input_snapshot_id": "wiki-default-v2dev-snap-vd2-train-05",
+   "instruction": "根据资料生成 Wiki 正文：覆盖适用条件、操作步骤与关键参数，数值单位须与来源一致；禁止引入资料外事实。",
+   "grader_version": "wiki-default-grader/v2-prototype-2",
+   "reference_ref": "wiki-default-v2dev.json",
+   "trigger": "manual_rebuild",
+   "wiki_title": "V300 安装与巡检 5",
+   "wiki_category": "操作指南",
+   "sources": [
+    {
+     "doc_id": "d1",
+     "title": "d1",
+     "file": "d1.md"
+    },
+    {
+     "doc_id": "d2",
+     "title": "d2",
+     "file": "d2.md"
+    }
+   ],
+   "v2_spec": {
+    "claims": [
+     {
+      "cid": "t5v",
+      "subject": "供电电压",
+      "predicate": "为",
+      "object": "220",
+      "unit": "V"
+     },
+     {
+      "cid": "t5t",
+      "subject": "温度",
+      "predicate": "为",
+      "object": "25",
+      "unit": "°C"
+     }
+    ],
+    "coverage": [
+     {
+      "topic": "操作步骤"
+     },
+     {
+      "topic": "巡检"
+     }
+    ],
+    "conflicts": []
+   },
+   "v2_forbidden": []
+  },
+  {
+   "task_id": "vd2-val-pass",
+   "dataset_version": "wiki-default-v2dev",
+   "domain": "wiki_compile.default",
+   "split": "val",
+   "group_id": "dev-v2-family-val",
+   "input_snapshot_id": "wiki-default-v2dev-snap-vd2-val-pass",
+   "instruction": "根据资料生成 Wiki 正文：覆盖适用条件、操作步骤与关键参数，数值单位须与来源一致；禁止引入资料外事实。",
+   "grader_version": "wiki-default-grader/v2-prototype-2",
+   "reference_ref": "wiki-default-v2dev.json",
+   "trigger": "manual_rebuild",
+   "wiki_title": "V300 安装要点",
+   "wiki_category": "操作指南",
+   "sources": [
+    {
+     "doc_id": "d1",
+     "title": "d1",
+     "file": "d1.md"
+    },
+    {
+     "doc_id": "d2",
+     "title": "d2",
+     "file": "d2.md"
+    }
+   ],
+   "v2_spec": {
+    "claims": [
+     {
+      "cid": "voltage",
+      "subject": "供电电压",
+      "predicate": "为",
+      "object": "220",
+      "unit": "V"
+     },
+     {
+      "cid": "temp",
+      "subject": "温度",
+      "predicate": "为",
+      "object": "25",
+      "unit": "°C"
+     }
+    ],
+    "coverage": [
+     {
+      "topic": "操作步骤"
+     },
+     {
+      "topic": "适用条件"
+     }
+    ],
+    "conflicts": []
+   },
+   "v2_forbidden": []
+  },
+  {
+   "task_id": "vd2-val-fail",
+   "dataset_version": "wiki-default-v2dev",
+   "domain": "wiki_compile.default",
+   "split": "val",
+   "group_id": "dev-v2-family-val",
+   "input_snapshot_id": "wiki-default-v2dev-snap-vd2-val-fail",
+   "instruction": "根据资料生成 Wiki 正文：覆盖适用条件、操作步骤与关键参数，数值单位须与来源一致；禁止引入资料外事实。",
+   "grader_version": "wiki-default-grader/v2-prototype-2",
+   "reference_ref": "wiki-default-v2dev.json",
+   "trigger": "manual_rebuild",
+   "wiki_title": "V300 频率要求",
+   "wiki_category": "操作指南",
+   "sources": [
+    {
+     "doc_id": "d1",
+     "title": "d1",
+     "file": "d1.md"
+    },
+    {
+     "doc_id": "d3",
+     "title": "d3",
+     "file": "d3.md"
+    }
+   ],
+   "v2_spec": {
+    "claims": [
+     {
+      "cid": "temp_lim",
+      "subject": "温度上限",
+      "predicate": "≤",
+      "object": 40,
+      "unit": "°C"
+     },
+     {
+      "cid": "voltage",
+      "subject": "供电电压",
+      "predicate": "为",
+      "object": "220",
+      "unit": "V"
+     }
+    ],
+    "coverage": [
+     {
+      "topic": "故障排查"
+     }
+    ],
+    "conflicts": []
+   },
+   "v2_forbidden": []
+  },
+  {
+   "task_id": "vd2-val-versioned",
+   "dataset_version": "wiki-default-v2dev",
+   "domain": "wiki_compile.default",
+   "split": "val",
+   "group_id": "dev-v2-family-val",
+   "input_snapshot_id": "wiki-default-v2dev-snap-vd2-val-versioned",
+   "instruction": "根据资料生成 Wiki 正文：覆盖适用条件、操作步骤与关键参数，数值单位须与来源一致；禁止引入资料外事实。",
+   "grader_version": "wiki-default-grader/v2-prototype-2",
+   "reference_ref": "wiki-default-v2dev.json",
+   "trigger": "manual_rebuild",
+   "wiki_title": "V300 版本频率",
+   "wiki_category": "操作指南",
+   "sources": [
+    {
+     "doc_id": "d1",
+     "title": "d1",
+     "file": "d1.md"
+    }
+   ],
+   "v2_spec": {
+    "claims": [
+     {
+      "cid": "v50",
+      "subject": "频率 v1.0",
+      "predicate": "支持",
+      "object": "50",
+      "unit": "",
+      "version": "v1.0"
+     },
+     {
+      "cid": "v60",
+      "subject": "频率 v1.1",
+      "predicate": "支持",
+      "object": "60",
+      "unit": "",
+      "version": "v1.1"
+     }
+    ],
+    "coverage": [
+     {
+      "topic": "版本 v1.1"
+     }
+    ],
+    "conflicts": []
+   },
+   "v2_forbidden": [
+    "60Hz 泄漏进 v1.0"
+   ]
+  },
+  {
+   "task_id": "vd2-val-fail2",
+   "dataset_version": "wiki-default-v2dev",
+   "domain": "wiki_compile.default",
+   "split": "val",
+   "group_id": "dev-v2-family-val",
+   "input_snapshot_id": "wiki-default-v2dev-snap-vd2-val-fail2",
+   "instruction": "根据资料生成 Wiki 正文：覆盖适用条件、操作步骤与关键参数，数值单位须与来源一致；禁止引入资料外事实。",
+   "grader_version": "wiki-default-grader/v2-prototype-2",
+   "reference_ref": "wiki-default-v2dev.json",
+   "trigger": "manual_rebuild",
+   "wiki_title": "V300 线缆要求",
+   "wiki_category": "操作指南",
+   "sources": [
+    {
+     "doc_id": "d1",
+     "title": "d1",
+     "file": "d1.md"
+    },
+    {
+     "doc_id": "d2",
+     "title": "d2",
+     "file": "d2.md"
+    }
+   ],
+   "v2_spec": {
+    "claims": [
+     {
+      "cid": "cable8",
+      "subject": "线缆直径",
+      "predicate": "≥",
+      "object": 8,
+      "unit": "mm"
+     }
+    ],
+    "coverage": [],
+    "conflicts": []
+   },
+   "v2_forbidden": []
+  }
+ ]
+}

@@ -245,6 +245,26 @@ def _validate_existing_column(existing: dict, target, table: str) -> None:
         )
 
 
+def drop_columns_compat(op, table: str, columns) -> None:
+    """删除列：SQLite 用 recreate='always'（无名 FK 只能重建表）；
+
+    PostgreSQL 用 ALTER TABLE DROP COLUMN。PG 上 recreate=always 会先
+    DROP PRIMARY KEY，若存在引用该 PK 的外键即失败——这是 SQLite 验收
+    发现不了的方言缺陷。
+    """
+    names = list(columns)
+    if not names:
+        return
+    bind = op.get_bind()
+    if bind.dialect.name == "sqlite":
+        with op.batch_alter_table(table, recreate="always") as batch:
+            for name in names:
+                batch.drop_column(name)
+        return
+    for name in names:
+        op.drop_column(table, name)
+
+
 def ensure_columns_sqlite(op, bind, table: str, columns) -> list:
     """SQLite：仅补齐缺失列；已存在列先做等价校验（含 server_default）。
 

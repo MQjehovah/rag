@@ -1,0 +1,64 @@
+{
+  "v3-val-a": {
+    "expected_points": [
+      {
+        "id": "p1",
+        "kind": "phrase",
+        "text": "STRICT-V1"
+      },
+      {
+        "id": "p2",
+        "kind": "value",
+        "value": "25 N·m"
+      },
+      {
+        "id": "p3",
+        "kind": "value",
+        "value": "60V"
+      }
+    ],
+    "forbidden": [
+      "100 N·m",
+      "240V"
+    ]
+  },
+  "v3-val-b": {
+    "expected_points": [
+      {
+        "id": "p1",
+        "kind": "phrase",
+        "text": "STRICT-V1"
+      },
+      {
+        "id": "p2",
+        "kind": "value",
+        "value": "25 N·m"
+      },
+      {
+        "id": "p3",
+        "kind": "value",
+        "value": "60V"
+      }
+    ],
+    "forbidden": [
+      "100 N·m",
+      "240V"
+    ]
+  },
+  "v3-train-01": {
+    "expected_points": [],
+    "forbidden": []
+  },
+  "v3-train-02": {
+    "expected_points": [],
+    "forbidden": []
+  },
+  "v3-train-03": {
+    "expected_points": [],
+    "forbidden": []
+  },
+  "v3-train-04": {
+    "expected_points": [],
+    "forbidden": []
+  }
+}

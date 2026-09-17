@@ -22,9 +22,10 @@ from pathlib import Path
 
 import pytest
 
+from tests.alembic_head import current_alembic_head
+
 _BACKEND = Path(__file__).resolve().parent.parent
 _P38 = "e6f7a8b9c0d1"
-_HEAD = "a9b8c7d6e5f4"
 _P40_COLS = [
     ("note_schema_version", "VARCHAR(64)"),
     ("content_format", "VARCHAR(64)"),
@@ -80,7 +81,7 @@ def test_clean_p38_to_head(tmp_path):
     _upgrade_to(db, _P38)
     proc = _alembic(db, "upgrade", "head")
     assert proc.returncode == 0, proc.stderr
-    assert _version(db) == _HEAD
+    assert _version(db) == current_alembic_head()
 
 
 def test_partial_ahead_p40_columns_upgrade_head_and_values_kept(tmp_path):
@@ -94,7 +95,7 @@ def test_partial_ahead_p40_columns_upgrade_head_and_values_kept(tmp_path):
               "'legacy-note/v0', 'markdown', 'conv-x', 'converted')")
     proc = _alembic(db, "upgrade", "head")
     assert proc.returncode == 0, proc.stderr
-    assert _version(db) == _HEAD
+    assert _version(db) == current_alembic_head()
     # 提前存在的值与行不丢（迁移不重写既有值）。
     conn = sqlite3.connect(f"file:{Path(db).as_posix()}?mode=ro", uri=True)
     try:
@@ -126,7 +127,7 @@ def test_column_preexisting_index_and_fk_backfilled(tmp_path):
     _exec(db, "ALTER TABLE wiki_pages ADD COLUMN workspace_id VARCHAR(36)")
     proc = _alembic(db, "upgrade", "head")
     assert proc.returncode == 0, proc.stderr
-    assert _version(db) == _HEAD
+    assert _version(db) == current_alembic_head()
     conn = sqlite3.connect(f"file:{Path(db).as_posix()}?mode=ro", uri=True)
     try:
         idx = {r[1] for r in conn.execute("PRAGMA index_list(wiki_pages)")}
@@ -309,7 +310,7 @@ def test_p41_correct_index_reused_not_duplicated(tmp_path):
         "CREATE INDEX ix_wiki_pages_workspace_id ON wiki_pages (workspace_id)")
     proc = _alembic(db, "upgrade", "head")
     assert proc.returncode == 0, proc.stderr
-    assert _version(db) == _HEAD
+    assert _version(db) == current_alembic_head()
     conn = sqlite3.connect(f"file:{Path(db).as_posix()}?mode=ro", uri=True)
     try:
         cnt = conn.execute(

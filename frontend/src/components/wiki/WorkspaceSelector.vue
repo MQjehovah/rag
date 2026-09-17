@@ -10,14 +10,16 @@
     <el-option
       v-for="ws in workspaces"
       :key="ws.id"
-      :label="ws.name || ws.id"
+      :label="optionLabel(ws.id)"
       :value="ws.id"
     />
   </el-select>
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
 import type { WikiWorkspaceSummary } from '../../api/wikiWorkspaces'
+import { buildWorkspaceOptionLabels } from '../../utils/workspaceLabels'
 
 /** Phase 8A：工作区选择器（纯展示层，只显示名称，不含 ACL/scope_id/key）。 */
 const props = withDefaults(
@@ -35,6 +37,12 @@ const emit = defineEmits<{
   (e: 'update:modelValue', value: string): void
 }>()
 
+const optionLabels = computed(() => buildWorkspaceOptionLabels(props.workspaces))
+
+function optionLabel(id: string): string {
+  return optionLabels.value.get(id) || id
+}
+
 function onChange(value: unknown) {
   emit('update:modelValue', typeof value === 'string' ? value : '')
 }
@@ -42,11 +50,11 @@ function onChange(value: unknown) {
 
 <style scoped>
 .ws-select {
-  width: 200px;
+  width: 260px;
 }
 @media (max-width: 720px) {
   .ws-select {
-    width: 160px;
+    width: 180px;
   }
 }
 </style>

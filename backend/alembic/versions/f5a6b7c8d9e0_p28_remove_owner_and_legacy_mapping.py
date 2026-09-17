@@ -11,6 +11,8 @@ from typing import Sequence, Union
 from alembic import op
 import sqlalchemy as sa
 
+from migration_compat import drop_columns_compat
+
 revision: str = "f5a6b7c8d9e0"
 down_revision: Union[str, Sequence[str], None] = "b3c4d5e6f7a8"
 branch_labels: Union[str, Sequence[str], None] = None
@@ -31,11 +33,7 @@ def upgrade() -> None:
             for column in inspector.get_columns("knowledge_debts")
         }
         if "owner" in columns:
-            with op.batch_alter_table(
-                "knowledge_debts",
-                recreate="always",
-            ) as batch:
-                batch.drop_column("owner")
+            drop_columns_compat(op, "knowledge_debts", ["owner"])
 
     inspector = sa.inspect(bind)
     if inspector.has_table("knowledge_cards"):
@@ -44,11 +42,7 @@ def upgrade() -> None:
             for column in inspector.get_columns("knowledge_cards")
         }
         if "owner" in columns:
-            with op.batch_alter_table(
-                "knowledge_cards",
-                recreate="always",
-            ) as batch:
-                batch.drop_column("owner")
+            drop_columns_compat(op, "knowledge_cards", ["owner"])
 
     # 旧 KO 主表已经在 P22 删除，映射完成后可一并清理
     inspector = sa.inspect(bind)

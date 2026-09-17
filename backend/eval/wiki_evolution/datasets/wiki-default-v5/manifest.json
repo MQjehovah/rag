@@ -1,0 +1,152 @@
+{
+  "dataset_version": "wiki-default-v5",
+  "generation": "hand-authored synthetic scenario libraries (5 families); deterministic regeneration; 编写者本人编写并审阅过全部资料",
+  "source_families": {
+    "op": {
+      "label": "操作流程",
+      "split_groups": {
+        "train": [
+          "op-t1"
+        ],
+        "val": [
+          "op-v1",
+          "op-v2"
+        ],
+        "test": [
+          "op-x1"
+        ]
+      }
+    },
+    "cfg": {
+      "label": "配置约束",
+      "split_groups": {
+        "train": [
+          "cfg-t1"
+        ],
+        "val": [
+          "cfg-v1"
+        ],
+        "test": [
+          "cfg-x1"
+        ]
+      }
+    },
+    "mig": {
+      "label": "版本迁移",
+      "split_groups": {
+        "train": [
+          "mig-t1"
+        ],
+        "val": [
+          "mig-v1"
+        ],
+        "test": [
+          "mig-x1"
+        ]
+      }
+    },
+    "ts": {
+      "label": "故障排查",
+      "split_groups": {
+        "val": [
+          "ts-v1"
+        ],
+        "test": [
+          "ts-x1"
+        ]
+      }
+    },
+    "conf": {
+      "label": "多资料冲突与适用范围",
+      "split_groups": {
+        "val": [
+          "conf-v1"
+        ],
+        "test": [
+          "conf-x1"
+        ]
+      }
+    }
+  },
+  "split_counts": {
+    "train": 10,
+    "val": 14,
+    "test": 15
+  },
+  "exposure": {
+    "author_seen": true,
+    "author_scope": "编写者本人查看/审阅全部 38 任务源资料与参考答案；未进入任何执行/维护/提议/验证角色上下文；未用于阶段 0-7 调试或回归；不声称他人从未查看文件。",
+    "note": "校准探针与参考答案仅供评分器读取。"
+  },
+  "file_hashes": {
+    "sources\\v5-cfg-009.md": "9676e2ae50cb2d113dbce7a5ebbdabc6c0beedf691f198bc594c255169cc660f",
+    "sources\\v5-cfg-010.md": "49bcc6a749d4c839731be67e5d92c2c5e2b50c127244969fce48fc64deee2407",
+    "sources\\v5-cfg-011.md": "9220943c225f04f4dde9d4bf4a0d8ea138a997f25104473f73368dd3c3f5a8dd",
+    "sources\\v5-cfg-012.md": "8617fd4ba98c17f4c30f239b1733556b7d5e44e457d70cb12fae1041f13ee5c5",
+    "sources\\v5-cfg-013.md": "6b2a63c9f27fabbeecc3c86a643716ac6f4d879152324b6f75243141c8266c33",
+    "sources\\v5-cfg-014.md": "77b27f3b18707152164eb5abfeac85dc18a3614ac4be6b9681a41506c167e5a7",
+    "sources\\v5-cfg-015.md": "17a05176f182e66cc2d70aed6c732b9229acddd06cb056054cc2798ec5597352",
+    "sources\\v5-cfg-016.md": "1f74435e7855634330de162670a90d7b645366bdbfeac9c0627adb20a2f046c8",
+    "sources\\v5-cfg-017.md": "c559c40070c757ba0bb3d0a2f9cc792b1a438c7d13eca440107a248f3c9d5478",
+    "sources\\v5-cfg-018.md": "d63eea1f7aea72d086eea1d19f2c938ca737b4f96b271fd4976b1f4fd020fddd",
+    "sources\\v5-cfg-019.md": "a9843399fa22438ae96dec6678d3e3f760a912b4d3ecbe8d1182d0009c02b5a6",
+    "sources\\v5-cfg-020.md": "da07717d59260f61c488d3b3b8a80681ca9a64a3cc4e1c978797c22d4d217c6f",
+    "sources\\v5-conf-034-a.md": "15ba22d0c6571c9aa0914505a44551fd7c84e6677de305e6828bac534034f7cd",
+    "sources\\v5-conf-034-b.md": "4701dbb17e93975f4f0668ed881175b7b94a4fa490b610bcda7fbed4672fb783",
+    "sources\\v5-conf-035-a.md": "4d038f182f904cbc7214a3c60f8e62166b20b9d0bf90f3d88571d1ee4262f26b",
+    "sources\\v5-conf-035-b.md": "77b0dd7f99baa1426d7dac6cf72e6259ed6e4f6e66f6f3894abd1a2fd6cc8f85",
+    "sources\\v5-conf-036-a.md": "17d7b90ed5aff81fd99f99f91fe66b4a64aca9dafea282d8871c24a4382cd648",
+    "sources\\v5-conf-036-b.md": "32caf7073773af8bd34a0da23aaf5c9e718382e3ad051313da897fddd86a16d7",
+    "sources\\v5-conf-037-a.md": "04a078d2b6e4d4f02677ed2dd2f1fade9d76b944b6c70c4027cad790703e209b",
+    "sources\\v5-conf-037-b.md": "93fe3afad80492528eec7f19822ce370e7720d713599b6d3a9e4e3c4e8d754b2",
+    "sources\\v5-conf-038-a.md": "41928f20f278cf77a53a8fcaf5efe0c12a0a36678ca58890a5c9f425e62cc6d9",
+    "sources\\v5-conf-038-b.md": "58305c0baa905bac6cd1c2402931cd54409634ea7a71f1b1dbb36d6a1e13a191",
+    "sources\\v5-conf-039-a.md": "e82a4f2d46631ed73e974ca3c59aaba81de5cc57d3931748eb24f7d1d4205bab",
+    "sources\\v5-conf-039-b.md": "8b85879f44f63046a680716c4002a81cdf063bf2f79ff6fd057b3a6046c7e8d8",
+    "sources\\v5-mig-021-v1.md": "9b50085fe23ddece44794daff87d57b496ca04fe87de9877707c6e94d8d065bc",
+    "sources\\v5-mig-021-v2.md": "30e78779b7824f6b8dcc91ba9196c0e053b95ce1fb6cf0b13a4dc3b9a57cda5f",
+    "sources\\v5-mig-022-v1.md": "084e8c5ce884857dedf728877362373b292bcc39538d87268e766a70042674e6",
+    "sources\\v5-mig-022-v2.md": "f85e4d32883e7e3137df46e49e29a44ee40f423c23299318634efceef821d3db",
+    "sources\\v5-mig-023-v1.md": "65af0155c0dcf1717580d96caa2294dbea6dc00df3916c4e6298a68c321e9979",
+    "sources\\v5-mig-023-v2.md": "ec458d60b7c3a8f534760bbac312d1c7cc1d348577f2abcf305fc61df1653f48",
+    "sources\\v5-mig-024-v1.md": "1f17339683486b619efc6f545743a82d05b37446e3879e94de58c16917e5f0b8",
+    "sources\\v5-mig-024-v2.md": "1ad46763a28a2510f3a9a832f5e567623b2378583685ddc05b52e64e59b87477",
+    "sources\\v5-mig-025-v1.md": "640271ff249fedacd2d7337aa0257da31f45672a040907e9fa63196a9c88ed96",
+    "sources\\v5-mig-025-v2.md": "21a8545ed9d721b0a2ad8575207c8ba3b72e020571a30974f1b23b48881c9d8c",
+    "sources\\v5-mig-026-v1.md": "595406bdd8d8acb395fc076cbc6befb394b372b2df041b58693f835a0db60717",
+    "sources\\v5-mig-026-v2.md": "c3218e64632f7edde45457fca76c4aca034fdc30f6fc06fa2c65fd80ebf9f2e5",
+    "sources\\v5-mig-027-v1.md": "cad343e7a9cb388e5b1c07972b7e6495a42d64de7f85f33a65d32ec5f95fa1e3",
+    "sources\\v5-mig-027-v2.md": "ecd657c86f362cf6e00176c1430d6bc2fc176f063e87fb3dfc0ba22e08dd3cad",
+    "sources\\v5-op-001.md": "9c9d67c418216c8d6395db9594e0df6c9c24c99de7063f26bbbf19b4853ff003",
+    "sources\\v5-op-002.md": "3e14454f8db85cfc7790e7eec509a8f8fd15f198d442bad7f9ab12c69edea183",
+    "sources\\v5-op-003.md": "b307d192bc1be2061729257d17b29ba46c794d8abca0c3427bb7b20a048abfed",
+    "sources\\v5-op-004.md": "77a4658e942b67334cf00e75036fe17cbcfbdff14b8bc60ce29403e62320e28e",
+    "sources\\v5-op-005.md": "3b0535e7df7f3044d48b08ac37dcf28acc8c6835cbe9d7ea2aa16199f39e332c",
+    "sources\\v5-op-006.md": "ec70c81bfa0a40e0a1adb340c4d32204b5f1ddc30ac9d492ede459e880137a0f",
+    "sources\\v5-op-007.md": "7bd7c3b7f2aab013aa9b9ec32db97eccc8946cf6cb4f4933b4d6a90704456b2b",
+    "sources\\v5-op-008.md": "01cff148adc7a49bce82fec4f108fa7115a7b019afa76bb9c3f802e424b09573",
+    "sources\\v5-ts-028.md": "429336938e8cdcfa4c8565547c42f37ea57906fc8e01eb498ebb15a859d6b49e",
+    "sources\\v5-ts-029.md": "bab93cb8bc41d4990f1f665564ff008888c7dd9bd96049d0c1cb472f22f00d56",
+    "sources\\v5-ts-030.md": "7a7ae0d6fa8a234f609656f94328f6f3775361b74bb3ca7d25e6a443ee75fea3",
+    "sources\\v5-ts-031.md": "b6adeb64257a609d192e3c7ec3b1ed94c38fe340fcd6dadc55447cf865ee4f33",
+    "sources\\v5-ts-032.md": "5e2dbc8fbc9907cdca9accc15223ab47f06073d5f8f4a899903c7a4c845b1706",
+    "sources\\v5-ts-033.md": "560bc1905fb105e8d7261215925fc23e055d7471d227a30d31a8264e448bcddf"
+  },
+  "statistical_caveat": "38 任务用于初步实验；不宣称充分统计效力。",
+  "group_to_split": {
+    "cfg-t1": "train",
+    "cfg-v1": "val",
+    "cfg-x1": "test",
+    "conf-v1": "val",
+    "conf-x1": "test",
+    "mig-t1": "train",
+    "mig-v1": "val",
+    "mig-x1": "test",
+    "op-t1": "train",
+    "op-v1": "val",
+    "op-v2": "val",
+    "op-x1": "test",
+    "ts-v1": "val",
+    "ts-x1": "test"
+  }
+}

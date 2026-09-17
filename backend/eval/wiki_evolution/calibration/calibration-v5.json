@@ -1,0 +1,405 @@
+{
+  "dataset_version": "wiki-default-v5",
+  "grader": "wiki-default-grader/v1（未修改；不改语义迎合新案例）",
+  "note": "探针为人工可核验候选；离线运行，无模型参与。",
+  "results": {
+    "synonym_ok_rewrite": {
+      "task_id": "v5-op-001",
+      "family": "操作流程",
+      "verdict": "fail",
+      "passed": 4,
+      "total": 7,
+      "detail": {
+        "grader_version": "wiki-default-grader/v1",
+        "task_id": "v5-op-001",
+        "verdict": "fail",
+        "compile_ok": true,
+        "checks_ok": false,
+        "item_results": [
+          {
+            "id": "p1",
+            "kind": "phrase",
+            "passed": true,
+            "detail": "正文包含要点文本"
+          },
+          {
+            "id": "p2",
+            "kind": "phrase",
+            "passed": false,
+            "detail": "正文缺少要点文本: 前置条件"
+          },
+          {
+            "id": "p3",
+            "kind": "phrase",
+            "passed": true,
+            "detail": "正文包含要点文本"
+          },
+          {
+            "id": "p4",
+            "kind": "phrase",
+            "passed": false,
+            "detail": "正文缺少要点文本: 安全提醒"
+          },
+          {
+            "id": "v1",
+            "kind": "value",
+            "passed": true,
+            "detail": "关键值出现在正文"
+          },
+          {
+            "id": "p5",
+            "kind": "phrase",
+            "passed": false,
+            "detail": "正文缺少要点文本: 验收检查"
+          },
+          {
+            "id": "forbidden:fd74c3ec",
+            "kind": "forbidden",
+            "passed": true,
+            "detail": "禁止内容未出现"
+          }
+        ],
+        "outcome": {
+          "run_ok": true,
+          "published": true,
+          "failure_kind": null
+        }
+      }
+    },
+    "keywords_ok_wrong_conclusion": {
+      "task_id": "v5-cfg-009",
+      "family": "配置约束",
+      "verdict": "pass",
+      "passed": 6,
+      "total": 6,
+      "detail": {
+        "grader_version": "wiki-default-grader/v1",
+        "task_id": "v5-cfg-009",
+        "verdict": "pass",
+        "compile_ok": true,
+        "checks_ok": true,
+        "item_results": [
+          {
+            "id": "p1",
+            "kind": "phrase",
+            "passed": true,
+            "detail": "正文包含要点文本"
+          },
+          {
+            "id": "p2",
+            "kind": "phrase",
+            "passed": true,
+            "detail": "正文包含要点文本"
+          },
+          {
+            "id": "v1",
+            "kind": "value",
+            "passed": true,
+            "detail": "关键值出现在正文"
+          },
+          {
+            "id": "p3",
+            "kind": "phrase",
+            "passed": true,
+            "detail": "正文包含要点文本"
+          },
+          {
+            "id": "p4",
+            "kind": "phrase",
+            "passed": true,
+            "detail": "正文包含要点文本"
+          },
+          {
+            "id": "forbidden:49a90e80",
+            "kind": "forbidden",
+            "passed": true,
+            "detail": "禁止内容未出现"
+          }
+        ],
+        "outcome": {
+          "run_ok": true,
+          "published": true,
+          "failure_kind": null
+        }
+      }
+    },
+    "version_mixup": {
+      "task_id": "v5-mig-021",
+      "family": "版本迁移",
+      "verdict": "fail",
+      "passed": 4,
+      "total": 9,
+      "detail": {
+        "grader_version": "wiki-default-grader/v1",
+        "task_id": "v5-mig-021",
+        "verdict": "fail",
+        "compile_ok": true,
+        "checks_ok": false,
+        "item_results": [
+          {
+            "id": "p1",
+            "kind": "phrase",
+            "passed": false,
+            "detail": "正文缺少要点文本: 主题"
+          },
+          {
+            "id": "v1",
+            "kind": "value_in_version",
+            "passed": true,
+            "detail": "值 X-Token 长度 32 字符 归属版本 v1"
+          },
+          {
+            "id": "v2",
+            "kind": "value_in_version",
+            "passed": true,
+            "detail": "值 access_token 有效期 7200 s 归属版本 v2"
+          },
+          {
+            "id": "a1",
+            "kind": "absent_in_version",
+            "passed": false,
+            "detail": "值 X-Token 长度 32 字符 混入了版本 v2 区段（跨版本混合）"
+          },
+          {
+            "id": "a2",
+            "kind": "absent_in_version",
+            "passed": false,
+            "detail": "值 access_token 有效期 7200 s 混入了版本 v1 区段（跨版本混合）"
+          },
+          {
+            "id": "p2",
+            "kind": "phrase",
+            "passed": false,
+            "detail": "正文缺少要点文本: 弃用与兼容"
+          },
+          {
+            "id": "p3",
+            "kind": "phrase",
+            "passed": false,
+            "detail": "正文缺少要点文本: 升级提示"
+          },
+          {
+            "id": "forbidden:91516fef",
+            "kind": "forbidden",
+            "passed": true,
+            "detail": "禁止内容未出现"
+          },
+          {
+            "id": "forbidden:63e74511",
+            "kind": "forbidden",
+            "passed": true,
+            "detail": "禁止内容未出现"
+          }
+        ],
+        "outcome": {
+          "run_ok": true,
+          "published": true,
+          "failure_kind": null
+        }
+      }
+    },
+    "no_evidence_free_supplement": {
+      "task_id": "v5-ts-028",
+      "family": "故障排查",
+      "verdict": "pass",
+      "passed": 7,
+      "total": 7,
+      "detail": {
+        "grader_version": "wiki-default-grader/v1",
+        "task_id": "v5-ts-028",
+        "verdict": "pass",
+        "compile_ok": true,
+        "checks_ok": true,
+        "item_results": [
+          {
+            "id": "p1",
+            "kind": "phrase",
+            "passed": true,
+            "detail": "正文包含要点文本"
+          },
+          {
+            "id": "p2",
+            "kind": "phrase",
+            "passed": true,
+            "detail": "正文包含要点文本"
+          },
+          {
+            "id": "p3",
+            "kind": "phrase",
+            "passed": true,
+            "detail": "正文包含要点文本"
+          },
+          {
+            "id": "p4",
+            "kind": "phrase",
+            "passed": true,
+            "detail": "正文包含要点文本"
+          },
+          {
+            "id": "v1",
+            "kind": "value",
+            "passed": true,
+            "detail": "关键值出现在正文"
+          },
+          {
+            "id": "p5",
+            "kind": "phrase",
+            "passed": true,
+            "detail": "正文包含要点文本"
+          },
+          {
+            "id": "forbidden:9e8ff8a0",
+            "kind": "forbidden",
+            "passed": true,
+            "detail": "禁止内容未出现"
+          }
+        ],
+        "outcome": {
+          "run_ok": true,
+          "published": true,
+          "failure_kind": null
+        }
+      }
+    },
+    "key_omission": {
+      "task_id": "v5-ts-029",
+      "family": "故障排查",
+      "verdict": "fail",
+      "passed": 6,
+      "total": 7,
+      "detail": {
+        "grader_version": "wiki-default-grader/v1",
+        "task_id": "v5-ts-029",
+        "verdict": "fail",
+        "compile_ok": true,
+        "checks_ok": false,
+        "item_results": [
+          {
+            "id": "p1",
+            "kind": "phrase",
+            "passed": true,
+            "detail": "正文包含要点文本"
+          },
+          {
+            "id": "p2",
+            "kind": "phrase",
+            "passed": true,
+            "detail": "正文包含要点文本"
+          },
+          {
+            "id": "p3",
+            "kind": "phrase",
+            "passed": true,
+            "detail": "正文包含要点文本"
+          },
+          {
+            "id": "p4",
+            "kind": "phrase",
+            "passed": true,
+            "detail": "正文包含要点文本"
+          },
+          {
+            "id": "v1",
+            "kind": "value",
+            "passed": true,
+            "detail": "关键值出现在正文"
+          },
+          {
+            "id": "p5",
+            "kind": "phrase",
+            "passed": false,
+            "detail": "正文缺少要点文本: 预防建议"
+          },
+          {
+            "id": "forbidden:9e8ff8a0",
+            "kind": "forbidden",
+            "passed": true,
+            "detail": "禁止内容未出现"
+          }
+        ],
+        "outcome": {
+          "run_ok": true,
+          "published": true,
+          "failure_kind": null
+        }
+      }
+    },
+    "applicability_confusable": {
+      "task_id": "v5-conf-034",
+      "family": "多资料冲突与适用范围",
+      "verdict": "pass",
+      "passed": 7,
+      "total": 7,
+      "detail": {
+        "grader_version": "wiki-default-grader/v1",
+        "task_id": "v5-conf-034",
+        "verdict": "pass",
+        "compile_ok": true,
+        "checks_ok": true,
+        "item_results": [
+          {
+            "id": "p1",
+            "kind": "phrase",
+            "passed": true,
+            "detail": "正文包含要点文本"
+          },
+          {
+            "id": "p2",
+            "kind": "phrase",
+            "passed": true,
+            "detail": "正文包含要点文本"
+          },
+          {
+            "id": "p3",
+            "kind": "phrase",
+            "passed": true,
+            "detail": "正文包含要点文本"
+          },
+          {
+            "id": "v1",
+            "kind": "value",
+            "passed": true,
+            "detail": "关键值出现在正文"
+          },
+          {
+            "id": "v2",
+            "kind": "value",
+            "passed": true,
+            "detail": "关键值出现在正文"
+          },
+          {
+            "id": "p4",
+            "kind": "phrase",
+            "passed": true,
+            "detail": "正文包含要点文本"
+          },
+          {
+            "id": "forbidden:468393ca",
+            "kind": "forbidden",
+            "passed": true,
+            "detail": "禁止内容未出现"
+          }
+        ],
+        "outcome": {
+          "run_ok": true,
+          "published": true,
+          "failure_kind": null
+        }
+      }
+    }
+  },
+  "capability_matrix": {
+    "synonym_ok_rewrite": "不能区分（phrase 精确匹配 → 合理同义被判失败）",
+    "keywords_ok_wrong_conclusion": "不能区分（值齐全即通过 → 错误结论误通过）",
+    "version_mixup": "能区分（value_in_version/absent_in_version 检出）",
+    "no_evidence_free_supplement": "不能区分（无禁词自由补充不被拦截；forbidden 仅覆盖显式黑名单措辞）",
+    "key_omission": "能区分（phrase/value 缺失检出）",
+    "applicability_confusable": "不能区分（适用范围张冠李戴但数值齐全 → 误通过）"
+  },
+  "pending_human_review": [
+    "是否接受‘同义表达漏报’（建议 v1 维持现状或另立 grader 同义表版本）",
+    "关键词齐全但结论错误/适用范围混淆需语义级检查（建议另立 grader 版本，不覆盖 v1）",
+    "无证据自由补充是否纳入禁止规则（可能引入误伤）",
+    "人工复核全部 39 任务参考答案与探针文本"
+  ]
+}

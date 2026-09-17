@@ -24,7 +24,7 @@ _BACKEND = Path(__file__).resolve().parent.parent
 if str(_BACKEND) not in sys.path:
     sys.path.insert(0, str(_BACKEND))
 
-_P44_REVISION = "a9b8c7d6e5f4"
+from phase9b_migration.migrate import ALEMBIC_HEAD_EXPECTED
 
 
 def _repo_root() -> Path:
@@ -124,7 +124,7 @@ def main(argv: list[str] | None = None) -> int:
     env["PYTHONIOENCODING"] = "utf-8"
     env.pop("PHASE9A_BE_PORT", None)
 
-    # 打印 alembic 单 head 检查（真实链，不硬编码猜测）。
+    # 打印 alembic 单 head 检查；预期 head 与 Phase9B 运维常量对齐（显式固定值）。
     try:
         heads = alembic_single_head(_BACKEND, env)
     except RuntimeError as exc:
@@ -135,8 +135,10 @@ def main(argv: list[str] | None = None) -> int:
     if len(head_list) != 1:
         print(f"[phase9a] alembic 非单 head: {heads}", file=sys.stderr)
         return 4
-    if head_list[0] != _P44_REVISION:
-        print(f"[phase9a] alembic head 与仓库 P44 不一致: {head_list[0]}", file=sys.stderr)
+    if head_list[0] != ALEMBIC_HEAD_EXPECTED:
+        print(
+            f"[phase9a] alembic head 与运维预期不一致: {head_list[0]}",
+            file=sys.stderr)
         return 5
 
     try:

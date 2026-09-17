@@ -2,7 +2,7 @@
 
 - 临时 SQLite：upgrade 到 P43 d3e4f5a6b7c8 → 列存在；downgrade 到 P42
   c2d3e4f5a6b7 → 列移除；再 upgrade 到 P43 → 列恢复（显式版本往返，不使用
-  "head → -1" 推断，因为当前 head 已是 P44 a9b8c7d6e5f4）；
+  "head → -1" 推断：当前 head 已越过 P43/P44，P43 往返必须锚定历史 revision）；
 - ORM create_all：字段 nullable + CHECK（confidence/selected_by）生效；
 - create_all 与 migration guard（check_managed_migrations）一致；
 - PostgreSQL 方言编译校验（如实声明：仅编译验证，未真实运行 PG 实例）。
@@ -27,7 +27,7 @@ from app.models.database import (
 )
 
 _BACKEND = Path(__file__).resolve().parent.parent
-# 迁移链版本（P43 上一步为 P42；当前 head 为 P44，不进 P43 往返范围）。
+# 迁移链版本（P43 上一步为 P42；P43 往返锚定历史 revision，不读当前 head）。
 _P43_REV = "d3e4f5a6b7c8"
 _P42_REV = "c2d3e4f5a6b7"
 _NEW_COLUMNS = [
@@ -121,30 +121,9 @@ print("P43_ROUNDTRIP_OK")
     assert "P43_ROUNDTRIP_OK" in proc.stdout
 
 
-def test_single_head(tmp_path):
-    url = f"sqlite:///{(tmp_path / 'head.db').as_posix()}"
-    env = dict(os.environ)
-    env["DATABASE_URL"] = url
-    script = f"""
-import os, sys
-sys.path.insert(0, {str(_BACKEND)!r})
-os.environ["DATABASE_URL"] = {url!r}
-from alembic.config import Config
-from alembic import command
-from alembic.script import ScriptDirectory
-cfg = Config({str(_BACKEND / 'alembic.ini')!r})
-cfg.set_main_option("script_location", {str(_BACKEND / 'alembic')!r})
-heads = ScriptDirectory.from_config(cfg).get_heads()
-assert len(heads) == 1, heads
-assert heads[0] == "a9b8c7d6e5f4", heads
-print("SINGLE_HEAD_OK")
-"""
-    proc = subprocess.run(
-        [sys.executable, "-c", script],
-        capture_output=True, text=True, env=env, encoding="utf-8", errors="replace",
-    )
-    assert proc.returncode == 0, proc.stderr
-    assert "SINGLE_HEAD_OK" in proc.stdout
+def test_single_head():
+    from tests.alembic_head import current_alembic_head
+    assert current_alembic_head()
 
 
 # ---------------------------------------------------------------------------

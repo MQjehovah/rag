@@ -45,8 +45,8 @@ _ALLOWED_DIR_COMMANDS = {
     "snapshot", "upgrade", "downgrade", "backfill-apply",
     "postflight", "downgrade-drill", "restore-verify",
 }
-# downgrade-drill 默认目标 rev：head a9b8c7d6e5f4（P44）的直接父版本 P43。
-DEFAULT_DRILL_REV = "d3e4f5a6b7c8"
+# downgrade-drill 默认目标 rev：当前 head 4f83c9e2a1d7（P53）的直接父版本 P52。
+DEFAULT_DRILL_REV = "4f83c9e2a1d7"
 
 
 def _now_ts() -> str:

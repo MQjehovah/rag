@@ -19,10 +19,14 @@ from sqlalchemy.orm import Session
 from app.core import access_control
 from app.models.database import (
     Notebook,
+    NotebookGroup,
     NotebookWorkspaceBinding,
     WikiPage,
     WikiWorkspace,
 )
+
+# 系统自动生成的 Notebook 默认工作区 key 前缀（workspace_key_for_notebook）。
+AUTO_NOTEBOOK_WORKSPACE_KEY_PREFIX = "ws_nb_"
 
 # ---- 状态常量 ----
 WS_STATUS_ACTIVE = "active"
@@ -150,6 +154,102 @@ def list_visible_workspaces(db: Session, current_user: dict) -> list[WikiWorkspa
     """普通用户只返回有权限访问的 workspace；admin 全部。"""
     rows = db.query(WikiWorkspace).all()
     return [ws for ws in rows if workspace_visible(db, ws, current_user)]
+
+
+def is_auto_notebook_workspace_key(key: str | None) -> bool:
+    """是否为系统按 notebook 派生的自动工作区 key（ws_nb_*）。"""
+    return str(key or "").startswith(AUTO_NOTEBOOK_WORKSPACE_KEY_PREFIX)
+
+
+def _notebook_visible_from_cached_groups(current_user: dict, notebook: Notebook, extra_groups: set[str]) -> bool:
+    """用已批量加载的组集合判断 Notebook 名称是否对当前用户可见（不再查库）。"""
+    groups: set[str] = set(extra_groups)
+    if notebook is not None and notebook.group_id and str(notebook.group_id).strip():
+        groups.add(str(notebook.group_id).strip())
+    if not groups:
+        scope = access_control.AccessScope(access_control.SCOPE_COMPANY)
+    elif groups <= access_control._PUBLIC_MARKERS:
+        scope = access_control.AccessScope(access_control.SCOPE_COMPANY)
+    elif groups & access_control._configured_admin_groups():
+        scope = access_control.AccessScope(access_control.SCOPE_ADMIN)
+    else:
+        business = groups - access_control._PUBLIC_MARKERS - access_control._configured_admin_groups()
+        has_public = bool(groups & access_control._PUBLIC_MARKERS)
+        if not business or has_public:
+            scope = access_control.AccessScope(access_control.SCOPE_UNKNOWN)
+        else:
+            scope = access_control.AccessScope(access_control.SCOPE_GROUP, frozenset(business))
+    return access_control._scope_matches(scope, current_user)
+
+
+def project_workspace_display_names(
+    db: Session,
+    workspaces: list[WikiWorkspace],
+    current_user: dict,
+) -> dict[str, str]:
+    """为已授权返回的 workspace 批量投影只读 display_name。
+
+    不扩大可见集合、不写回 name、不按 workspace 逐条查询 Notebook。
+    仅当旧自动工作区（ws_nb_* 且 name==scope_id）恰好一个有效绑定、
+    Notebook 存在且名称非空、且调用者有权看到该 Notebook 名称时，才用 Notebook 名；
+    否则 display_name = 数据库中的真实 name。
+    """
+    result = {ws.id: (ws.name if ws.name is not None else "") for ws in workspaces}
+    candidates = [
+        ws for ws in workspaces
+        if ws.id
+        and is_auto_notebook_workspace_key(ws.key)
+        and (ws.name or "").strip() == (ws.scope_id or "").strip()
+    ]
+    if not candidates:
+        return result
+
+    ws_ids = [ws.id for ws in candidates]
+    rows = (
+        db.query(NotebookWorkspaceBinding.workspace_id, Notebook)
+        .outerjoin(Notebook, Notebook.id == NotebookWorkspaceBinding.notebook_id)
+        .filter(
+            NotebookWorkspaceBinding.workspace_id.in_(ws_ids),
+            NotebookWorkspaceBinding.status == BINDING_STATUS_ACTIVE,
+        )
+        .all()
+    )
+    grouped: dict[str, list[Notebook | None]] = {}
+    for ws_id, notebook in rows:
+        grouped.setdefault(ws_id, []).append(notebook)
+
+    nb_ids = [
+        nb.id
+        for nbs in grouped.values()
+        for nb in nbs
+        if nb is not None and nb.id
+    ]
+    extra_groups: dict[str, set[str]] = {}
+    if nb_ids:
+        for nid, gname in (
+            db.query(NotebookGroup.notebook_id, NotebookGroup.group_name)
+            .filter(NotebookGroup.notebook_id.in_(nb_ids))
+            .all()
+        ):
+            if gname and str(gname).strip():
+                extra_groups.setdefault(nid, set()).add(str(gname).strip())
+
+    for ws in candidates:
+        nbs = grouped.get(ws.id) or []
+        if len(nbs) != 1:
+            continue
+        notebook = nbs[0]
+        if notebook is None:
+            continue
+        title = (notebook.name or "").strip()
+        if not title:
+            continue
+        if not _notebook_visible_from_cached_groups(
+            current_user, notebook, extra_groups.get(notebook.id, set())
+        ):
+            continue
+        result[ws.id] = title
+    return result
 
 
 def get_visible_workspace(db: Session, current_user: dict, workspace_id: str) -> WikiWorkspace | None:

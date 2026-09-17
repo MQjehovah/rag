@@ -456,13 +456,13 @@ def test_list_workspaces_field_redaction(client):
     workspaces = c.get("/api/wiki-workspaces").json()["workspaces"]
     assert len(workspaces) == 1
     assert set(workspaces[0].keys()) == {
-        "id", "name", "description", "status", "created_at", "updated_at",
+        "id", "name", "display_name", "description", "status", "created_at", "updated_at",
     }
     _override(_admin)
     workspaces = c.get("/api/wiki-workspaces").json()["workspaces"]
     assert len(workspaces) == 2
     full = {
-        "id", "key", "name", "description", "acl_scope", "scope_id",
+        "id", "key", "name", "display_name", "description", "acl_scope", "scope_id",
         "status", "created_by", "created_at", "updated_at",
     }
     assert all(set(w.keys()) == full for w in workspaces)
@@ -475,7 +475,7 @@ def test_workspace_detail_field_redaction(client):
     _override(_eng)
     body = c.get(f"/api/wiki-workspaces/{eng_ws.id}").json()
     assert set(body.keys()) == {
-        "id", "name", "description", "status", "created_at", "updated_at",
+        "id", "name", "display_name", "description", "status", "created_at", "updated_at",
     }
     # 404 语义不变：sales 用户不可见 eng_ws
     _override(_sales)
@@ -483,7 +483,7 @@ def test_workspace_detail_field_redaction(client):
     _override(_admin)
     body = c.get(f"/api/wiki-workspaces/{eng_ws.id}").json()
     full = {
-        "id", "key", "name", "description", "acl_scope", "scope_id",
+        "id", "key", "name", "display_name", "description", "acl_scope", "scope_id",
         "status", "created_by", "created_at", "updated_at",
     }
     assert set(body.keys()) == full
@@ -507,3 +507,83 @@ def test_read_bindings_sorted_by_notebook_name(client):
     assert [b["notebook_name"] for b in r.json()["bindings"]] == [
         "Alpha 知识库", "Beta 知识库",
     ]
+
+
+def test_list_display_name_legacy_auto_and_manual(client):
+    """旧自动工作区 display_name 用 Notebook 名；手工命名不被覆盖；name 原值保留。"""
+    c, db, _admin, _eng, _sales = client
+    from app.core import access_control
+    from app.core.wiki_workspace import service
+    from app.core.wiki_workspace.schemas import WorkspaceCreate
+    from app.models.database import NotebookWorkspaceBinding, WikiWorkspace
+
+    nb = Notebook(id="nb-ding", name="钉钉知识库", group_id="engineering")
+    db.add(nb)
+    db.flush()
+    key = access_control.workspace_key_for_notebook("nb-ding")
+    auto_ws = WikiWorkspace(
+        id="ws-auto-admin-name",
+        key=key,
+        name="group:engineering",
+        acl_scope='{"groups": ["engineering"]}',
+        scope_id="group:engineering",
+        status="active",
+        created_by="u-admin",
+    )
+    db.add(auto_ws)
+    db.flush()
+    db.add(NotebookWorkspaceBinding(
+        id="b-auto", notebook_id="nb-ding", workspace_id=auto_ws.id, status="active",
+    ))
+    manual_ws = service.create_workspace(
+        db,
+        WorkspaceCreate(name="工程工作区", acl_scope='{"groups": ["engineering"]}'),
+        created_by="u-admin",
+    )
+    nb2 = Notebook(id="nb-eng2", name="不该出现的名称", group_id="engineering")
+    db.add(nb2)
+    db.flush()
+    service.bind_notebook(db, manual_ws, nb2, created_by="u-admin")
+    db.commit()
+
+    _override(_eng)
+    items = {w["id"]: w for w in c.get("/api/wiki-workspaces").json()["workspaces"]}
+    auto = items[auto_ws.id]
+    assert auto["name"] == "group:engineering"
+    assert auto["display_name"] == "钉钉知识库"
+    assert "key" not in auto and "scope_id" not in auto and "acl_scope" not in auto and "created_by" not in auto
+    man = items[manual_ws.id]
+    assert man["name"] == "工程工作区"
+    assert man["display_name"] == "工程工作区"
+
+    _override(_sales)
+    assert c.get("/api/wiki-workspaces").json()["workspaces"] == []
+
+
+def test_list_display_name_non_auto_key_not_guessed(client):
+    """非 ws_nb_* key 即使 name=scope_id 也不得用 Notebook 名替换。"""
+    c, db, _admin, _eng, _sales = client
+    from app.models.database import NotebookWorkspaceBinding, WikiWorkspace
+
+    nb = Notebook(id="nb-x", name="不该泄漏", group_id="engineering")
+    db.add(nb)
+    db.flush()
+    ws = WikiWorkspace(
+        id="ws-manual-key",
+        key="ws_custom_engineering",
+        name="group:engineering",
+        acl_scope='{"groups": ["engineering"]}',
+        scope_id="group:engineering",
+        status="active",
+    )
+    db.add(ws)
+    db.flush()
+    db.add(NotebookWorkspaceBinding(
+        id="b-x", notebook_id="nb-x", workspace_id=ws.id, status="active",
+    ))
+    db.commit()
+    _override(_eng)
+    body = c.get("/api/wiki-workspaces").json()["workspaces"][0]
+    assert body["name"] == "group:engineering"
+    assert body["display_name"] == "group:engineering"
+    assert body["display_name"] != "不该泄漏"

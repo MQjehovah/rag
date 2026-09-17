@@ -1318,6 +1318,25 @@ def execute_run(db: Session, run_id: str) -> CompileRun:
         }
         ctx["llm_runner"] = _LLM_RUNNER
         ctx["graph_runner"] = _GRAPH_RUNNER
+        # 阶段 8D：编译 run 首次执行时把作用域业务绑定“冻结”为该 run 的固定技能
+        # 版本（artifact 落盘）；中断恢复/重试的后续 attempt 一律沿用冻结值——
+        # 中途晋升/回退不能改变该 run 的固定版本。
+        # 功能关闭 → 不注入（旧行为完全不变）；功能开启但 schema 缺失/绑定损坏 →
+        # 把错误转成 fail-loud runner（首次模型调用抛错，绝不静默按无绑定成功）。
+        try:
+            from app.core.skill_evolution import business_ops as _bops
+            _domain = _bops.domain_for_pipeline(run.pipeline_key)
+            if _domain and getattr(run, "workspace_id", None):
+                _bops.freeze_binding_for_run(ctx, db, str(run.id),
+                                             run.workspace_id, _domain)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("evolution business binding freeze failed run=%s",
+                             run.id)
+            ctx["evolution_binding_error"] = getattr(
+                exc, "code", "freeze_failed")
+            from app.core.skill_evolution import business_ops as _bops2
+            ctx["llm_runner"] = _bops2.binding_error_runner(
+                ctx.get("llm_runner"), exc)
         # 本 attempt 已成功 stage 的 (stage_key, 产物 content_hash) 链（按顺序）。
         succeeded_chain: list[tuple[str, str | None]] = []
         for sdef, row in zip(pipeline.stages, stage_rows):

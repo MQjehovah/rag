@@ -1,0 +1,1455 @@
+{
+  "v5-op-001": {
+    "expected_points": [
+      {
+        "id": "p1",
+        "kind": "phrase",
+        "text": "主题"
+      },
+      {
+        "id": "p2",
+        "kind": "phrase",
+        "text": "前置条件"
+      },
+      {
+        "id": "p3",
+        "kind": "phrase",
+        "text": "操作步骤"
+      },
+      {
+        "id": "p4",
+        "kind": "phrase",
+        "text": "安全提醒"
+      },
+      {
+        "id": "v1",
+        "kind": "value",
+        "value": "加热上限 150°C；过盈量 0.08–0.12 mm；保压 60 s"
+      },
+      {
+        "id": "p5",
+        "kind": "phrase",
+        "text": "验收检查"
+      }
+    ],
+    "forbidden": [
+      "跳过步骤"
+    ]
+  },
+  "v5-op-002": {
+    "expected_points": [
+      {
+        "id": "p1",
+        "kind": "phrase",
+        "text": "主题"
+      },
+      {
+        "id": "p2",
+        "kind": "phrase",
+        "text": "前置条件"
+      },
+      {
+        "id": "p3",
+        "kind": "phrase",
+        "text": "操作步骤"
+      },
+      {
+        "id": "p4",
+        "kind": "phrase",
+        "text": "安全提醒"
+      },
+      {
+        "id": "v1",
+        "kind": "value",
+        "value": "UPS 满载后备 ≥15 分钟；柴发启动 ≤30 s"
+      },
+      {
+        "id": "p5",
+        "kind": "phrase",
+        "text": "验收检查"
+      }
+    ],
+    "forbidden": [
+      "跳过步骤"
+    ]
+  },
+  "v5-op-003": {
+    "expected_points": [
+      {
+        "id": "p1",
+        "kind": "phrase",
+        "text": "主题"
+      },
+      {
+        "id": "p2",
+        "kind": "phrase",
+        "text": "前置条件"
+      },
+      {
+        "id": "p3",
+        "kind": "phrase",
+        "text": "操作步骤"
+      },
+      {
+        "id": "p4",
+        "kind": "phrase",
+        "text": "安全提醒"
+      },
+      {
+        "id": "v1",
+        "kind": "value",
+        "value": "碱液浓度 1.5–2.0%；温度 80±2°C；循环 ≥20 分钟"
+      },
+      {
+        "id": "p5",
+        "kind": "phrase",
+        "text": "验收检查"
+      }
+    ],
+    "forbidden": [
+      "跳过步骤"
+    ]
+  },
+  "v5-op-004": {
+    "expected_points": [
+      {
+        "id": "p1",
+        "kind": "phrase",
+        "text": "主题"
+      },
+      {
+        "id": "p2",
+        "kind": "phrase",
+        "text": "前置条件"
+      },
+      {
+        "id": "p3",
+        "kind": "phrase",
+        "text": "操作步骤"
+      },
+      {
+        "id": "p4",
+        "kind": "phrase",
+        "text": "安全提醒"
+      },
+      {
+        "id": "v1",
+        "kind": "value",
+        "value": "换型时间 ≤15 分钟；夹具锁紧扭矩 45 N·m"
+      },
+      {
+        "id": "p5",
+        "kind": "phrase",
+        "text": "验收检查"
+      }
+    ],
+    "forbidden": [
+      "跳过步骤"
+    ]
+  },
+  "v5-op-005": {
+    "expected_points": [
+      {
+        "id": "p1",
+        "kind": "phrase",
+        "text": "主题"
+      },
+      {
+        "id": "p2",
+        "kind": "phrase",
+        "text": "前置条件"
+      },
+      {
+        "id": "p3",
+        "kind": "phrase",
+        "text": "操作步骤"
+      },
+      {
+        "id": "p4",
+        "kind": "phrase",
+        "text": "安全提醒"
+      },
+      {
+        "id": "v1",
+        "kind": "value",
+        "value": "倒罐压差 0.05–0.15 MPa；目标液位 85%"
+      },
+      {
+        "id": "p5",
+        "kind": "phrase",
+        "text": "验收检查"
+      }
+    ],
+    "forbidden": [
+      "跳过步骤"
+    ]
+  },
+  "v5-op-006": {
+    "expected_points": [
+      {
+        "id": "p1",
+        "kind": "phrase",
+        "text": "主题"
+      },
+      {
+        "id": "p2",
+        "kind": "phrase",
+        "text": "前置条件"
+      },
+      {
+        "id": "p3",
+        "kind": "phrase",
+        "text": "操作步骤"
+      },
+      {
+        "id": "p4",
+        "kind": "phrase",
+        "text": "安全提醒"
+      },
+      {
+        "id": "v1",
+        "kind": "value",
+        "value": "过渡电阻偏差 ≤±10%；油耐压 ≥40 kV/2.5 mm"
+      },
+      {
+        "id": "p5",
+        "kind": "phrase",
+        "text": "验收检查"
+      }
+    ],
+    "forbidden": [
+      "跳过步骤"
+    ]
+  },
+  "v5-op-007": {
+    "expected_points": [
+      {
+        "id": "p1",
+        "kind": "phrase",
+        "text": "主题"
+      },
+      {
+        "id": "p2",
+        "kind": "phrase",
+        "text": "前置条件"
+      },
+      {
+        "id": "p3",
+        "kind": "phrase",
+        "text": "操作步骤"
+      },
+      {
+        "id": "p4",
+        "kind": "phrase",
+        "text": "安全提醒"
+      },
+      {
+        "id": "v1",
+        "kind": "value",
+        "value": "各区偏差 ±3°C 内；稳定时间 ≤10 分钟"
+      },
+      {
+        "id": "p5",
+        "kind": "phrase",
+        "text": "验收检查"
+      }
+    ],
+    "forbidden": [
+      "跳过步骤"
+    ]
+  },
+  "v5-op-008": {
+    "expected_points": [
+      {
+        "id": "p1",
+        "kind": "phrase",
+        "text": "主题"
+      },
+      {
+        "id": "p2",
+        "kind": "phrase",
+        "text": "前置条件"
+      },
+      {
+        "id": "p3",
+        "kind": "phrase",
+        "text": "操作步骤"
+      },
+      {
+        "id": "p4",
+        "kind": "phrase",
+        "text": "安全提醒"
+      },
+      {
+        "id": "v1",
+        "kind": "value",
+        "value": "主泵出口 ≥0.7 MPa；备用泵空载试转 ≥10 分钟"
+      },
+      {
+        "id": "p5",
+        "kind": "phrase",
+        "text": "验收检查"
+      }
+    ],
+    "forbidden": [
+      "跳过步骤"
+    ]
+  },
+  "v5-cfg-009": {
+    "expected_points": [
+      {
+        "id": "p1",
+        "kind": "phrase",
+        "text": "主题"
+      },
+      {
+        "id": "p2",
+        "kind": "phrase",
+        "text": "字段与默认值"
+      },
+      {
+        "id": "v1",
+        "kind": "value",
+        "value": "间隔下限 10 s；团体名仅可读（community ro）"
+      },
+      {
+        "id": "p3",
+        "kind": "phrase",
+        "text": "生效方式"
+      },
+      {
+        "id": "p4",
+        "kind": "phrase",
+        "text": "禁用/例外"
+      }
+    ],
+    "forbidden": [
+      "无限调整"
+    ]
+  },
+  "v5-cfg-010": {
+    "expected_points": [
+      {
+        "id": "p1",
+        "kind": "phrase",
+        "text": "主题"
+      },
+      {
+        "id": "p2",
+        "kind": "phrase",
+        "text": "字段与默认值"
+      },
+      {
+        "id": "v1",
+        "kind": "value",
+        "value": "prefetch 上限 200；超过 200 拒收新任务"
+      },
+      {
+        "id": "p3",
+        "kind": "phrase",
+        "text": "生效方式"
+      },
+      {
+        "id": "p4",
+        "kind": "phrase",
+        "text": "禁用/例外"
+      }
+    ],
+    "forbidden": [
+      "无限调整"
+    ]
+  },
+  "v5-cfg-011": {
+    "expected_points": [
+      {
+        "id": "p1",
+        "kind": "phrase",
+        "text": "主题"
+      },
+      {
+        "id": "p2",
+        "kind": "phrase",
+        "text": "字段与默认值"
+      },
+      {
+        "id": "v1",
+        "kind": "value",
+        "value": "死区 0.1–1.0°C 可设"
+      },
+      {
+        "id": "p3",
+        "kind": "phrase",
+        "text": "生效方式"
+      },
+      {
+        "id": "p4",
+        "kind": "phrase",
+        "text": "禁用/例外"
+      }
+    ],
+    "forbidden": [
+      "无限调整"
+    ]
+  },
+  "v5-cfg-012": {
+    "expected_points": [
+      {
+        "id": "p1",
+        "kind": "phrase",
+        "text": "主题"
+      },
+      {
+        "id": "p2",
+        "kind": "phrase",
+        "text": "字段与默认值"
+      },
+      {
+        "id": "v1",
+        "kind": "value",
+        "value": "保留下限 7 天；上限 90 天"
+      },
+      {
+        "id": "p3",
+        "kind": "phrase",
+        "text": "生效方式"
+      },
+      {
+        "id": "p4",
+        "kind": "phrase",
+        "text": "禁用/例外"
+      }
+    ],
+    "forbidden": [
+      "无限调整"
+    ]
+  },
+  "v5-cfg-013": {
+    "expected_points": [
+      {
+        "id": "p1",
+        "kind": "phrase",
+        "text": "主题"
+      },
+      {
+        "id": "p2",
+        "kind": "phrase",
+        "text": "字段与默认值"
+      },
+      {
+        "id": "v1",
+        "kind": "value",
+        "value": "超时 5–240 分钟可设"
+      },
+      {
+        "id": "p3",
+        "kind": "phrase",
+        "text": "生效方式"
+      },
+      {
+        "id": "p4",
+        "kind": "phrase",
+        "text": "禁用/例外"
+      }
+    ],
+    "forbidden": [
+      "无限调整"
+    ]
+  },
+  "v5-cfg-014": {
+    "expected_points": [
+      {
+        "id": "p1",
+        "kind": "phrase",
+        "text": "主题"
+      },
+      {
+        "id": "p2",
+        "kind": "phrase",
+        "text": "字段与默认值"
+      },
+      {
+        "id": "v1",
+        "kind": "value",
+        "value": "亮度 30–100%；休眠 5–60 分钟"
+      },
+      {
+        "id": "p3",
+        "kind": "phrase",
+        "text": "生效方式"
+      },
+      {
+        "id": "p4",
+        "kind": "phrase",
+        "text": "禁用/例外"
+      }
+    ],
+    "forbidden": [
+      "无限调整"
+    ]
+  },
+  "v5-cfg-015": {
+    "expected_points": [
+      {
+        "id": "p1",
+        "kind": "phrase",
+        "text": "主题"
+      },
+      {
+        "id": "p2",
+        "kind": "phrase",
+        "text": "字段与默认值"
+      },
+      {
+        "id": "v1",
+        "kind": "value",
+        "value": "端口仅允许 1024–65535"
+      },
+      {
+        "id": "p3",
+        "kind": "phrase",
+        "text": "生效方式"
+      },
+      {
+        "id": "p4",
+        "kind": "phrase",
+        "text": "禁用/例外"
+      }
+    ],
+    "forbidden": [
+      "无限调整"
+    ]
+  },
+  "v5-cfg-016": {
+    "expected_points": [
+      {
+        "id": "p1",
+        "kind": "phrase",
+        "text": "主题"
+      },
+      {
+        "id": "p2",
+        "kind": "phrase",
+        "text": "字段与默认值"
+      },
+      {
+        "id": "v1",
+        "kind": "value",
+        "value": "延迟下限 1 s"
+      },
+      {
+        "id": "p3",
+        "kind": "phrase",
+        "text": "生效方式"
+      },
+      {
+        "id": "p4",
+        "kind": "phrase",
+        "text": "禁用/例外"
+      }
+    ],
+    "forbidden": [
+      "无限调整"
+    ]
+  },
+  "v5-cfg-017": {
+    "expected_points": [
+      {
+        "id": "p1",
+        "kind": "phrase",
+        "text": "主题"
+      },
+      {
+        "id": "p2",
+        "kind": "phrase",
+        "text": "字段与默认值"
+      },
+      {
+        "id": "v1",
+        "kind": "value",
+        "value": "每段死区 0.1–0.5°C"
+      },
+      {
+        "id": "p3",
+        "kind": "phrase",
+        "text": "生效方式"
+      },
+      {
+        "id": "p4",
+        "kind": "phrase",
+        "text": "禁用/例外"
+      }
+    ],
+    "forbidden": [
+      "无限调整"
+    ]
+  },
+  "v5-cfg-018": {
+    "expected_points": [
+      {
+        "id": "p1",
+        "kind": "phrase",
+        "text": "主题"
+      },
+      {
+        "id": "p2",
+        "kind": "phrase",
+        "text": "字段与默认值"
+      },
+      {
+        "id": "v1",
+        "kind": "value",
+        "value": "缓冲上限 20000 条"
+      },
+      {
+        "id": "p3",
+        "kind": "phrase",
+        "text": "生效方式"
+      },
+      {
+        "id": "p4",
+        "kind": "phrase",
+        "text": "禁用/例外"
+      }
+    ],
+    "forbidden": [
+      "无限调整"
+    ]
+  },
+  "v5-cfg-019": {
+    "expected_points": [
+      {
+        "id": "p1",
+        "kind": "phrase",
+        "text": "主题"
+      },
+      {
+        "id": "p2",
+        "kind": "phrase",
+        "text": "字段与默认值"
+      },
+      {
+        "id": "v1",
+        "kind": "value",
+        "value": "上限 50–90%"
+      },
+      {
+        "id": "p3",
+        "kind": "phrase",
+        "text": "生效方式"
+      },
+      {
+        "id": "p4",
+        "kind": "phrase",
+        "text": "禁用/例外"
+      }
+    ],
+    "forbidden": [
+      "无限调整"
+    ]
+  },
+  "v5-cfg-020": {
+    "expected_points": [
+      {
+        "id": "p1",
+        "kind": "phrase",
+        "text": "主题"
+      },
+      {
+        "id": "p2",
+        "kind": "phrase",
+        "text": "字段与默认值"
+      },
+      {
+        "id": "v1",
+        "kind": "value",
+        "value": "码率 1–8 Mbps"
+      },
+      {
+        "id": "p3",
+        "kind": "phrase",
+        "text": "生效方式"
+      },
+      {
+        "id": "p4",
+        "kind": "phrase",
+        "text": "禁用/例外"
+      }
+    ],
+    "forbidden": [
+      "无限调整"
+    ]
+  },
+  "v5-mig-021": {
+    "expected_points": [
+      {
+        "id": "p1",
+        "kind": "phrase",
+        "text": "主题"
+      },
+      {
+        "id": "v1",
+        "kind": "value_in_version",
+        "value": "X-Token 长度 32 字符",
+        "version": "v1"
+      },
+      {
+        "id": "v2",
+        "kind": "value_in_version",
+        "value": "access_token 有效期 7200 s",
+        "version": "v2"
+      },
+      {
+        "id": "a1",
+        "kind": "absent_in_version",
+        "value": "X-Token 长度 32 字符",
+        "version": "v2"
+      },
+      {
+        "id": "a2",
+        "kind": "absent_in_version",
+        "value": "access_token 有效期 7200 s",
+        "version": "v1"
+      },
+      {
+        "id": "p2",
+        "kind": "phrase",
+        "text": "弃用与兼容"
+      },
+      {
+        "id": "p3",
+        "kind": "phrase",
+        "text": "升级提示"
+      }
+    ],
+    "forbidden": [
+      "混用",
+      "继续使用旧版本值"
+    ]
+  },
+  "v5-mig-022": {
+    "expected_points": [
+      {
+        "id": "p1",
+        "kind": "phrase",
+        "text": "主题"
+      },
+      {
+        "id": "v1",
+        "kind": "value_in_version",
+        "value": "前缀长度 ≤32",
+        "version": "v1"
+      },
+      {
+        "id": "v2",
+        "kind": "value_in_version",
+        "value": "过渡期 7 天",
+        "version": "v2"
+      },
+      {
+        "id": "a1",
+        "kind": "absent_in_version",
+        "value": "前缀长度 ≤32",
+        "version": "v2"
+      },
+      {
+        "id": "a2",
+        "kind": "absent_in_version",
+        "value": "过渡期 7 天",
+        "version": "v1"
+      },
+      {
+        "id": "p2",
+        "kind": "phrase",
+        "text": "弃用与兼容"
+      },
+      {
+        "id": "p3",
+        "kind": "phrase",
+        "text": "升级提示"
+      }
+    ],
+    "forbidden": [
+      "混用",
+      "继续使用旧版本值"
+    ]
+  },
+  "v5-mig-023": {
+    "expected_points": [
+      {
+        "id": "p1",
+        "kind": "phrase",
+        "text": "主题"
+      },
+      {
+        "id": "v1",
+        "kind": "value_in_version",
+        "value": "函数参数 ≤2 列",
+        "version": "v1"
+      },
+      {
+        "id": "v2",
+        "kind": "value_in_version",
+        "value": "表达式深度 ≤8 层",
+        "version": "v2"
+      },
+      {
+        "id": "a1",
+        "kind": "absent_in_version",
+        "value": "函数参数 ≤2 列",
+        "version": "v2"
+      },
+      {
+        "id": "a2",
+        "kind": "absent_in_version",
+        "value": "表达式深度 ≤8 层",
+        "version": "v1"
+      },
+      {
+        "id": "p2",
+        "kind": "phrase",
+        "text": "弃用与兼容"
+      },
+      {
+        "id": "p3",
+        "kind": "phrase",
+        "text": "升级提示"
+      }
+    ],
+    "forbidden": [
+      "混用",
+      "继续使用旧版本值"
+    ]
+  },
+  "v5-mig-024": {
+    "expected_points": [
+      {
+        "id": "p1",
+        "kind": "phrase",
+        "text": "主题"
+      },
+      {
+        "id": "v1",
+        "kind": "value_in_version",
+        "value": "temp_raw 单位 0.1°C",
+        "version": "v1"
+      },
+      {
+        "id": "v2",
+        "kind": "value_in_version",
+        "value": "temp_c 精度 0.01°C",
+        "version": "v2"
+      },
+      {
+        "id": "a1",
+        "kind": "absent_in_version",
+        "value": "temp_raw 单位 0.1°C",
+        "version": "v2"
+      },
+      {
+        "id": "a2",
+        "kind": "absent_in_version",
+        "value": "temp_c 精度 0.01°C",
+        "version": "v1"
+      },
+      {
+        "id": "p2",
+        "kind": "phrase",
+        "text": "弃用与兼容"
+      },
+      {
+        "id": "p3",
+        "kind": "phrase",
+        "text": "升级提示"
+      }
+    ],
+    "forbidden": [
+      "混用",
+      "继续使用旧版本值"
+    ]
+  },
+  "v5-mig-025": {
+    "expected_points": [
+      {
+        "id": "p1",
+        "kind": "phrase",
+        "text": "主题"
+      },
+      {
+        "id": "v1",
+        "kind": "value_in_version",
+        "value": "XML 根节点 callback",
+        "version": "v1"
+      },
+      {
+        "id": "v2",
+        "kind": "value_in_version",
+        "value": "JSON 根对象含 event 与 payload",
+        "version": "v2"
+      },
+      {
+        "id": "a1",
+        "kind": "absent_in_version",
+        "value": "XML 根节点 callback",
+        "version": "v2"
+      },
+      {
+        "id": "a2",
+        "kind": "absent_in_version",
+        "value": "JSON 根对象含 event 与 payload",
+        "version": "v1"
+      },
+      {
+        "id": "p2",
+        "kind": "phrase",
+        "text": "弃用与兼容"
+      },
+      {
+        "id": "p3",
+        "kind": "phrase",
+        "text": "升级提示"
+      }
+    ],
+    "forbidden": [
+      "混用",
+      "继续使用旧版本值"
+    ]
+  },
+  "v5-mig-026": {
+    "expected_points": [
+      {
+        "id": "p1",
+        "kind": "phrase",
+        "text": "主题"
+      },
+      {
+        "id": "v1",
+        "kind": "value_in_version",
+        "value": "掩码符 *",
+        "version": "v1"
+      },
+      {
+        "id": "v2",
+        "kind": "value_in_version",
+        "value": "国家码 +86 保留",
+        "version": "v2"
+      },
+      {
+        "id": "a1",
+        "kind": "absent_in_version",
+        "value": "掩码符 *",
+        "version": "v2"
+      },
+      {
+        "id": "a2",
+        "kind": "absent_in_version",
+        "value": "国家码 +86 保留",
+        "version": "v1"
+      },
+      {
+        "id": "p2",
+        "kind": "phrase",
+        "text": "弃用与兼容"
+      },
+      {
+        "id": "p3",
+        "kind": "phrase",
+        "text": "升级提示"
+      }
+    ],
+    "forbidden": [
+      "混用",
+      "继续使用旧版本值"
+    ]
+  },
+  "v5-mig-027": {
+    "expected_points": [
+      {
+        "id": "p1",
+        "kind": "phrase",
+        "text": "主题"
+      },
+      {
+        "id": "v1",
+        "kind": "value_in_version",
+        "value": "摘要长度 40 十六进制",
+        "version": "v1"
+      },
+      {
+        "id": "v2",
+        "kind": "value_in_version",
+        "value": "签名算法 ECDSA-P256",
+        "version": "v2"
+      },
+      {
+        "id": "a1",
+        "kind": "absent_in_version",
+        "value": "摘要长度 40 十六进制",
+        "version": "v2"
+      },
+      {
+        "id": "a2",
+        "kind": "absent_in_version",
+        "value": "签名算法 ECDSA-P256",
+        "version": "v1"
+      },
+      {
+        "id": "p2",
+        "kind": "phrase",
+        "text": "弃用与兼容"
+      },
+      {
+        "id": "p3",
+        "kind": "phrase",
+        "text": "升级提示"
+      }
+    ],
+    "forbidden": [
+      "混用",
+      "继续使用旧版本值"
+    ]
+  },
+  "v5-ts-028": {
+    "expected_points": [
+      {
+        "id": "p1",
+        "kind": "phrase",
+        "text": "主题"
+      },
+      {
+        "id": "p2",
+        "kind": "phrase",
+        "text": "故障现象"
+      },
+      {
+        "id": "p3",
+        "kind": "phrase",
+        "text": "排查步骤"
+      },
+      {
+        "id": "p4",
+        "kind": "phrase",
+        "text": "修复动作"
+      },
+      {
+        "id": "v1",
+        "kind": "value",
+        "value": "压测 P99 回落且无 504"
+      },
+      {
+        "id": "p5",
+        "kind": "phrase",
+        "text": "预防建议"
+      }
+    ],
+    "forbidden": [
+      "直接更换设备"
+    ]
+  },
+  "v5-ts-029": {
+    "expected_points": [
+      {
+        "id": "p1",
+        "kind": "phrase",
+        "text": "主题"
+      },
+      {
+        "id": "p2",
+        "kind": "phrase",
+        "text": "故障现象"
+      },
+      {
+        "id": "p3",
+        "kind": "phrase",
+        "text": "排查步骤"
+      },
+      {
+        "id": "p4",
+        "kind": "phrase",
+        "text": "修复动作"
+      },
+      {
+        "id": "v1",
+        "kind": "value",
+        "value": "写测试通过且监控恢复"
+      },
+      {
+        "id": "p5",
+        "kind": "phrase",
+        "text": "预防建议"
+      }
+    ],
+    "forbidden": [
+      "直接更换设备"
+    ]
+  },
+  "v5-ts-030": {
+    "expected_points": [
+      {
+        "id": "p1",
+        "kind": "phrase",
+        "text": "主题"
+      },
+      {
+        "id": "p2",
+        "kind": "phrase",
+        "text": "故障现象"
+      },
+      {
+        "id": "p3",
+        "kind": "phrase",
+        "text": "排查步骤"
+      },
+      {
+        "id": "p4",
+        "kind": "phrase",
+        "text": "修复动作"
+      },
+      {
+        "id": "v1",
+        "kind": "value",
+        "value": "重传率归零"
+      },
+      {
+        "id": "p5",
+        "kind": "phrase",
+        "text": "预防建议"
+      }
+    ],
+    "forbidden": [
+      "直接更换设备"
+    ]
+  },
+  "v5-ts-031": {
+    "expected_points": [
+      {
+        "id": "p1",
+        "kind": "phrase",
+        "text": "主题"
+      },
+      {
+        "id": "p2",
+        "kind": "phrase",
+        "text": "故障现象"
+      },
+      {
+        "id": "p3",
+        "kind": "phrase",
+        "text": "排查步骤"
+      },
+      {
+        "id": "p4",
+        "kind": "phrase",
+        "text": "修复动作"
+      },
+      {
+        "id": "v1",
+        "kind": "value",
+        "value": "连续 48 h 库温波动 ≤±1°C"
+      },
+      {
+        "id": "p5",
+        "kind": "phrase",
+        "text": "预防建议"
+      }
+    ],
+    "forbidden": [
+      "直接更换设备"
+    ]
+  },
+  "v5-ts-032": {
+    "expected_points": [
+      {
+        "id": "p1",
+        "kind": "phrase",
+        "text": "主题"
+      },
+      {
+        "id": "p2",
+        "kind": "phrase",
+        "text": "故障现象"
+      },
+      {
+        "id": "p3",
+        "kind": "phrase",
+        "text": "排查步骤"
+      },
+      {
+        "id": "p4",
+        "kind": "phrase",
+        "text": "修复动作"
+      },
+      {
+        "id": "v1",
+        "kind": "value",
+        "value": "阶跃响应无超调"
+      },
+      {
+        "id": "p5",
+        "kind": "phrase",
+        "text": "预防建议"
+      }
+    ],
+    "forbidden": [
+      "直接更换设备"
+    ]
+  },
+  "v5-ts-033": {
+    "expected_points": [
+      {
+        "id": "p1",
+        "kind": "phrase",
+        "text": "主题"
+      },
+      {
+        "id": "p2",
+        "kind": "phrase",
+        "text": "故障现象"
+      },
+      {
+        "id": "p3",
+        "kind": "phrase",
+        "text": "排查步骤"
+      },
+      {
+        "id": "p4",
+        "kind": "phrase",
+        "text": "修复动作"
+      },
+      {
+        "id": "v1",
+        "kind": "value",
+        "value": "status green 且分片均衡"
+      },
+      {
+        "id": "p5",
+        "kind": "phrase",
+        "text": "预防建议"
+      }
+    ],
+    "forbidden": [
+      "直接更换设备"
+    ]
+  },
+  "v5-conf-034": {
+    "expected_points": [
+      {
+        "id": "p1",
+        "kind": "phrase",
+        "text": "主题"
+      },
+      {
+        "id": "p2",
+        "kind": "phrase",
+        "text": "通用规范"
+      },
+      {
+        "id": "p3",
+        "kind": "phrase",
+        "text": "例外条款"
+      },
+      {
+        "id": "v1",
+        "kind": "value",
+        "value": "电阻上限 10^6 Ω"
+      },
+      {
+        "id": "v2",
+        "kind": "value",
+        "value": "电阻下限 10^6 Ω"
+      },
+      {
+        "id": "p4",
+        "kind": "phrase",
+        "text": "判定标准"
+      }
+    ],
+    "forbidden": [
+      "一律按通用规范"
+    ]
+  },
+  "v5-conf-035": {
+    "expected_points": [
+      {
+        "id": "p1",
+        "kind": "phrase",
+        "text": "主题"
+      },
+      {
+        "id": "p2",
+        "kind": "phrase",
+        "text": "通用规范"
+      },
+      {
+        "id": "p3",
+        "kind": "phrase",
+        "text": "例外条款"
+      },
+      {
+        "id": "v1",
+        "kind": "value",
+        "value": "耐压周期 6 年"
+      },
+      {
+        "id": "v2",
+        "kind": "value",
+        "value": "耐压周期 3 年"
+      },
+      {
+        "id": "p4",
+        "kind": "phrase",
+        "text": "判定标准"
+      }
+    ],
+    "forbidden": [
+      "一律按通用规范"
+    ]
+  },
+  "v5-conf-036": {
+    "expected_points": [
+      {
+        "id": "p1",
+        "kind": "phrase",
+        "text": "主题"
+      },
+      {
+        "id": "p2",
+        "kind": "phrase",
+        "text": "通用规范"
+      },
+      {
+        "id": "p3",
+        "kind": "phrase",
+        "text": "例外条款"
+      },
+      {
+        "id": "v1",
+        "kind": "value",
+        "value": "最短 12 位"
+      },
+      {
+        "id": "v2",
+        "kind": "value",
+        "value": "最短 8 位"
+      },
+      {
+        "id": "p4",
+        "kind": "phrase",
+        "text": "判定标准"
+      }
+    ],
+    "forbidden": [
+      "一律按通用规范"
+    ]
+  },
+  "v5-conf-037": {
+    "expected_points": [
+      {
+        "id": "p1",
+        "kind": "phrase",
+        "text": "主题"
+      },
+      {
+        "id": "p2",
+        "kind": "phrase",
+        "text": "通用规范"
+      },
+      {
+        "id": "p3",
+        "kind": "phrase",
+        "text": "例外条款"
+      },
+      {
+        "id": "v1",
+        "kind": "value",
+        "value": "上限 4 Ω"
+      },
+      {
+        "id": "v2",
+        "kind": "value",
+        "value": "上限 0.5 Ω"
+      },
+      {
+        "id": "p4",
+        "kind": "phrase",
+        "text": "判定标准"
+      }
+    ],
+    "forbidden": [
+      "一律按通用规范"
+    ]
+  },
+  "v5-conf-038": {
+    "expected_points": [
+      {
+        "id": "p1",
+        "kind": "phrase",
+        "text": "主题"
+      },
+      {
+        "id": "p2",
+        "kind": "phrase",
+        "text": "通用规范"
+      },
+      {
+        "id": "p3",
+        "kind": "phrase",
+        "text": "例外条款"
+      },
+      {
+        "id": "v1",
+        "kind": "value",
+        "value": "134°C / 4 min"
+      },
+      {
+        "id": "v2",
+        "kind": "value",
+        "value": "折算 +1.5°C/300 m"
+      },
+      {
+        "id": "p4",
+        "kind": "phrase",
+        "text": "判定标准"
+      }
+    ],
+    "forbidden": [
+      "一律按通用规范"
+    ]
+  },
+  "v5-conf-039": {
+    "expected_points": [
+      {
+        "id": "p1",
+        "kind": "phrase",
+        "text": "主题"
+      },
+      {
+        "id": "p2",
+        "kind": "phrase",
+        "text": "通用规范"
+      },
+      {
+        "id": "p3",
+        "kind": "phrase",
+        "text": "例外条款"
+      },
+      {
+        "id": "v1",
+        "kind": "value",
+        "value": "下限 -0.85 V"
+      },
+      {
+        "id": "v2",
+        "kind": "value",
+        "value": "上限 -1.50 V"
+      },
+      {
+        "id": "p4",
+        "kind": "phrase",
+        "text": "判定标准"
+      }
+    ],
+    "forbidden": [
+      "一律按通用规范"
+    ]
+  }
+}

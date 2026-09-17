@@ -48,6 +48,17 @@ NEG_ERROR=1 node frontend/tests/workspace-navigation/accept.mjs; echo $?
 | `CDP_PORT` | `9333` | Chrome DevTools 端口 |
 | `CHROME_PATH` | Windows Chrome | Chrome/Edge 可执行文件 |
 | `SHOTS_DIR` | `os.tmpdir()/wiki-workspace-nav-shots` | 截图输出目录（不入库） |
+| `ONLY` | （空=全部） | 逗号分隔场景 ID，例如 `ONLY=R11` 或 `ONLY=R10,R11`。默认完整运行不变。 |
+
+R11 桌面/窄屏核对截图额外复制到 `frontend/tests/workspace-navigation/visual-r11/`。
+
+过滤示例：
+
+```bash
+ONLY=R11 node frontend/tests/workspace-navigation/accept.mjs
+ONLY=R12 node frontend/tests/workspace-navigation/accept.mjs
+ONLY=R10,R11 node frontend/tests/workspace-navigation/accept.mjs
+```
 
 ## 覆盖场景
 
@@ -61,6 +72,8 @@ NEG_ERROR=1 node frontend/tests/workspace-navigation/accept.mjs; echo $?
 - R8 保存 A 期间切到 B，A 完成后不干扰 B 的 UI
 - R9 快速连续导航，旧恢复流程不覆盖最新 Workspace
 - R10 320px 打开主题 + 管理员绑定面板，无整页横向溢出
+- R11 管理员 20 条编译任务：列表内部滚动、分页栏固定、wiki-page 页面滚动（1920/390/320）
+- R12 工作区重名显示：display_name 区分三个 admin，同名追加短 ID，选择使用完整 workspace.id
 - W1 详情初次读取严格拒绝 `workspace_id` 为 other/empty/null/absent（无旧正文，固定提示）
 - W2 详情刷新路径拒绝错域 `workspace_id`（清旧正文/编辑/抽屉）
 - F1 阅读主题时搜索：URL 保留 pageId，目录过滤，正文保持
@@ -69,5 +82,5 @@ NEG_ERROR=1 node frontend/tests/workspace-navigation/accept.mjs; echo $?
 
 ## 文件
 
-- `mock-server.mjs`：内存只读 mock（认证/工作区/wiki/revision/diff/evidence + 动态延迟与错误注入）。
+- `mock-server.mjs`：内存只读 mock（认证/工作区/wiki/revision/diff/evidence/编译任务 + 动态延迟与错误注入）。
 - `accept.mjs`：浏览器驱动验收脚本（真实点击/输入/后退/前进，不手工 pushState 制造历史）。

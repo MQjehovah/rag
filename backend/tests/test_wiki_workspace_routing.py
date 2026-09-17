@@ -988,3 +988,159 @@ def test_rebind_other_workspace_preserves_disabled_history(db):
     assert by_ws.get("wsb") == "active"
     assert len(rows) == 2
 
+
+# ---------------------------------------------------------------------------
+# 自动工作区命名 + 只读 display_name 投影
+# ---------------------------------------------------------------------------
+
+_ADMIN_USER = {"id": "u-admin", "username": "admin", "groups": ["__local_admin__"], "is_admin": True}
+_ENG_USER = {"id": "u-eng", "username": "eng", "groups": ["engineering"], "is_admin": False}
+
+
+def test_ensure_new_auto_workspaces_use_notebook_names(db):
+    """同 scope 两个 Notebook 首次自动创建：id/key 不同，name 用各自 Notebook 名。"""
+    nb1 = _notebook(db, "nb1", "__local_admin__", name="钉钉知识库")
+    nb2 = _notebook(db, "nb2", "__local_admin__", name="FAE 内部知识库")
+    db.commit()
+    ws1 = routing.ensure_notebook_workspace(db, nb1)
+    db.commit()
+    ws2 = routing.ensure_notebook_workspace(db, nb2)
+    db.commit()
+    assert ws1 is not None and ws2 is not None
+    assert ws1.id != ws2.id
+    assert ws1.key != ws2.key
+    assert ws1.key.startswith("ws_nb_") and ws2.key.startswith("ws_nb_")
+    assert ws1.scope_id == ws2.scope_id == "admin"
+    assert ws1.acl_scope == ws2.acl_scope == '{"groups": ["__local_admin__"]}'
+    assert ws1.name == "钉钉知识库"
+    assert ws2.name == "FAE 内部知识库"
+    assert db.query(NotebookWorkspaceBinding).filter(
+        NotebookWorkspaceBinding.workspace_id == ws1.id, NotebookWorkspaceBinding.status == "active"
+    ).count() == 1
+    assert db.query(NotebookWorkspaceBinding).filter(
+        NotebookWorkspaceBinding.workspace_id == ws2.id, NotebookWorkspaceBinding.status == "active"
+    ).count() == 1
+
+
+def test_ensure_empty_notebook_name_falls_back_to_scope_id(db):
+    nb = _notebook(db, "nb1", "__local_admin__", name="  ")
+    db.commit()
+    ws = routing.ensure_notebook_workspace(db, nb)
+    db.commit()
+    assert ws is not None
+    assert ws.name == "admin"
+
+
+def test_ensure_reuses_legacy_auto_workspace_without_renaming(db):
+    """旧自动工作区 name=scope_id：复用时不改名、不新建第二条。"""
+    nb = _notebook(db, "nb1", "__local_admin__", name="钉钉知识库")
+    key = access_control.workspace_key_for_notebook("nb1")
+    ws = _create_ws(db, "ws-old", key, '{"groups": ["__local_admin__"]}', "admin", name="admin")
+    db.commit()
+    got = routing.ensure_notebook_workspace(db, nb)
+    db.commit()
+    db.expire_all()
+    stored = db.get(WikiWorkspace, "ws-old")
+    assert got is not None and got.id == "ws-old"
+    assert stored.name == "admin"
+    assert db.query(WikiWorkspace).count() == 1
+    labels = service.project_workspace_display_names(db, [stored], _ADMIN_USER)
+    assert labels["ws-old"] == "钉钉知识库"
+    assert stored.name == "admin"
+
+
+def test_display_name_manual_name_not_overridden(db):
+    nb = _notebook(db, "nb1", "engineering", name="工程知识库")
+    key = access_control.workspace_key_for_notebook("nb1")
+    ws = _create_ws(db, "ws1", key, '{"groups": ["engineering"]}', "group:engineering", name="我的工作区")
+    db.add(NotebookWorkspaceBinding(id="b1", notebook_id="nb1", workspace_id="ws1", status="active"))
+    db.commit()
+    labels = service.project_workspace_display_names(db, [ws], _ENG_USER)
+    assert labels["ws1"] == "我的工作区"
+
+
+def test_display_name_non_auto_key_not_guessed(db):
+    nb = _notebook(db, "nb1", "engineering", name="工程知识库")
+    ws = _create_ws(db, "ws1", "ws_custom_key", '{"groups": ["engineering"]}', "group:engineering", name="group:engineering")
+    db.add(NotebookWorkspaceBinding(id="b1", notebook_id="nb1", workspace_id="ws1", status="active"))
+    db.commit()
+    labels = service.project_workspace_display_names(db, [ws], _ENG_USER)
+    assert labels["ws1"] == "group:engineering"
+
+
+def test_display_name_zero_multi_disabled_empty_fallback(db):
+    key0 = access_control.workspace_key_for_notebook("nb-zero")
+    ws0 = _create_ws(db, "ws0", key0, '{"groups": ["engineering"]}', "group:engineering", name="group:engineering")
+
+    nb_a = _notebook(db, "nb-a", "engineering", name="库A")
+    nb_b = _notebook(db, "nb-b", "engineering", name="库B")
+    key_m = access_control.workspace_key_for_notebook("nb-multi")
+    ws_m = _create_ws(db, "wsm", key_m, '{"groups": ["engineering"]}', "group:engineering", name="group:engineering")
+    db.add(NotebookWorkspaceBinding(id="ba", notebook_id="nb-a", workspace_id="wsm", status="active"))
+    db.add(NotebookWorkspaceBinding(id="bb", notebook_id="nb-b", workspace_id="wsm", status="active"))
+
+    nb_d = _notebook(db, "nb-d", "engineering", name="已解绑库")
+    key_d = access_control.workspace_key_for_notebook("nb-d")
+    ws_d = _create_ws(db, "wsd", key_d, '{"groups": ["engineering"]}', "group:engineering", name="group:engineering")
+    db.add(NotebookWorkspaceBinding(id="bd", notebook_id="nb-d", workspace_id="wsd", status="disabled"))
+
+    nb_e = _notebook(db, "nb-e", "engineering", name="   ")
+    key_e = access_control.workspace_key_for_notebook("nb-e")
+    ws_e = _create_ws(db, "wse", key_e, '{"groups": ["engineering"]}', "group:engineering", name="group:engineering")
+    db.add(NotebookWorkspaceBinding(id="be", notebook_id="nb-e", workspace_id="wse", status="active"))
+    db.commit()
+
+    labels = service.project_workspace_display_names(db, [ws0, ws_m, ws_d, ws_e], _ENG_USER)
+    assert labels["ws0"] == "group:engineering"
+    assert labels["wsm"] == "group:engineering"
+    assert labels["wsd"] == "group:engineering"
+    assert labels["wse"] == "group:engineering"
+
+
+def test_display_name_hides_notebook_title_without_notebook_view(db):
+    """workspace 可见不等于 Notebook 名称可见：无权时不得经 display_name 泄漏。"""
+    nb = _notebook(db, "nb1", "engineering", name="机密库")
+    key = access_control.workspace_key_for_notebook("nb1")
+    ws = _create_ws(db, "ws1", key, '{"groups": ["engineering"]}', "group:engineering", name="group:engineering")
+    db.add(NotebookWorkspaceBinding(id="b1", notebook_id="nb1", workspace_id="ws1", status="active"))
+    db.commit()
+    nb.group_id = "sales"
+    db.commit()
+    db.expire_all()
+    ws = db.get(WikiWorkspace, "ws1")
+    assert service.workspace_visible(db, ws, _ENG_USER) is True
+    labels = service.project_workspace_display_names(db, [ws], _ENG_USER)
+    assert labels["ws1"] == "group:engineering"
+    admin_labels = service.project_workspace_display_names(db, [ws], _ADMIN_USER)
+    assert admin_labels["ws1"] == "机密库"
+
+
+def test_display_name_projection_constant_queries(db):
+    """对已授权 workspace 批量投影：查询次数不随 workspace 数量线性增长。"""
+    from sqlalchemy import event as sa_event
+
+    for i in range(8):
+        nb = _notebook(db, f"nb{i}", "__local_admin__", name=f"库{i}")
+        key = access_control.workspace_key_for_notebook(nb.id)
+        ws = _create_ws(
+            db, f"ws{i}", key, '{"groups": ["__local_admin__"]}', "admin", name="admin",
+        )
+        db.add(NotebookWorkspaceBinding(
+            id=f"b{i}", notebook_id=nb.id, workspace_id=ws.id, status="active",
+        ))
+    db.commit()
+    rows = db.query(WikiWorkspace).all()
+    engine = db.get_bind()
+    statements: list[str] = []
+
+    def _count(conn, cursor, statement, parameters, context, executemany):
+        statements.append(str(statement))
+
+    sa_event.listen(engine, "before_cursor_execute", _count)
+    try:
+        labels = service.project_workspace_display_names(db, rows, _ADMIN_USER)
+    finally:
+        sa_event.remove(engine, "before_cursor_execute", _count)
+    assert len(statements) <= 2
+    assert all(labels[f"ws{i}"] == f"库{i}" for i in range(8))
+

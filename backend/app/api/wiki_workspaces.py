@@ -47,15 +47,17 @@ def _require_admin(current_user: dict) -> None:
         raise HTTPException(status_code=403, detail="仅管理员可执行此操作")
 
 
-def _serialize_workspace(ws: WikiWorkspace, *, admin: bool) -> dict:
+def _serialize_workspace(ws: WikiWorkspace, *, admin: bool, display_name: str | None = None) -> dict:
     """角色感知序列化。
 
     - admin：完整 shape（含 key/acl_scope/scope_id/created_by，供管理）；
     - 普通用户：仅公开元数据，不含 key/acl_scope/scope_id/created_by。
+    - display_name 为只读 UI 投影；name 始终为数据库原值。
     """
     base = {
         "id": ws.id,
         "name": ws.name,
+        "display_name": ws.name if display_name is None else display_name,
         "description": ws.description,
         "status": ws.status,
         "created_at": ws.created_at.isoformat() if ws.created_at else None,
@@ -106,7 +108,13 @@ def list_workspaces(
     """普通用户只返回有权限访问的 workspace；admin 全部。"""
     rows = service.list_visible_workspaces(db, current_user)
     admin = is_admin_user(current_user)
-    return {"workspaces": [_serialize_workspace(ws, admin=admin) for ws in rows]}
+    labels = service.project_workspace_display_names(db, rows, current_user)
+    return {
+        "workspaces": [
+            _serialize_workspace(ws, admin=admin, display_name=labels.get(ws.id, ws.name))
+            for ws in rows
+        ]
+    }
 
 
 @router.post("", status_code=201)
@@ -141,7 +149,12 @@ def get_workspace(
     ws = service.get_visible_workspace(db, current_user, workspace_id)
     if ws is None:
         raise HTTPException(status_code=404, detail="工作区不存在")
-    return _serialize_workspace(ws, admin=is_admin_user(current_user))
+    labels = service.project_workspace_display_names(db, [ws], current_user)
+    return _serialize_workspace(
+        ws,
+        admin=is_admin_user(current_user),
+        display_name=labels.get(ws.id, ws.name),
+    )
 
 
 @router.patch("/{workspace_id}")

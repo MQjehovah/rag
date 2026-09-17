@@ -18,7 +18,7 @@
 | `backfill-dryrun --db <db>` | 回填计划 + 确定性 `plan_hash`（只读 SELECT） | 否 | 否（仅限副本） | 否 |
 | `backfill-apply --db <db> --plan-hash <hash> --allowed-dir <dir>` | 单事务回填；hash 不一致拒绝；二次 apply `created=0`（幂等） | 是 | 是 | 否 |
 | `postflight --db <db> --allowed-dir <dir> [--baseline-json c.json]` | 回填/迁移后置检查 + 合成反例 rollback 事务 | 是（合成事务后回滚） | 是 | 否 |
-| `downgrade-drill --db <migrated> --allowed-dir <dir> [--rev d3e4f5a6b7c8]` | 副本降级 → 数据丢失预期/缺陷评估 → 升回 head → roundtrip 校验 | 是 | 是 | 否 |
+| `downgrade-drill --db <migrated> --allowed-dir <dir> [--rev 653bbcf9847b]` | 副本降级到当前 head 的直接父版本（默认 P52）→ 评估 → 升回 head | 是 | 是 | 否 |
 | `restore-verify --db <baseline> --allowed-dir <dir> [--restored out.db]` | baseline 恢复副本并校验 sha 完全一致 + quick/版本/计数 | 是 | 是 | 否 |
 
 示例（默认 `--real-db` 为 `backend/data/notes.db`，测试/演练请用 `--real-db` 指向假 real 以便本地复核防误写）：

@@ -13,7 +13,7 @@
           :loading="workspaceState === 'loading'"
           @update:model-value="onWorkspaceSelect"
         />
-        <span v-if="currentWorkspace" class="ws-current-name">{{ currentWorkspace.name }}</span>
+        <span v-if="currentWorkspace" class="ws-current-name">{{ currentWorkspaceLabel }}</span>
         <div v-if="workspaceState === 'ready'" class="wiki-stats">{{ pages.length }} 个主题</div>
       </div>
 
@@ -260,6 +260,7 @@ import {
 } from '../api/wiki'
 import { wikiWorkspacesApi, type WikiWorkspaceSummary } from '../api/wikiWorkspaces'
 import { useAuthStore } from '../stores/auth'
+import { buildWorkspaceOptionLabels, workspaceBaseLabel } from '../utils/workspaceLabels'
 import SectionContent from '../components/wiki/SectionContent.vue'
 import EvidenceDrawer from '../components/EvidenceDrawer.vue'
 import WorkspaceSelector from '../components/wiki/WorkspaceSelector.vue'
@@ -289,14 +290,24 @@ const workspaceState = ref<WorkspaceState>('loading')
 const workspaceLoadError = ref('')
 
 // 只浏览 active 工作区（admin 列表中可能含 archived，不进入选择器）。
+const activeWorkspaces = computed(() => workspaces.value.filter((w) => w.status === 'active'))
+const workspaceLabels = computed(() => buildWorkspaceOptionLabels(activeWorkspaces.value))
 const browsableWorkspaces = computed(() =>
-  workspaces.value
-    .filter((w) => w.status === 'active')
-    .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'zh-Hans-CN')),
+  [...activeWorkspaces.value].sort((a, b) =>
+    String(workspaceLabels.value.get(a.id) || '').localeCompare(
+      String(workspaceLabels.value.get(b.id) || ''),
+      'zh-Hans-CN',
+    ),
+  ),
 )
 const currentWorkspace = computed(
   () => workspaces.value.find((w) => w.id === workspaceId.value) || null,
 )
+const currentWorkspaceLabel = computed(() => {
+  if (!currentWorkspace.value) return ''
+  return workspaceLabels.value.get(currentWorkspace.value.id)
+    || workspaceBaseLabel(currentWorkspace.value)
+})
 const workspaceReady = computed(() => workspaceState.value === 'ready' && workspaceId.value !== '')
 // loading / error 时选择器不可用；inaccessible（存在可见 active）下允许主动改选。
 const selectorDisabled = computed(() => workspaceState.value === 'loading' || workspaceState.value === 'error')
@@ -1110,11 +1121,17 @@ onBeforeUnmount(() => {
 <style scoped>
 .wiki-page {
   height: 100%;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   padding: 16px 24px;
   gap: 12px;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+.wiki-page > :not(.wiki-body):not(.wiki-status) {
+  flex-shrink: 0;
 }
 .acceptance-banner {
   background: #fef3c7;
@@ -1168,7 +1185,7 @@ onBeforeUnmount(() => {
 .gm-actions { display: flex; gap: 8px; align-items: center; }
 .rebuild-banner { font-size: 13px; color: #b45309; background: #fffbeb; border: 1px solid #f59e0b; border-radius: 6px; padding: 6px 12px; }
 .wiki-status {
-  flex: 1;
+  flex: 1 0 160px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1179,7 +1196,8 @@ onBeforeUnmount(() => {
 }
 .wiki-status.status-error { color: #b91c1c; }
 .wiki-body {
-  flex: 1;
+  flex: 1 0 360px;
+  min-height: 360px;
   display: grid;
   grid-template-columns: 280px 1fr;
   gap: 16px;
@@ -1294,13 +1312,16 @@ onBeforeUnmount(() => {
 @media (max-width: 720px) {
   .wiki-page {
     padding: 12px;
-    height: auto;
+    height: 100%;
+    min-height: 0;
     overflow-y: auto;
     overflow-x: hidden;
   }
   .wiki-body {
     display: flex;
     flex-direction: column;
+    flex: 1 0 280px;
+    min-height: 280px;
     overflow: visible;
   }
   .catalog-pane {

@@ -68,7 +68,6 @@ from app.sources.schemas import (  # noqa: E402
 from phase9a import bootstrap_db as bdb  # noqa: E402
 
 _P38_TO_HEAD_REV = None  # 本文件始终从空库 upgrade head（真实 alembic）
-_HEAD = "a9b8c7d6e5f4"
 _GOOD_MD = "# 水箱固定内容足够长用于构建\n\n每日检查水位与温度传感器并记录运行日志。\n"
 _TITLE = "水箱维护流程"
 _SUMMARY = "水箱维护流程摘要"

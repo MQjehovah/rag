@@ -32,6 +32,7 @@ class WorkspaceOut(BaseModel):
     id: str
     key: str
     name: str
+    display_name: Optional[str] = None
     description: Optional[str] = None
     acl_scope: str
     scope_id: str

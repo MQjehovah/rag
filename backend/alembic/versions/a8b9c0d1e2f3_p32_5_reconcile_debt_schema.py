@@ -258,7 +258,7 @@ def _assert_no_duplicate_cluster_key(bind) -> None:
     """检查重复 cluster_key（NULL 除外）。存在则 fail closed。"""
     dup = bind.execute(sa.text(
         "SELECT cluster_key, COUNT(*) AS c FROM knowledge_debts "
-        "WHERE cluster_key IS NOT NULL GROUP BY cluster_key HAVING c > 1"
+        "WHERE cluster_key IS NOT NULL GROUP BY cluster_key HAVING COUNT(*) > 1"
     )).fetchall()
     if dup:
         raise RuntimeError(
@@ -306,6 +306,9 @@ def _assert_debt_users_columns(inspector) -> None:
         )
         return
     existing = {c["name"]: c for c in inspector.get_columns("knowledge_debt_users")}
+    pk_cols = set(
+        (inspector.get_pk_constraint("knowledge_debt_users") or {}).get(
+            "constrained_columns") or [])
     for name, (pytype, length, nullable, primary_key) in _DEBT_USERS_COLUMNS.items():
         if name not in existing:
             raise RuntimeError(f"reconciliation 失败：knowledge_debt_users 缺列 {name}")
@@ -325,10 +328,13 @@ def _assert_debt_users_columns(inspector) -> None:
                 f"reconciliation 失败：knowledge_debt_users.{name} nullable 不匹配，"
                 f"期望 {nullable}，实际 {col.get('nullable')!r}"
             )
-        if bool(col.get("primary_key")) is not primary_key:
+        # PG 的 get_columns() 不填 primary_key（为 None）；SQLite 会填 True/False。
+        col_pk = col.get("primary_key")
+        actual_pk = bool(col_pk) if col_pk is not None else (name in pk_cols)
+        if actual_pk is not primary_key:
             raise RuntimeError(
                 f"reconciliation 失败：knowledge_debt_users.{name} primary_key 不匹配，"
-                f"期望 {primary_key}，实际 {col.get('primary_key')!r}"
+                f"期望 {primary_key}，实际 {col_pk!r} (pk_cols={sorted(pk_cols)})"
             )
 
 

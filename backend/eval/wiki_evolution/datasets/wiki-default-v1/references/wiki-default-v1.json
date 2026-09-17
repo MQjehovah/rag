@@ -1,0 +1,60 @@
+{
+  "wiki-default-001": {
+    "expected_points": [
+      {"id": "p1", "kind": "phrase", "text": "适用于 Titan 810 电池模组标准机壳型号"},
+      {"id": "p2", "kind": "phrase", "text": "关闭电源并断开高压回路"},
+      {"id": "p3", "kind": "phrase", "text": "禁止带电插拔通讯线束"},
+      {"id": "p4", "kind": "value", "value": "25 N·m"},
+      {"id": "p5", "kind": "value", "value": "60V"}
+    ],
+    "forbidden": ["100 N·m", "240V", "无需持证"]
+  },
+  "wiki-default-002": {
+    "expected_points": [
+      {"id": "p1", "kind": "phrase", "text": "适用于 Titan 810 电池模组标准机壳型号"},
+      {"id": "p2", "kind": "phrase", "text": "关闭电源并断开高压回路"},
+      {"id": "p3", "kind": "phrase", "text": "禁止带电插拔通讯线束"},
+      {"id": "p4", "kind": "value", "value": "25 N·m"},
+      {"id": "p5", "kind": "value", "value": "60V"}
+    ],
+    "forbidden": ["100 N·m", "240V", "无需持证"]
+  },
+  "wiki-default-003": {
+    "expected_points": [
+      {"id": "p1", "kind": "phrase", "text": "挂牌上锁"},
+      {"id": "p2", "kind": "value", "value": "60V"},
+      {"id": "p3", "kind": "value", "value": "1 MΩ"}
+    ],
+    "forbidden": ["100 N·m", "240V", "直接更换保险丝"]
+  },
+  "wiki-default-004": {
+    "expected_points": [
+      {"id": "v2", "kind": "value_in_version", "value": "25 N·m", "version": "2.0"},
+      {"id": "v3a", "kind": "value_in_version", "value": "28 N·m", "version": "3.0"},
+      {"id": "v3b", "kind": "value_in_version", "value": "32 N·m", "version": "3.0"},
+      {"id": "no28in2", "kind": "absent_in_version", "value": "28 N·m", "version": "2.0"},
+      {"id": "no25in3", "kind": "absent_in_version", "value": "25 N·m", "version": "3.0"},
+      {"id": "diff3", "kind": "diff_notice", "version": "3.0"}
+    ],
+    "forbidden": ["200 N·m", "500V"]
+  },
+  "wiki-default-005": {
+    "expected_points": [
+      {"id": "v2", "kind": "value_in_version", "value": "25 N·m", "version": "2.0"},
+      {"id": "v3a", "kind": "value_in_version", "value": "28 N·m", "version": "3.0"},
+      {"id": "v3b", "kind": "value_in_version", "value": "32 N·m", "version": "3.0"},
+      {"id": "no28in2", "kind": "absent_in_version", "value": "28 N·m", "version": "2.0"},
+      {"id": "no25in3", "kind": "absent_in_version", "value": "25 N·m", "version": "3.0"},
+      {"id": "diff3", "kind": "diff_notice", "version": "3.0"}
+    ],
+    "forbidden": ["200 N·m", "500V"]
+  },
+  "wiki-default-006": {
+    "expected_points": [
+      {"id": "p1", "kind": "value", "value": "25 N·m"},
+      {"id": "p2", "kind": "value", "value": "60V"},
+      {"id": "p3", "kind": "phrase", "text": "书面批准"}
+    ],
+    "forbidden": ["100 N·m", "240V"]
+  }
+}

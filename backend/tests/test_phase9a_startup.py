@@ -64,9 +64,10 @@ from app.models.database import (  # noqa: E402
     init_db,
 )
 from phase9a import bootstrap_db as bdb  # noqa: E402
+from phase9b_migration.migrate import ALEMBIC_HEAD_EXPECTED
 
-_P44_REVISION = "a9b8c7d6e5f4"
-_P43_REVISION = "d3e4f5a6b7c8"  # 停在 P43 → 缺 P44 托管表 wiki_section_evidence_bindings
+_HEAD_REVISION = ALEMBIC_HEAD_EXPECTED
+_P43_REVISION = "d3e4f5a6b7c8"  # 历史库停在 P43 → 缺托管表 wiki_section_evidence_bindings
 _ADMIN_USER = "u9a-admin"
 _ADMIN_PASS = "Phase9a!2026"
 _WS_GROUP = "eng"
@@ -127,7 +128,7 @@ def _isolate_phase9a():
 class StartupEnv:
     """单个启动测试隔离环境：真实 alembic DB + 进程配置。"""
 
-    def __init__(self, tmp_path: Path, monkeypatch, revision: str = _P44_REVISION) -> None:
+    def __init__(self, tmp_path: Path, monkeypatch, revision: str = _HEAD_REVISION) -> None:
         self.tmp = Path(tmp_path)
         self.db_path = self.tmp / "phase9a.db"
         self.db_url = _sqlite_url(self.db_path)
@@ -137,7 +138,7 @@ class StartupEnv:
         heads = [h for h in bdb.alembic_single_head(bdb._BACKEND, {
             **os.environ, "DATABASE_URL": self.db_url, "PYTHONIOENCODING": "utf-8"
         }).split("|") if h]
-        assert heads == [_P44_REVISION], heads
+        assert heads == [_HEAD_REVISION], heads
         _upgrade_to(self.db_path, revision)
 
         self.engine = create_engine(self.db_url, connect_args={"check_same_thread": False})

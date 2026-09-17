@@ -1,0 +1,46 @@
+{
+  "v2-install-01": {
+    "expected_points": [
+      {"id": "p1", "kind": "phrase", "text": "适用于 Titan 810 电池模组标准机壳型号"},
+      {"id": "p2", "kind": "phrase", "text": "关闭电源并断开高压回路"},
+      {"id": "p3", "kind": "value", "value": "25 N·m"},
+      {"id": "p4", "kind": "value", "value": "60V"}
+    ],
+    "forbidden": ["100 N·m", "240V"]
+  },
+  "v2-install-02": {
+    "expected_points": [
+      {"id": "p1", "kind": "phrase", "text": "禁止带电插拔通讯线束"},
+      {"id": "p2", "kind": "value", "value": "60V"}
+    ],
+    "forbidden": ["100 N·m", "240V"]
+  },
+  "v2-install-03": {
+    "expected_points": [
+      {"id": "p1", "kind": "phrase", "text": "适用于 Titan 810 电池模组标准机壳型号"},
+      {"id": "p2", "kind": "value", "value": "25 N·m"}
+    ],
+    "forbidden": ["100 N·m", "240V"]
+  },
+  "v2-install-04": {
+    "expected_points": [
+      {"id": "p1", "kind": "value", "value": "25 N·m"},
+      {"id": "p2", "kind": "value", "value": "60V"}
+    ],
+    "forbidden": ["100 N·m", "240V", "改写数值"]
+  },
+  "v2-val-01": {
+    "expected_points": [
+      {"id": "p1", "kind": "value", "value": "25 N·m"},
+      {"id": "p2", "kind": "value", "value": "60V"}
+    ],
+    "forbidden": ["100 N·m", "240V"]
+  },
+  "v2-test-01": {
+    "expected_points": [
+      {"id": "p1", "kind": "value", "value": "25 N·m"},
+      {"id": "p2", "kind": "value", "value": "60V"}
+    ],
+    "forbidden": ["100 N·m", "240V"]
+  }
+}

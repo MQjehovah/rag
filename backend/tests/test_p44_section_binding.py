@@ -1,7 +1,7 @@
 """Phase 7C.1 P44 migration 测试（WikiSection 结构字段 + Evidence Binding 表）。
 
-- 临时 SQLite：upgrade head → 字段/表存在；downgrade -1 → 移除；upgrade head → 恢复；
-- 单一 Alembic head（P44 = a9b8c7d6e5f4）；
+- 临时 SQLite：upgrade P44 → 字段/表存在；downgrade P43 → 移除；upgrade head → 恢复；
+- 单一 Alembic head（动态查询当前脚本 head；P44 a9b8c7d6e5f4 仅为历史锚点）；
 - 历史 WikiSection nullable 兼容（新增字段全 NULL，不虚假回填）；
 - validation_status / usage_type CHECK；
 - (revision_id, section_key) 部分唯一；binding 四元组唯一；
@@ -31,6 +31,7 @@ from app.models.database import (
 
 _BACKEND = Path(__file__).resolve().parent.parent
 _P44_REVISION = "a9b8c7d6e5f4"
+_P43_REVISION = "d3e4f5a6b7c8"
 _NEW_COLUMNS = [
     "section_key", "skill_key", "skill_version", "content_hash",
     "validation_status", "structure_json",
@@ -112,14 +113,14 @@ def tables(conn):
         "SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
 
 dbfile = {url!r}[len("sqlite:///"):]
-command.upgrade(cfg, "head")
+command.upgrade(cfg, {_P44_REVISION!r})
 with sqlite3.connect(dbfile) as c:
     cols = [r[1] for r in c.execute("PRAGMA table_info(wiki_sections)").fetchall()]
     tbls = tables(c)
 for col in {_NEW_COLUMNS!r}:
     assert col in cols, f"missing after upgrade: {{col}}"
 assert {_BINDING_TABLE!r} in tbls, "binding table missing after upgrade"
-command.downgrade(cfg, "-1")
+command.downgrade(cfg, {_P43_REVISION!r})
 with sqlite3.connect(dbfile) as c:
     cols = [r[1] for r in c.execute("PRAGMA table_info(wiki_sections)").fetchall()]
     tbls = tables(c)
@@ -143,30 +144,9 @@ print("P44_ROUNDTRIP_OK")
     assert "P44_ROUNDTRIP_OK" in proc.stdout
 
 
-def test_single_head(tmp_path):
-    url = f"sqlite:///{(tmp_path / 'head.db').as_posix()}"
-    env = dict(os.environ)
-    env["PYTHONIOENCODING"] = "utf-8"
-    script = f"""
-import os, sys
-sys.path.insert(0, {str(_BACKEND)!r})
-os.environ["DATABASE_URL"] = {url!r}
-from alembic.config import Config
-from alembic import command
-from alembic.script import ScriptDirectory
-cfg = Config({str(_BACKEND / 'alembic.ini')!r})
-cfg.set_main_option("script_location", {str(_BACKEND / 'alembic')!r})
-heads = ScriptDirectory.from_config(cfg).get_heads()
-assert len(heads) == 1, heads
-assert heads[0] == {_P44_REVISION!r}, heads
-print("SINGLE_HEAD_OK")
-"""
-    proc = subprocess.run(
-        [sys.executable, "-c", script],
-        capture_output=True, text=True, env=env, encoding="utf-8", errors="replace",
-    )
-    assert proc.returncode == 0, proc.stderr
-    assert "SINGLE_HEAD_OK" in proc.stdout
+def test_single_head():
+    from tests.alembic_head import current_alembic_head
+    assert current_alembic_head()
 
 
 # ---------------------------------------------------------------------------

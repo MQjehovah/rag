@@ -20,9 +20,14 @@ const users = {
 const now = '2026-09-04T09:00:00.000000'
 
 const workspaces = [
-  { id: 'ws-eng', key: 'ws_key_eng', name: '工程工作区', description: '研发工程主题', acl_scope: '{"groups":["engineering"]}', scope_id: 'group:engineering', status: 'active', created_by: 'u-admin', created_at: now, updated_at: now },
-  { id: 'ws-sales', key: 'ws_key_sales', name: '销售工作区', description: '销售主题', acl_scope: '{"groups":["sales"]}', scope_id: 'group:sales', status: 'active', created_by: 'u-admin', created_at: now, updated_at: now },
-  { id: 'ws-arch', key: 'ws_key_arch', name: '归档工程区', description: '已归档', acl_scope: '{"groups":["engineering"]}', scope_id: 'group:engineering', status: 'archived', created_by: 'u-admin', created_at: now, updated_at: now },
+  { id: 'ws-eng', key: 'ws_key_eng', name: '工程工作区', description: '研发工程主题', acl_scope: '{"groups":["engineering"]}', scope_id: 'group:engineering', status: 'active', created_by: 'u-admin', created_at: now, updated_at: now, display_name: '工程工作区' },
+  { id: 'ws-sales', key: 'ws_key_sales', name: '销售工作区', description: '销售主题', acl_scope: '{"groups":["sales"]}', scope_id: 'group:sales', status: 'active', created_by: 'u-admin', created_at: now, updated_at: now, display_name: '销售工作区' },
+  { id: 'ws-arch', key: 'ws_key_arch', name: '归档工程区', description: '已归档', acl_scope: '{"groups":["engineering"]}', scope_id: 'group:engineering', status: 'archived', created_by: 'u-admin', created_at: now, updated_at: now, display_name: '归档工程区' },
+  { id: '32520e35-1111-4000-8000-00000000000a', key: 'ws_nb_aaaaaaaaaaaaaaaaaaaaaaaa', name: 'admin', description: '', acl_scope: '{"groups":["__local_admin__"]}', scope_id: 'admin', status: 'active', created_by: 'u-admin', created_at: now, updated_at: now, display_name: 'FAE 内部知识库' },
+  { id: '9b8c7d6e-2222-4000-8000-00000000000b', key: 'ws_nb_bbbbbbbbbbbbbbbbbbbbbbbb', name: 'admin', description: '', acl_scope: '{"groups":["__local_admin__"]}', scope_id: 'admin', status: 'active', created_by: 'u-admin', created_at: now, updated_at: now, display_name: '产品手册库' },
+  { id: 'abcdef01-3333-4000-8000-00000000000c', key: 'ws_nb_cccccccccccccccccccccccc', name: 'admin', description: '', acl_scope: '{"groups":["__local_admin__"]}', scope_id: 'admin', status: 'active', created_by: 'u-admin', created_at: now, updated_at: now, display_name: '销售线索库' },
+  { id: '11111111-aaaa-4000-8000-dingtalk0001', key: 'ws_nb_dddddddddddddddddddddddd', name: 'admin', description: '', acl_scope: '{"groups":["__local_admin__"]}', scope_id: 'admin', status: 'active', created_by: 'u-admin', created_at: now, updated_at: now, display_name: '钉钉知识库' },
+  { id: '22222222-bbbb-4000-8000-dingtalk0002', key: 'ws_nb_eeeeeeeeeeeeeeeeeeeeeeee', name: 'admin', description: '', acl_scope: '{"groups":["__local_admin__"]}', scope_id: 'admin', status: 'active', created_by: 'u-admin', created_at: now, updated_at: now, display_name: '钉钉知识库' },
 ]
 
 const bindings = [
@@ -107,6 +112,81 @@ const evidenceDetail = {
   'e-eng-1': { ...evidenceByPage['p-eng-1'][0], observations: [] },
 }
 
+function pad2(n) {
+  return String(n).padStart(2, '0')
+}
+const compileRuns = Array.from({ length: 20 }, (_, i) => {
+  const n = i + 1
+  const mm = pad2(60 - n)
+  return {
+    id: `cr-r11-${pad2(n)}`,
+    pipeline_key: 'wiki.skilled.default',
+    pipeline_version: '3',
+    trigger_type: 'manual',
+    trigger_object_id: null,
+    source_sync_run_id: null,
+    workspace_id: 'ws-eng',
+    wiki_page_id: 'p-eng-1',
+    status: 'running',
+    current_stage: 'compile',
+    output_revision_id: null,
+    error_summary: null,
+    safe_error_code: null,
+    safe_error_message: null,
+    attempt: 1,
+    max_attempts: 3,
+    cancel_requested: false,
+    created_at: `2026-09-09T10:${mm}:00`,
+    started_at: `2026-09-09T10:${mm}:01`,
+    finished_at: null,
+    heartbeat_at: null,
+  }
+})
+function stagesOf(run) {
+  return [
+    {
+      id: `st-${run.id}-1`,
+      run_id: run.id,
+      stage_key: 'wiki-compile',
+      stage_order: 1,
+      status: 'running',
+      attempt: 1,
+      retryable: false,
+      component_key: 'compiler',
+      component_version: '1',
+      parent_stage_run_id: null,
+      error_code: null,
+      error_message: null,
+      safe_error_code: null,
+      safe_error_message: null,
+      metrics_summary: {},
+      started_at: run.started_at,
+      finished_at: null,
+      created_at: run.created_at,
+    },
+    {
+      id: `st-${run.id}-2`,
+      run_id: run.id,
+      stage_key: 'wiki-validate',
+      stage_order: 2,
+      status: 'queued',
+      attempt: 1,
+      retryable: false,
+      component_key: 'validator',
+      component_version: '1',
+      parent_stage_run_id: null,
+      error_code: null,
+      error_message: null,
+      safe_error_code: null,
+      safe_error_message: null,
+      metrics_summary: {},
+      started_at: null,
+      finished_at: null,
+      created_at: run.created_at,
+    },
+  ]
+}
+
 const control = {
   errorWorkspaces: false,
   slowWorkspace: '',
@@ -125,8 +205,18 @@ function serializePagePublic(p, admin) {
   return { ...base, preview_revision_id: admin ? p.preview_revision_id : null }
 }
 function serializeWorkspace(w, admin) {
-  if (!admin) return { id: w.id, name: w.name, description: w.description, status: w.status, created_at: w.created_at, updated_at: w.updated_at }
-  return { ...w }
+  const display_name = (w.display_name && String(w.display_name).trim()) || w.name
+  const pub = {
+    id: w.id,
+    name: w.name,
+    display_name,
+    description: w.description,
+    status: w.status,
+    created_at: w.created_at,
+    updated_at: w.updated_at,
+  }
+  if (!admin) return pub
+  return { ...pub, key: w.key, acl_scope: w.acl_scope, scope_id: w.scope_id, created_by: w.created_by }
 }
 function visibleWorkspaces(user) {
   const admin = !!user.is_admin
@@ -275,6 +365,28 @@ async function handle(req, res) {
     const item = evidenceDetail[m[1]]
     if (!item) return json(res, 404, { detail: 'evidence 不存在' })
     return json(res, 200, item)
+  }
+
+  // 编译任务：只读内存数据，供 Wiki 任务面板滚动验收（R11）。不写库、不调模型。
+  if (path === '/api/wiki-compile/runs' && method === 'GET') {
+    if (!user.is_admin) return json(res, 403, { detail: '仅管理员可查看编译任务' })
+    const ws = url.searchParams.get('workspace_id') || ''
+    const status = url.searchParams.get('status')
+    const limit = Math.min(Number(url.searchParams.get('limit')) || 20, 500)
+    const offset = Number(url.searchParams.get('offset')) || 0
+    const all = compileRuns
+      .filter((r) => (!ws || r.workspace_id === ws) && (!status || r.status === status))
+      .slice()
+      .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))
+    const items = all.slice(offset, offset + limit)
+    return json(res, 200, { total: all.length, limit, offset, runs: items })
+  }
+  m = path.match(/^\/api\/wiki-compile\/runs\/([^/]+)$/)
+  if (m && method === 'GET') {
+    if (!user.is_admin) return json(res, 403, { detail: '仅管理员可查看编译任务' })
+    const run = compileRuns.find((r) => r.id === m[1])
+    if (!run) return json(res, 404, { detail: '编译任务不存在' })
+    return json(res, 200, { ...run, stages: stagesOf(run), artifacts: [] })
   }
 
   return json(res, 404, { detail: `mock 未实现: ${method} ${path}` })

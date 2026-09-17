@@ -107,8 +107,9 @@ from app.models.database import (  # noqa: E402
 )
 from phase9a import bootstrap_db as bdb  # noqa: E402
 from phase9a import fixtures  # noqa: E402
+from phase9b_migration.migrate import ALEMBIC_HEAD_EXPECTED
 
-_P44_REVISION = "a9b8c7d6e5f4"
+_HEAD_REVISION = ALEMBIC_HEAD_EXPECTED
 
 WIKI_API = fixtures.WIKI_API_ID            # w-eng-api（api_reference）
 PAGE_API = fixtures.PAGE_API_ID            # p-api
@@ -479,7 +480,7 @@ class Env:
         envmap["DATABASE_URL"] = self.db_url
         envmap["PYTHONIOENCODING"] = "utf-8"
         heads = bdb.alembic_single_head(bdb._BACKEND, envmap)
-        assert [h for h in heads.split("|") if h] == [_P44_REVISION], heads
+        assert [h for h in heads.split("|") if h] == [_HEAD_REVISION], heads
         bdb.alembic_upgrade_head(bdb._BACKEND, envmap)
 
         self.engine = create_engine(
