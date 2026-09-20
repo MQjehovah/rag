@@ -48,6 +48,16 @@
         <div class="wiki-crumb">{{ current.category }}</div>
         <h1 class="wiki-title">{{ current.title }}</h1>
         <div v-if="current.summary" class="wiki-summary">{{ current.summary }}</div>
+        <div v-if="isAdmin" class="wiki-group-bar">
+          <span class="wiki-group-label">归属组：{{ current.group_id || '公共' }}</span>
+          <el-input
+            v-model="groupInput"
+            size="small"
+            placeholder="输入组名，留空表示公共"
+            class="wiki-group-input"
+          />
+          <el-button size="small" type="primary" :loading="savingGroup" @click="saveGroup">保存归属</el-button>
+        </div>
         <template v-if="!editing">
           <div
             class="wiki-body markdown-body"
@@ -131,6 +141,8 @@ const filterText = ref('')
 const editing = ref(false)
 const savingEdit = ref(false)
 const editForm = ref({ content: '', summary: '', category: '' })
+const groupInput = ref('')
+const savingGroup = ref(false)
 
 const isAdmin = computed(() =>
   (authStore.user?.groups || []).includes('__local_admin__')
@@ -172,6 +184,7 @@ const openPage = async (pageId: string) => {
   try {
     const res = await http.get(`/api/wiki/${pageId}`)
     current.value = res.data
+    groupInput.value = res.data.group_id || ''
     if (route.path !== `/wiki/${pageId}`) {
       router.replace({ path: `/wiki/${pageId}` })
     }
@@ -203,6 +216,22 @@ const saveEdit = async () => {
     ElMessage.error(e?.response?.data?.detail || '保存失败')
   } finally {
     savingEdit.value = false
+  }
+}
+
+const saveGroup = async () => {
+  if (!current.value) return
+  savingGroup.value = true
+  try {
+    const res = await http.put(`/api/wiki/${current.value.id}/group`, { group_id: groupInput.value })
+    current.value = { ...current.value, group_id: res.data.group_id }
+    groupInput.value = res.data.group_id || ''
+    ElMessage.success('已保存')
+    await loadList()
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail || '保存失败')
+  } finally {
+    savingGroup.value = false
   }
 }
 
@@ -429,6 +458,24 @@ onBeforeUnmount(() => {
   font-size: 13px;
   margin-bottom: 20px;
   line-height: 1.6;
+}
+.wiki-group-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 18px;
+  padding: 8px 12px;
+  background: #f8fafc;
+  border: 1px dashed #cbd5e1;
+  border-radius: 8px;
+}
+.wiki-group-label {
+  font-size: 12px;
+  color: #475569;
+  white-space: nowrap;
+}
+.wiki-group-input {
+  max-width: 220px;
 }
 .wiki-body {
   font-size: 15px;

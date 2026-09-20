@@ -23,6 +23,7 @@ def _wiki_visible(page: WikiPage, current_user) -> bool:
         return True
     return page.group_id is None or page.group_id in current_user["groups"]
 
+
 _wiki_status: Dict[str, Any] = {
     "running": False,
     "processed": 0,
@@ -36,6 +37,10 @@ class WikiPageUpdate(BaseModel):
     content: str = ""
     summary: str = ""
     category: str = ""
+
+
+class WikiGroupUpdate(BaseModel):
+    group_id: str | None = None
 
 
 @router.get("")
@@ -120,6 +125,24 @@ def update_wiki_page(
         page.category = data.category or "未分类"
     db.commit()
     return {"message": "已保存", "id": page.id, "updated_at": page.updated_at}
+
+
+@router.put("/{page_id}/group")
+def set_wiki_group(
+    page_id: str,
+    data: WikiGroupUpdate,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """人工指定 wiki 页面的归属组;仅管理员。None 表示公共。"""
+    if "__local_admin__" not in current_user["groups"]:
+        raise HTTPException(status_code=403, detail="仅管理员可执行")
+    page = db.query(WikiPage).filter(WikiPage.id == page_id).first()
+    if not page:
+        raise HTTPException(status_code=404, detail="Wiki 页面不存在")
+    page.group_id = (data.group_id or "").strip() or None
+    db.commit()
+    return {"message": "已保存", "id": page.id, "group_id": page.group_id}
 
 
 @router.post("/rebuild")

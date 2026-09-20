@@ -104,3 +104,28 @@ def test_管理员列表看到全部(api_engine, api_client, as_user):
     _seed_pages(api_engine)
     as_user(["__local_admin__"])
     assert len(_list_titles(api_client)) == 3
+
+
+# --- 管理员指定归属(PUT /{page_id}/group) ---
+
+def test_管理员可设与清空归属(api_engine, api_client, as_user):
+    ids = _seed_pages(api_engine)
+    as_user(["__local_admin__"])
+
+    # 命中 set_wiki_group 才会返回 group_id 字段;若被 PUT /{page_id} 吞掉则没有该字段
+    res = api_client.put(f"/api/wiki/{ids['public']}/group", json={"group_id": "财务部"})
+    assert res.status_code == 200
+    assert res.json()["group_id"] == "财务部"
+    assert api_client.get(f"/api/wiki/{ids['public']}").json()["group_id"] == "财务部"
+
+    for blank in (None, "", "   "):
+        res = api_client.put(f"/api/wiki/{ids['rd']}/group", json={"group_id": blank})
+        assert res.status_code == 200
+        assert res.json()["group_id"] is None
+
+
+def test_普通用户不可指定归属(api_engine, api_client, as_user):
+    ids = _seed_pages(api_engine)
+    as_user(["研发部"])
+    res = api_client.put(f"/api/wiki/{ids['rd']}/group", json={"group_id": "财务部"})
+    assert res.status_code == 403
