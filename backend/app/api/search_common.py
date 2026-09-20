@@ -1,6 +1,6 @@
 from typing import Any, Dict, Set
 
-from sqlalchemy import or_
+from sqlalchemy import or_, true
 from sqlalchemy import text as sql_text
 from sqlalchemy.orm import Session
 
@@ -8,12 +8,14 @@ from app.models.database import Notebook, Page, WikiPage
 
 
 def visible_wiki_filter(current_user):
-    """WikiPage 的可见性条件;返回 None 表示不过滤(本地管理员)。
+    """WikiPage 的可见性条件。
 
     语义与 notebook 一致:group_id 为 NULL 视为公共,所有登录用户可见。
+    本地管理员返回恒真条件(而非 None),这样调用方可以直接 filter(),
+    不必记得判空——filter(None) 会退化成 WHERE NULL,静默返回 0 行。
     """
     if "__local_admin__" in current_user["groups"]:
-        return None
+        return true()
     return or_(WikiPage.group_id.is_(None), WikiPage.group_id.in_(current_user["groups"]))
 
 

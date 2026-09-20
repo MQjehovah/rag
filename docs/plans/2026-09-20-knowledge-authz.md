@@ -63,11 +63,7 @@ def db(tmp_path):
 
 
 def _titles(db, user):
-    q = db.query(WikiPage)
-    cond = visible_wiki_filter(user)
-    if cond is not None:
-        q = q.filter(cond)
-    return {p.title for p in q.all()}
+    return {p.title for p in db.query(WikiPage).filter(visible_wiki_filter(user)).all()}
 
 
 def test_普通用户看到本组与公共(db):
@@ -77,14 +73,12 @@ def test_普通用户看到本组与公共(db):
 
 
 def test_无组用户只看到公共(db):
-    titles = _titles(db, {"groups": []})
-    assert all(
-        p.group_id is None for p in db.query(WikiPage).filter(WikiPage.title.in_(titles)).all()
-    )
+    public = {p.title for p in db.query(WikiPage).filter(WikiPage.group_id.is_(None)).all()}
+    assert _titles(db, {"groups": []}) == public
 
 
 def test_管理员不过滤(db):
-    assert len(_titles(db, {"groups": ["__local_admin__"]})) == 4
+    assert _titles(db, {"groups": ["__local_admin__"]}) == {p.title for p in db.query(WikiPage).all()}
 ```
 
 **Step 2: 运行确认失败**
@@ -125,14 +119,18 @@ def init_db(engine):
 
 ```python
 def visible_wiki_filter(current_user):
-    """WikiPage 的可见性条件;返回 None 表示不过滤(本地管理员)。
+    """WikiPage 的可见性条件;本地管理员返回恒真条件(而非 None)。
 
     语义与 notebook 一致:group_id 为 NULL 视为公共,所有登录用户可见。
+    管理员分支返回 true() 以便调用方直接 filter(),避免 filter(None) 退化成
+    WHERE NULL 而静默返回 0 行。
     """
     if "__local_admin__" in current_user["groups"]:
-        return None
+        return true()
     return or_(WikiPage.group_id.is_(None), WikiPage.group_id.in_(current_user["groups"]))
 ```
+
+这样调用方可以无条件 `q = q.filter(visible_wiki_filter(current_user))`，无需判空。
 
 **Step 4: 运行确认通过**
 
@@ -159,9 +157,7 @@ git commit -m "feat(rag): wiki_pages 增加 group_id 与可见性过滤 helper"
 
 ```python
     q = db.query(WikiPage)
-    cond = visible_wiki_filter(current_user)
-    if cond is not None:
-        q = q.filter(cond)
+    q = q.filter(visible_wiki_filter(current_user))
     pages = q.order_by(WikiPage.category, WikiPage.title).all()
 ```
 

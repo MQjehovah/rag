@@ -25,11 +25,7 @@ def db(tmp_path):
 
 
 def _titles(db, user):
-    q = db.query(WikiPage)
-    cond = visible_wiki_filter(user)
-    if cond is not None:
-        q = q.filter(cond)
-    return {p.title for p in q.all()}
+    return {p.title for p in db.query(WikiPage).filter(visible_wiki_filter(user)).all()}
 
 
 def test_普通用户看到本组与公共(db):
@@ -39,11 +35,9 @@ def test_普通用户看到本组与公共(db):
 
 
 def test_无组用户只看到公共(db):
-    titles = _titles(db, {"groups": []})
-    assert all(
-        p.group_id is None for p in db.query(WikiPage).filter(WikiPage.title.in_(titles)).all()
-    )
+    public = {p.title for p in db.query(WikiPage).filter(WikiPage.group_id.is_(None)).all()}
+    assert _titles(db, {"groups": []}) == public
 
 
 def test_管理员不过滤(db):
-    assert len(_titles(db, {"groups": ["__local_admin__"]})) == 4
+    assert _titles(db, {"groups": ["__local_admin__"]}) == {p.title for p in db.query(WikiPage).all()}

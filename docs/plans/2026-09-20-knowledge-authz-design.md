@@ -52,9 +52,9 @@ group_id  String(255)  NULL  索引
 
 ```python
 def visible_wiki_filter(user: dict):
-    """返回 WikiPage 的可见性条件;None 表示不过滤(本地管理员)。"""
+    """返回 WikiPage 的可见性条件;本地管理员返回恒真条件(true())。"""
     if "__local_admin__" in user["groups"]:
-        return None
+        return true()
     return or_(WikiPage.group_id.is_(None), WikiPage.group_id.in_(user["groups"]))
 ```
 
