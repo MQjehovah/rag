@@ -182,7 +182,7 @@ def _wiki_visible(page: WikiPage, current_user) -> bool:
     return page.group_id is None or page.group_id in current_user["groups"]
 ```
 
-返回体加 `"group_id": page.group_id`。来源笔记查询（`:76`）保持不变。
+返回体加 `"group_id": page.group_id`。来源笔记查询（`:76`）同样按可见性收敛：用 `get_visible_page_ids(db, current_user)`（从 `app.api.search_common` 一并导入）与 `page.source_note_ids` 求交集，只返回调用方可见的来源笔记；不可见的来源**直接省略**（页面本身可见，因此不返回 404）。
 
 **Step 3: 收敛编辑**
 

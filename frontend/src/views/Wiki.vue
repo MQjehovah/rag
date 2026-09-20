@@ -291,7 +291,10 @@ const pollStatus = async () => {
       await loadList()
       if (current.value) {
         const fresh = await http.get(`/api/wiki/${current.value.id}`).catch(() => null)
-        if (fresh) current.value = fresh.data
+        if (fresh) {
+          current.value = fresh.data
+          groupInput.value = fresh.data.group_id || ''
+        }
       }
     }
   } catch { /* ignore */ }

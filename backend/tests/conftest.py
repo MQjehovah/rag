@@ -123,7 +123,7 @@ def api_client(api_engine):
     app.dependency_overrides[deps.get_db] = _override_get_db
     with TestClient(app) as client:
         yield client
-    app.dependency_overrides.clear()
+    app.dependency_overrides.pop(deps.get_db, None)
 
 
 @pytest.fixture

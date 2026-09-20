@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
-from app.api.search_common import visible_wiki_filter
+from app.api.search_common import get_visible_page_ids, visible_wiki_filter
 from app.core.jwt_utils import get_current_user
 from app.core.wiki import build_wiki, refresh_stale_wiki
 from app.models.database import Page, WikiPage
@@ -91,8 +91,9 @@ def get_wiki_page(
         note_ids = []
     sources = []
     if note_ids:
+        visible_note_ids = get_visible_page_ids(db, current_user)
         rows = db.query(Page.id, Page.title).filter(Page.id.in_(note_ids)).all()
-        sources = [{"id": r[0], "title": r[1]} for r in rows]
+        sources = [{"id": r[0], "title": r[1]} for r in rows if r[0] in visible_note_ids]
     return {
         "id": page.id,
         "title": page.title,

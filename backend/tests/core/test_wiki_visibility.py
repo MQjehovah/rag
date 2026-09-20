@@ -1,9 +1,11 @@
 """Wiki 可见性过滤的单元测试。"""
+import json
 import uuid
 
 import pytest
 
 from app.api.search_common import visible_wiki_filter
+from app.api.wiki import _wiki_visible
 from app.models.database import WikiPage
 
 
@@ -41,6 +43,27 @@ def test_无组用户只看到公共(db):
 
 def test_管理员不过滤(db):
     assert _titles(db, {"groups": ["__local_admin__"]}) == {p.title for p in db.query(WikiPage).all()}
+
+
+@pytest.mark.parametrize(
+    "groups",
+    [
+        ["__local_admin__"],  # 管理员
+        ["研发部"],            # 本组页面归属者
+        ["市场部"],            # 非成员(仅公共)
+        [],                    # 无组用户
+    ],
+)
+def test_SQL与Python可见性实现一致(db, groups):
+    """把 SQL(visible_wiki_filter) 与 Python(_wiki_visible) 两条实现钉在一起。
+
+    页面 fixtures:NULL / 研发部 / 财务部 / 仪表盘-只读,覆盖公共、本组、他组三种归属。
+    """
+    user = {"groups": groups}
+    all_pages = db.query(WikiPage).all()
+    sql_result = {p.title for p in db.query(WikiPage).filter(visible_wiki_filter(user)).all()}
+    py_result = {p.title for p in all_pages if _wiki_visible(p, user)}
+    assert sql_result == py_result
 
 
 # --- 端点行为(走 TestClient,见 conftest 的 api_engine/api_client/as_user) ---
@@ -91,6 +114,40 @@ def test_详情本组与公共_200(api_engine, api_client, as_user):
     assert res_own.json()["group_id"] == "研发部"
     assert res_public.status_code == 200
     assert res_public.json()["group_id"] is None
+
+
+def _seed_public_wiki_with_sources(engine):
+    """公共 wiki 页,来源含一条公共笔记本笔记与一条财务部笔记本笔记。"""
+    from app.models.database import Notebook, Page, get_session
+
+    session = get_session(engine)
+    session.add_all([
+        Notebook(id="nb-public", name="公共笔记本", group_id=None),
+        Notebook(id="nb-fin", name="财务笔记本", group_id="财务部"),
+        Page(id="note-public", notebook_id="nb-public", title="公共来源笔记"),
+        Page(id="note-fin", notebook_id="nb-fin", title="财务-绝密-工资表"),
+        WikiPage(
+            id="wiki-public",
+            title="公共Wiki页面",
+            content="x",
+            group_id=None,
+            source_note_ids=json.dumps(["note-public", "note-fin"]),
+        ),
+    ])
+    session.commit()
+    session.close()
+
+
+def test_公共页来源笔记按可见性过滤(api_engine, api_client, as_user):
+    """他组用户能看到公共 wiki 页(200),但看不到他组来源笔记的标题。"""
+    _seed_public_wiki_with_sources(api_engine)
+    as_user(["研发部"])
+    res = api_client.get("/api/wiki/wiki-public")
+    assert res.status_code == 200
+    titles = {s["title"] for s in res.json()["sources"]}
+    assert "公共来源笔记" in titles
+    assert "财务-绝密-工资表" not in titles
+    assert titles == {"公共来源笔记"}
 
 
 def test_编辑他组页面_404(api_engine, api_client, as_user):
