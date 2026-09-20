@@ -1,7 +1,9 @@
 .claude/
 .vscode/
 
-docs/plans/
+docs/plans/*
+# 例外:本设计需入库以便评审与追溯
+!docs/plans/2026-09-20-knowledge-authz-design.md
 
 __pycache__/
 backend/data/
