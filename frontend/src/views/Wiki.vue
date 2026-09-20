@@ -107,7 +107,7 @@ import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import http from '../api/http'
-import { mapImageSrc, signImageElement, signRenderedImages } from '../utils/imageSign'
+import { signImageElement, signRenderedImages } from '../utils/imageSign'
 import { useAuthStore } from '../stores/auth'
 import MarkdownIt from 'markdown-it'
 import hljs from 'highlight.js'
@@ -259,13 +259,8 @@ const handleContentClick = (e: MouseEvent) => {
 
 const handleImgError = (e: Event) => {
   const el = e.target as HTMLImageElement
-  const src = el.getAttribute('src') || ''
-  if (mapImageSrc(src)) {
-    // 首次失败：请后端签名后重试（外链会自动改走带签名的代理）。
-    signImageElement(el)
-    return
-  }
-  el.style.display = 'none'
+  // 首次失败：请后端签名后重试；已尝试过或无需签名则直接隐藏，避免死循环。
+  if (!signImageElement(el)) el.style.display = 'none'
 }
 
 // 正文渲染完成后把图片换成带签名的地址。

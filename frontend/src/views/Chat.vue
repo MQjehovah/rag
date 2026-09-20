@@ -32,7 +32,7 @@
                 <img
                   v-for="img in src.images.slice(0, 3)"
                   :key="img"
-                  :src="resolveUrl(img)"
+                  :src="img"
                   loading="lazy"
                   @error="hideImg"
                 />
@@ -56,7 +56,7 @@
             rel="noopener"
             class="message-image"
           >
-            <img :src="resolveUrl(img)" loading="lazy" @error="hideImg" />
+            <img :src="img" loading="lazy" @error="hideImg" />
           </a>
         </div>
           <div v-if="msg.role === 'assistant' && msg.content && !loading" class="message-actions">
@@ -122,7 +122,7 @@ import { ref, nextTick, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import http from '../api/http'
-import { mapImageSrc, signImageElement, signRenderedImages } from '../utils/imageSign'
+import { signImageElement, signRenderedImages } from '../utils/imageSign'
 import MarkdownIt from 'markdown-it'
 import hljs from 'highlight.js'
 
@@ -331,13 +331,9 @@ const resolveUrl = (u: string) => {
 
 const hideImg = (e: Event) => {
   const el = e.target as HTMLImageElement
-  const src = el.getAttribute('src') || ''
-  if (mapImageSrc(src)) {
-    // 首次失败：请后端签名后重试（外链会自动改走带签名的代理）。
-    signImageElement(el)
-    return
-  }
-  el.style.display = 'none'
+  // 首次失败：请后端签名后重试（外链会自动改走带签名的代理）；
+  // 已尝试过或无需签名（data:/相对路径/已带 sig）则直接隐藏，避免死循环。
+  if (!signImageElement(el)) el.style.display = 'none'
 }
 
 const sourceImages = (msg: Message) => {
