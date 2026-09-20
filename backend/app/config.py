@@ -60,7 +60,7 @@ class Settings(BaseSettings):
     ldap_group_map_admin: str = ""
 
     jwt_secret_key: str = "change-me-in-production"
-    jwt_expire_minutes: int = 1440
+    jwt_expire_minutes: int = 720  # 本地会话 12h(默认),可用 JWT_EXPIRE_MINUTES 覆盖
 
     local_admin_username: str = "admin"
     local_admin_password: str = "123456"
