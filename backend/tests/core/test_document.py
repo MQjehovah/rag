@@ -1,27 +1,29 @@
-import pytest
-from app.core.document.parser import MarkdownParser
-from app.core.document.splitter import SemanticSplitter
+"""文档解析与分块行为测试。
 
-class TestMarkdownParser:
-    def test_extract_headers(self):
-        parser = MarkdownParser()
-        content = "# Title\n\n## Section 1\n\nContent\n\n## Section 2"
-        headers = parser.extract_headers(content)
-        assert len(headers) == 3
-        assert headers[0].level == 1
-        assert headers[1].level == 2
-    
-    def test_extract_plain_text(self):
-        parser = MarkdownParser()
-        content = "# Title\n\nThis is [a link](http://example.com) and `code`"
-        text = parser.extract_plain_text(content)
-        assert "a link" in text
-        assert "code" in text
+原先测的 app.core.document.parser / splitter 模块已不存在,当前职责合并到
+app.core.rag.EmbeddingService(split_text / split_text_structured),故改测实际实现。
+"""
 
-class TestSemanticSplitter:
-    def test_split_by_headers(self):
-        splitter = SemanticSplitter(chunk_size=100, overlap=20)
-        content = "# Title\n\n## Section 1\n\nLong content here " * 20
-        chunks = splitter.split(content, "doc1", {"source": "test"})
-        assert len(chunks) > 0
-        assert all(c.document_id == "doc1" for c in chunks)
+from app.core.rag import EmbeddingService
+
+
+def test_split_text_structured_records_heading_chain():
+    """按标题切块时,每个块携带标题链作为检索上下文。"""
+    svc = EmbeddingService()
+    content = "## 第一节\n\n内容甲\n\n### 小节\n\n内容乙"
+
+    chunks = svc.split_text_structured(content, title="文档")
+
+    assert chunks
+    contexts = [c["context"] for c in chunks]
+    assert "文档 > 第一节" in contexts
+    assert "文档 > 第一节 > 小节" in contexts
+    assert all(c["text"] for c in chunks)
+
+
+def test_split_text_drops_blank_chunks():
+    """纯空白内容不产生分块,避免写入空向量。"""
+    svc = EmbeddingService()
+
+    assert svc.split_text("   ") == []
+    assert svc.split_text("第一段内容") == ["第一段内容"]

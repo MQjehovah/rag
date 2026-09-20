@@ -126,3 +126,35 @@ def visible_wiki_filter(user: dict):
 - **人工贴标签不等于内容隔离**：wiki 编译仍是全局的（`core/wiki.py:362-366`），一个被标为 A 组的 wiki 页仍可能包含 B 组笔记蒸馏出的内容。`group_id` 是**发布标记**，正确性依赖管理员判断。要根治必须按组分区编译（本期不做）。
 - **公共内容默认可见**：`group_id IS NULL` 视为公共，包括钉钉/Jira 导入创建的笔记本（`group_id=NULL`）与其衍生内容。上线后需尽快给敏感内容指定归属。
 - **组名是自由文本**：没有任何注册表或校验，`group_id` 与 OIDC/LDAP 下发的组字符串必须逐字一致，否则会「看不见自己的内容」。建议文档中明确组名来源。
+
+## 实施结果（2026-09-20）
+
+### 1. 收集失败的旧测试处置
+
+| 文件 | 处置 | 理由 |
+| --- | --- | --- |
+| `backend/tests/core/test_document.py` | 重写 | 旧 `app.core.document.parser/splitter` 已不存在；文档解析/分块职责现由 `app/core/rag.py:91` 的 `EmbeddingService.split_text_structured` 与 `:86` 的 `split_text` 承担，可写少量真实断言。 |
+| `backend/tests/core/test_embedding.py` | 重写 | 旧 `app.core.embedding.encoder/store` 已不存在；向量编码职责现由 `app/core/rag.py:39` 的 `EmbeddingService.encode` 与 `:53` 的 `encode_batch` 承担，mock `client.post` 即可验证真实响应解析。 |
+| `backend/tests/core/test_generation.py` | 删除 | 旧 `app.core.generation.prompt/context` 已不存在，且当前代码**没有**同职责模块：提示词是 `api/chat.py:61` 的模块级字符串，token 估算（tiktoken 等）完全不存在。为保住文件名而新建 `PromptTemplate`/`ContextAssembler` 属凭空造测试，故删除。 |
+
+`pyjwt`：`tests/conftest.py:10` 直接 `import jwt as pyjwt`（RS256 自签 token），`test_sso_auth.py` 亦依赖它；此前仅装在解释器而遗漏于依赖清单，已加入 `backend/requirements.txt`（`pyjwt>=2.8.0`，本机实际 2.11.0）。
+
+### 2. 验收标准逐条核验
+
+| # | 结论 | 证据 |
+| --- | --- | --- |
+| 1 | PASS | `test_列表不含他组页面`（`test_wiki_visibility.py:92`，列表排除他组）、`test_详情他组页面_404`（`:102`）、`test_编辑他组页面_404`（`:153`）。 |
+| 2 | PASS（编辑项部分靠推理） | 可见性：`test_管理员不过滤`（`:44`）、`test_管理员列表看到全部`（`:160`）；设/清空归属：`test_管理员可设与清空归属`（`:168`）、`test_普通用户不可指定归属`（`:184`→403）。「管理员可编辑全部页面」未单独跑 PUT 内容用例，但 `update_wiki_page`（`api/wiki.py:119`）与已验证的 GET 共用 `_wiki_visible`（`:21`），管理员恒真，故推理成立。 |
+| 3 | PASS（端到端 LLM 路径未跑） | `test_search_communities_filters_to_visible_group`（`test_chat_scoping.py:55`）、对照组 `test_search_communities_without_filter_returns_all`（`:70`）、空集 `test_search_communities_empty_visible_returns_nothing`（`:80`）、回退传参 `test_agentic_search_group_user_filters_communities`（`:156`）；实现见 `core/graphrag.py:217-230`、`api/chat.py:200-204`。带回退是「最佳努力」语义（见残留风险），未跑真实 LLM 的 HTTP 全链路。 |
+| 4 | PASS | `_get_kb_context` 为纯函数，`test_get_kb_context_scoped_for_group_user`（`test_chat_scoping.py:89`）与管理员对照 `test_get_kb_context_admin_sees_all`（`:100`）；实现 `api/chat.py:397-414`。保存/导入端点仅把该 dict 拼入提示词，未跑真实 LLM 的 HTTP 全链路。 |
+| 5 | PASS | 本地签名 403/过期/篡改：`test_local_image_rejects_bad_signature`（`test_image_sign.py:152`）；合法签名可读：`test_local_image_serves_with_valid_signature`（`:133`）、代理 `test_proxy_serves_image_with_valid_signature`（`:291`）；代理拒绝内网：`test_assert_public_host_rejects_private`（`:195`）、`test_proxy_rejects_private_host_even_with_valid_signature`（`:237`）。浏览器 `<img>` 实际渲染未在测试内执行（签名 URL 可读已覆盖）。 |
+| 6 | PASS | `test_graph_rebuild_non_admin_forbidden`（`test_authz_guards.py:51`）、`test_dingtalk_sync_non_admin_forbidden`（`:74`）、`test_dingtalk_sync_selected_non_admin_forbidden`（`:80`）；实现 `api/graph.py:248`、`api/dingtalk.py:240,272`。 |
+| 7 | PASS | `test_update_page_rejects_foreign_notebook`（`test_authz_guards.py:118`）、`test_update_page_rejects_missing_notebook`（`:130`）；实现 `api/pages.py:246-249`。 |
+| 8 | PASS | `py -3.12 -m pytest -q` → `99 passed`（0 collection errors）；`cd frontend; npm run build` → `built in 33.06s`（`vue-tsc` 类型检查通过）。 |
+
+### 3. 验证命令汇总
+
+- **pytest**：修复前 `5 warnings, 3 errors`（3 个 ImportError）；修复后 `99 passed, 26 warnings in 20.50s`，0 收集错误。其中本次重写的两个文件新增 4 条断言，删除的 `test_generation.py` 原本 0 条被收集。
+- **ruff**：`py -3.12 -m ruff check app tests` → `Found 34 errors`。34 条全部位于 `app/`，`tests/` 0 条；本次工作树仅改动 `tests/` 与 `requirements.txt`，故 34 条均为既有问题、无新增（其中 `app/core/retrieval.py:239` 的 `F821 Undefined name Page` 是既有隐患，函数内变量注解不在运行期求值，本次不修）。
+- **前端构建**：`npm run build` 通过（仅有 chunk >500kB 的既有告警）。
+- 测试计数：**99 passed, 0 failed, 0 error**。
