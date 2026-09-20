@@ -209,7 +209,11 @@ def search_communities(
     if not communities:
         return []
 
-    # 可见性过滤：仅保留成员实体归属于可见页面的社区
+    # 可见性过滤：仅保留成员实体归属于可见页面的社区。
+    # 实体按名称全局共享、社区又是对全图跑 Louvain 得到的，因此该规则只是
+    # 最佳努力而非严格边界：可见社区的摘要可能掺入他组页面贡献的关系，
+    # 首次归属于不可见页面的实体也会连带藏起相关社区。严格按组隔离需要
+    # 按组做实体归属/社区划分，超出当前范围。
     if visible_page_ids is not None:
         entity_ids = {
             e[0]
@@ -222,6 +226,7 @@ def search_communities(
             except Exception:
                 return set()
 
+        # 成员实体无归属页面(NULL/空 member_ids)的社区会被丢弃,仅见于历史/手工数据
         communities = [c for c in communities if _members(c) & entity_ids]
 
     q = np.array(query_embedding)

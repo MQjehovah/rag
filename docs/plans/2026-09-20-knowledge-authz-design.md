@@ -76,6 +76,8 @@ def visible_wiki_filter(user: dict):
 - `core/graphrag.py`：先取可见页面关联的 `graph_entities.id` 集合，再只保留 `member_ids` 与该集合相交的 `GraphCommunity`，然后再排序取 top_k。
 - 社区数量少，Python 侧过滤可接受。
 
+> 说明：该过滤是**最佳努力**，不是严格边界。实体按名称全局共享、社区又是对全图跑 Louvain 得到的，因此可见社区的摘要可能掺入他组页面贡献的关系；严格按组隔离需要按组做实体归属/社区划分，超出本次范围。
+
 ### B5 `_get_kb_context` 按组过滤
 
 `api/chat.py:389-394`：notebook 限定为 `(group_id IN user.groups) OR group_id IS NULL`；page 限定为 `notebook_id IS NULL OR notebook_id IN 可见 notebook`。`__local_admin__` 不过滤。

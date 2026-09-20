@@ -5,8 +5,12 @@
 """
 import json
 
+import pytest
+
+import app.api.chat as chat_module
 from app.api.chat import _get_kb_context
 from app.api.search_common import get_visible_page_ids
+from app.config import settings
 from app.core.graphrag import search_communities
 from app.models.database import (
     GraphCommunity,
@@ -16,7 +20,7 @@ from app.models.database import (
     get_session,
 )
 
-# 两个社区用同一向量，保证不过滤时都能被检索到，从而凸显过滤是否生效
+# 三个社区用同一向量，保证不过滤时都能被检索到，从而凸显过滤是否生效
 EMB = json.dumps([1.0, 0.0])
 
 
@@ -100,5 +104,62 @@ def test_get_kb_context_admin_sees_all(api_engine, as_user):
         kb = _get_kb_context(db, as_user(["__local_admin__"]))
         assert {n["name"] for n in kb["notebooks"]} == {"研发笔记本", "财务笔记本", "公共笔记本"}
         assert {p["title"] for p in kb["pages"]} == {"研发-甲", "财务-乙", "公共-丙"}
+    finally:
+        db.close()
+
+
+class _FakeEmbedding:
+    async def encode(self, text):
+        return [1.0, 0.0]
+
+
+class _FakePipeline:
+    """替身：本地检索返回空(判为不充分)，从而触发社区全局回退。"""
+
+    def __init__(self, *args, **kwargs):
+        self.embedding_svc = _FakeEmbedding()
+
+    async def retrieve(self, query, current_user, top_k=5):
+        return {"results": []}
+
+
+def _run_community_fallback(monkeypatch, db, user):
+    """跑 _agentic_search_notes 到社区回退，返回 search_communities 收到的 visible_page_ids。"""
+    captured = {}
+
+    def _spy(db_, emb, top_k=5, visible_page_ids=None):
+        captured["visible_page_ids"] = visible_page_ids
+        return []
+
+    monkeypatch.setattr(chat_module, "RetrievalPipeline", _FakePipeline)
+    monkeypatch.setattr(chat_module, "search_communities", _spy)
+    monkeypatch.setattr(settings, "community_qa_enabled", True)
+    monkeypatch.setattr(settings, "llm_api_url", "http://llm.local/v1")
+    monkeypatch.setattr(settings, "agentic_max_hops", 1)
+    return captured, chat_module._agentic_search_notes("问题", db, user)
+
+
+@pytest.mark.asyncio
+async def test_agentic_search_admin_skips_community_filter(api_engine, as_user, monkeypatch):
+    """管理员社区检索传 None(不传可见集合)，避免 all-pages 的超大 IN 列表。"""
+    db = _seed(api_engine)
+    try:
+        captured, coro = _run_community_fallback(monkeypatch, db, as_user(["__local_admin__"]))
+        notes = await coro
+        assert notes == []
+        assert "visible_page_ids" in captured
+        assert captured["visible_page_ids"] is None
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+async def test_agentic_search_group_user_filters_communities(api_engine, as_user, monkeypatch):
+    """普通用户社区检索仍传入其可见页面集合。"""
+    db = _seed(api_engine)
+    try:
+        captured, coro = _run_community_fallback(monkeypatch, db, as_user(["研发部"]))
+        await coro
+        assert captured["visible_page_ids"] == {"page-a", "page-pub"}
     finally:
         db.close()

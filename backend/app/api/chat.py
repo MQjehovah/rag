@@ -196,7 +196,11 @@ async def _agentic_search_notes(
         try:
             emb = await pipeline.embedding_svc.encode(query)
             # 只检索用户可见页面所属实体的社区，避免越权读取他组知识
-            visible_ids = get_visible_page_ids(db, current_user)
+            # 管理员可见全部:直接跳过过滤(与改动前行为一致,且避免超大 IN 列表)
+            if "__local_admin__" in current_user["groups"]:
+                visible_ids = None
+            else:
+                visible_ids = get_visible_page_ids(db, current_user)
             communities = search_communities(db, emb, top_k=5, visible_page_ids=visible_ids)
             for c in communities:
                 cid = f"community:{c['id']}"
@@ -400,7 +404,7 @@ def _get_kb_context(db: Session, current_user) -> dict:
             Notebook.group_id.in_(current_user["groups"]), Notebook.group_id.is_(None)
         )
         notebooks = db.query(Notebook).filter(visible_nb_filter).all()
-        visible_nb_ids = db.query(Notebook.id).filter(visible_nb_filter).subquery()
+        visible_nb_ids = db.query(Notebook.id).filter(visible_nb_filter).scalar_subquery()
         pages_q = db.query(Page.id, Page.title, Page.notebook_id).filter(
             or_(Page.notebook_id.is_(None), Page.notebook_id.in_(visible_nb_ids))
         )
