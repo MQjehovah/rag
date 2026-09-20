@@ -114,6 +114,7 @@ class WikiPage(Base):
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     title = Column(String(255), nullable=False, unique=True, index=True)
     category = Column(String(128), nullable=True, default='', index=True)
+    group_id = Column(String(255), nullable=True, index=True)
     content = Column(Text, default='')
     summary = Column(Text, default='')
     source_note_ids = Column(Text, default='[]')
@@ -246,9 +247,22 @@ def _migrate_schema(engine):
                     logger.info(f"Added column {col.name} to table {table.name}")
 
 
+def _ensure_wiki_group_index(engine):
+    """为已存在的 wiki_pages 补 group_id 索引(建表路径由 create_all 覆盖)。"""
+    try:
+        with engine.begin() as conn:
+            conn.execute(sqlalchemy_text(
+                "CREATE INDEX IF NOT EXISTS ix_wiki_pages_group_id ON wiki_pages (group_id)"
+            ))
+    except Exception:
+        # 索引不是正确性前提,失败不阻断启动
+        logger.warning("创建 wiki_pages.group_id 索引失败", exc_info=True)
+
+
 def init_db(engine):
     Base.metadata.create_all(engine)
     _migrate_schema(engine)
+    _ensure_wiki_group_index(engine)
 
     try:
         with engine.begin() as conn:

@@ -4,7 +4,17 @@ from sqlalchemy import or_
 from sqlalchemy import text as sql_text
 from sqlalchemy.orm import Session
 
-from app.models.database import Notebook, Page
+from app.models.database import Notebook, Page, WikiPage
+
+
+def visible_wiki_filter(current_user):
+    """WikiPage 的可见性条件;返回 None 表示不过滤(本地管理员)。
+
+    语义与 notebook 一致:group_id 为 NULL 视为公共,所有登录用户可见。
+    """
+    if "__local_admin__" in current_user["groups"]:
+        return None
+    return or_(WikiPage.group_id.is_(None), WikiPage.group_id.in_(current_user["groups"]))
 
 
 def get_visible_page_ids(db: Session, current_user) -> Set[str]:
