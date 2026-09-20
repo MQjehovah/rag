@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
+from app.api.search_common import visible_wiki_filter
 from app.core.jwt_utils import get_current_user
 from app.core.wiki import build_wiki, refresh_stale_wiki
 from app.models.database import Page, WikiPage
@@ -15,6 +16,12 @@ from app.models.database import Page, WikiPage
 router = APIRouter(prefix="/api/wiki", tags=["Wiki"])
 
 logger = logging.getLogger(__name__)
+
+
+def _wiki_visible(page: WikiPage, current_user) -> bool:
+    if "__local_admin__" in current_user["groups"]:
+        return True
+    return page.group_id is None or page.group_id in current_user["groups"]
 
 _wiki_status: Dict[str, Any] = {
     "running": False,
@@ -33,7 +40,12 @@ class WikiPageUpdate(BaseModel):
 
 @router.get("")
 def list_wiki(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
-    pages = db.query(WikiPage).order_by(WikiPage.category, WikiPage.title).all()
+    pages = (
+        db.query(WikiPage)
+        .filter(visible_wiki_filter(current_user))
+        .order_by(WikiPage.category, WikiPage.title)
+        .all()
+    )
     categories: Dict[str, list] = {}
     for p in pages:
         cat = p.category or "未分类"
@@ -41,6 +53,7 @@ def list_wiki(db: Session = Depends(get_db), current_user=Depends(get_current_us
             "id": p.id,
             "title": p.title,
             "summary": p.summary or "",
+            "group_id": p.group_id,
             "updated_at": p.updated_at,
         })
     return {
@@ -65,7 +78,7 @@ def get_wiki_page(
     current_user=Depends(get_current_user),
 ):
     page = db.query(WikiPage).filter(WikiPage.id == page_id).first()
-    if not page:
+    if not page or not _wiki_visible(page, current_user):
         raise HTTPException(status_code=404, detail="Wiki 页面不存在")
     try:
         note_ids = json.loads(page.source_note_ids or "[]")
@@ -81,6 +94,7 @@ def get_wiki_page(
         "category": page.category or "未分类",
         "content": page.content or "",
         "summary": page.summary or "",
+        "group_id": page.group_id,
         "sources": sources,
         "updated_at": page.updated_at,
     }
@@ -96,7 +110,7 @@ def update_wiki_page(
     """Human fine-tuning of a wiki page.  The next compile merge pass sees
     this edited content and preserves it."""
     page = db.query(WikiPage).filter(WikiPage.id == page_id).first()
-    if not page:
+    if not page or not _wiki_visible(page, current_user):
         raise HTTPException(status_code=404, detail="Wiki 页面不存在")
     if data.content is not None:
         page.content = data.content
