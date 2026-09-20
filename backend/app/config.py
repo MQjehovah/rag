@@ -1,5 +1,4 @@
 from pydantic_settings import BaseSettings
-from typing import Optional
 
 
 class Settings(BaseSettings):
@@ -49,6 +48,13 @@ class Settings(BaseSettings):
     minio_secret_key: str = "xzyz2022!"
     minio_bucket: str = "xzrobotserver"
     minio_secure: bool = False
+
+    # 图片签名 URL 的 HMAC 密钥;留空则回退 jwt_secret_key
+    image_sign_secret: str = ""
+    # 图片签名有效期(秒)
+    image_sign_ttl_seconds: int = 3600
+    # 外链图片代理允许的最大响应体(字节)
+    image_proxy_max_bytes: int = 10 * 1024 * 1024
 
     ldap_server_url: str = ""
     ldap_bind_dn: str = ""

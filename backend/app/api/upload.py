@@ -1,14 +1,16 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
 from fastapi.responses import FileResponse, Response
+from pydantic import BaseModel
 import uuid
 import io
-import os
 import hashlib
 import httpx
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import unquote
 
 from app.config import settings
+from app.core.image_sign import sign_image_url, sign_proxy_url
 from app.core.jwt_utils import get_current_user
 
 router = APIRouter(prefix="/api/upload", tags=["文件上传"])
@@ -43,6 +45,28 @@ try:
 except ImportError:
     MINIO_AVAILABLE = False
     minio_client = None
+
+
+class SignRequest(BaseModel):
+    urls: list[str]
+
+
+@router.post("/images/sign")
+def sign_images(data: SignRequest, current_user=Depends(get_current_user)):
+    """把图片地址(本地上传路径或外链)换成带签名的可用 URL。"""
+    out: list[str] = []
+    for raw in data.urls[:100]:
+        if raw.startswith("/api/upload/images/proxy?"):
+            query = raw.partition("?")[2]
+            params = dict(kv.split("=", 1) for kv in query.split("&") if "=" in kv)
+            target = unquote(params.get("url", ""))
+            out.append(sign_proxy_url(target, settings.image_sign_ttl_seconds))
+        elif raw.startswith("/api/upload/images/"):
+            out.append(sign_image_url(raw, settings.image_sign_ttl_seconds))
+        else:
+            out.append(raw)
+    return {"urls": out}
+
 
 @router.post("/image")
 async def upload_image(file: UploadFile = File(...), current_user=Depends(get_current_user)):
