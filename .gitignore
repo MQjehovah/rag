@@ -2,8 +2,9 @@
 .vscode/
 
 docs/plans/*
-# 例外:本设计需入库以便评审与追溯
+# 例外:本阶段设计与计划需入库以便评审与追溯
 !docs/plans/2026-09-20-knowledge-authz-design.md
+!docs/plans/2026-09-20-knowledge-authz.md
 
 __pycache__/
 backend/data/
