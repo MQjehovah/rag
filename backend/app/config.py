@@ -1,5 +1,7 @@
 from pydantic_settings import BaseSettings
 
+from app.core.env_guard import require_secret
+
 
 class Settings(BaseSettings):
     ollama_host: str = "http://localhost:11434"
@@ -40,6 +42,9 @@ class Settings(BaseSettings):
 
     host: str = "0.0.0.0"
     port: int = 8000
+
+    # CORS 白名单(逗号分隔);前端 dev 端口为 3000
+    cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
 
     database_url: str = "sqlite:///./data/notes.db"
 
@@ -101,3 +106,8 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+# 启动即校验:生产环境缺失或仍为弱值则抛错,开发环境告警放行
+require_secret("JWT_SECRET_KEY", settings.jwt_secret_key)
+require_secret("LOCAL_ADMIN_PASSWORD", settings.local_admin_password)
+require_secret("MINIO_SECRET_KEY", settings.minio_secret_key)
