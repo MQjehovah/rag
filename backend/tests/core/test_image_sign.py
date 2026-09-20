@@ -179,7 +179,19 @@ def test_assert_public_host_accepts_public(monkeypatch):
     _assert_public_host("http://example.com/pic.png")
 
 
-@pytest.mark.parametrize("ip", ["127.0.0.1", "10.0.0.1", "169.254.169.254"])
+@pytest.mark.parametrize(
+    "ip",
+    [
+        "127.0.0.1",
+        "10.0.0.1",
+        "169.254.169.254",
+        "224.0.0.1",      # 多播:is_global 为 True,须靠 is_multicast 拒绝
+        "100.64.0.1",     # CGNAT:is_global 为 False
+        "0.0.0.0",
+        "::",
+        "::ffff:127.0.0.1",
+    ],
+)
 def test_assert_public_host_rejects_private(monkeypatch, ip):
     import socket
 
@@ -231,8 +243,9 @@ def test_proxy_rejects_private_host_even_with_valid_signature(api_client, monkey
 
 
 class _FakeStreamResponse:
-    def __init__(self, chunks, content_type="image/png", content_length=None):
+    def __init__(self, chunks, content_type="image/png", content_length=None, status_code=200):
         self._chunks = chunks
+        self.status_code = status_code
         self.headers = {"content-type": content_type}
         if content_length is not None:
             self.headers["content-length"] = str(content_length)
@@ -295,5 +308,173 @@ def test_proxy_rejects_oversized_body(api_client, tmp_path, monkeypatch):
     _patch_httpx(monkeypatch, _FakeStreamResponse([b"12345", b"67890"]))
     res = api_client.get(sign_proxy_url("http://example.com/big.png"))
     assert res.status_code == 413
+
+
+# ---- 修复回归:路径穿越、签名端点、代理重定向与内容类型 ----
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "/api/upload/images/../secret",
+        "/api/upload/images/../../.env",
+        "/api/upload/images/..\\../requirements.txt",
+        "/api/upload/images/..%5C../requirements.txt",
+        "/api/upload/images/..",
+    ],
+)
+def test_sign_endpoint_never_signs_traversal_paths(api_client, as_user, raw):
+    """签名端点绝不为可逃逸 uploads 目录的本地路径签发签名。"""
+    as_user([])
+    res = api_client.post("/api/upload/images/sign", json={"urls": [raw]})
+    assert res.status_code == 200
+    assert res.json()["urls"] == [raw]
+    assert "sig=" not in res.json()["urls"][0]
+
+
+@pytest.mark.parametrize(
+    "decoded,encoded",
+    [
+        ("/api/upload/images/..\\../secret.txt", "/api/upload/images/..%5C../secret.txt"),
+        ("/api/upload/images/..\\../.env", "/api/upload/images/..%5C../.env"),
+        (
+            "/api/upload/images/x/..\\..\\..\\secret.txt",
+            "/api/upload/images/x/..%5C..%5C..%5Csecret.txt",
+        ),
+    ],
+)
+def test_get_image_traversal_is_404(api_client, tmp_path, monkeypatch, decoded, encoded):
+    """即使持有有效签名,解析后逃逸上传目录的路径也必须 404。"""
+    from app.api import upload
+
+    uploads = tmp_path / "data" / "uploads"
+    uploads.mkdir(parents=True)
+    (tmp_path / "secret.txt").write_text("TOP-SECRET")
+    (tmp_path / ".env").write_text("TOP-SECRET")
+    monkeypatch.setattr(upload, "UPLOAD_DIR", uploads)
+
+    q = _query(sign_image_url(decoded))
+    res = api_client.get(encoded, params={"sig": q["sig"], "exp": q["exp"]})
+    assert res.status_code == 404
+    assert b"TOP-SECRET" not in res.content
+
+
+def _patch_httpx_transport(monkeypatch, handler):
+    """用 httpx.MockTransport 替换客户端,保留 httpx 真实的重定向语义。"""
+    from app.api import upload
+
+    real_async_client = upload.httpx.AsyncClient
+
+    def _factory(*args, **kwargs):
+        kwargs["transport"] = upload.httpx.MockTransport(handler)
+        return real_async_client(*args, **kwargs)
+
+    monkeypatch.setattr(upload.httpx, "AsyncClient", _factory)
+
+
+def test_proxy_does_not_follow_redirect(api_client, tmp_path, monkeypatch):
+    """上游 302 跳内网时不得跟随,内网内容永不返回。"""
+    import httpx
+
+    from app.api import upload
+
+    monkeypatch.setattr(upload, "IMAGE_CACHE_DIR", tmp_path)
+    monkeypatch.setattr(upload, "_assert_public_host", lambda url: None)
+
+    visited: list[str] = []
+
+    def handler(request):
+        visited.append(str(request.url))
+        if request.url.host == "public.example.com":
+            return httpx.Response(
+                302, headers={"location": "http://169.254.169.254/latest/meta-data/"}
+            )
+        return httpx.Response(
+            200, headers={"content-type": "text/html"}, content=b"SECRET-INTERNAL-DATA"
+        )
+
+    _patch_httpx_transport(monkeypatch, handler)
+    res = api_client.get(sign_proxy_url("http://public.example.com/pic.png"))
+    assert res.status_code != 200
+    assert b"SECRET-INTERNAL-DATA" not in res.content
+    assert all("169.254.169.254" not in u for u in visited)
+
+
+@pytest.mark.parametrize("content_type", ["text/html", "image/svg+xml"])
+def test_proxy_rejects_non_raster_content_type(api_client, tmp_path, monkeypatch, content_type):
+    """同源可执行的 text/html 与 image/svg+xml 一律拒绝。"""
+    import httpx
+
+    from app.api import upload
+
+    monkeypatch.setattr(upload, "IMAGE_CACHE_DIR", tmp_path)
+    monkeypatch.setattr(upload, "_assert_public_host", lambda url: None)
+
+    def handler(request):
+        return httpx.Response(
+            200,
+            headers={"content-type": content_type},
+            content=b"<svg onload=alert(1)></svg>",
+        )
+
+    _patch_httpx_transport(monkeypatch, handler)
+    res = api_client.get(sign_proxy_url("http://images.example.com/x"))
+    assert res.status_code == 400
+
+
+def test_proxy_serves_raster_with_nosniff(api_client, tmp_path, monkeypatch):
+    import httpx
+
+    from app.api import upload
+
+    monkeypatch.setattr(upload, "IMAGE_CACHE_DIR", tmp_path)
+    monkeypatch.setattr(upload, "_assert_public_host", lambda url: None)
+
+    def handler(request):
+        return httpx.Response(200, headers={"content-type": "image/png"}, content=b"PNGDATA")
+
+    _patch_httpx_transport(monkeypatch, handler)
+    res = api_client.get(sign_proxy_url("http://images.example.com/x.png"))
+    assert res.status_code == 200
+    assert res.content == b"PNGDATA"
+    assert res.headers["x-content-type-options"] == "nosniff"
+
+
+def test_sign_endpoint_rejects_unbounded_array(api_client, as_user):
+    """urls 数组超过 100 条在验证阶段直接 422,避免无界遍历。"""
+    as_user([])
+    res = api_client.post("/api/upload/images/sign", json={"urls": ["x"] * 101})
+    assert res.status_code == 422
+
+
+def test_upload_rejects_svg(api_client, as_user):
+    as_user([])
+    res = api_client.post(
+        "/api/upload/image",
+        files={
+            "file": (
+                "x.svg",
+                b"<svg xmlns='http://www.w3.org/2000/svg'><script>alert(1)</script></svg>",
+                "image/svg+xml",
+            )
+        },
+    )
+    assert res.status_code == 400
+
+
+def test_upload_derives_extension_from_content_type(api_client, as_user, tmp_path, monkeypatch):
+    """伪造 .svg 文件名 + image/png 内容类型时,扩展名必须来自 content-type。"""
+    from app.api import upload
+
+    monkeypatch.setattr(upload, "UPLOAD_DIR", tmp_path)
+    monkeypatch.setattr(upload, "MINIO_AVAILABLE", False)
+    as_user([])
+    res = api_client.post(
+        "/api/upload/image",
+        files={"file": ("evil.svg", b"\x89PNG", "image/png")},
+    )
+    assert res.status_code == 200
+    name = res.json()["name"]
+    assert name.endswith(".png")
+    assert not name.endswith(".svg")
 
 
