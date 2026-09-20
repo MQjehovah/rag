@@ -122,6 +122,7 @@ import { ref, nextTick, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import http from '../api/http'
+import { mapImageSrc, signImageElement, signRenderedImages } from '../utils/imageSign'
 import MarkdownIt from 'markdown-it'
 import hljs from 'highlight.js'
 
@@ -202,8 +203,18 @@ watch(messages, () => {
   }, 600)
 }, { deep: true })
 
+// 渲染完成后统一把图片换成带签名的地址（含历史消息与流式结束时的引用图）。
+const signMessageImages = () => {
+  if (messagesRef.value) signRenderedImages(messagesRef.value)
+}
+
+watch(loading, (busy) => {
+  if (!busy) nextTick(signMessageImages)
+})
+
 onMounted(() => {
   scrollToBottom()
+  nextTick(signMessageImages)
 })
 
 onBeforeUnmount(() => {
@@ -321,9 +332,9 @@ const resolveUrl = (u: string) => {
 const hideImg = (e: Event) => {
   const el = e.target as HTMLImageElement
   const src = el.getAttribute('src') || ''
-  if (!src.includes('/api/upload/images/proxy') && /^https?:/.test(src)) {
-    // First failure: retry once through the no-Referer backend proxy.
-    el.src = window.location.origin + '/api/upload/images/proxy?url=' + encodeURIComponent(src)
+  if (mapImageSrc(src)) {
+    // 首次失败：请后端签名后重试（外链会自动改走带签名的代理）。
+    signImageElement(el)
     return
   }
   el.style.display = 'none'

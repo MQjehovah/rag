@@ -61,6 +61,7 @@
         <template v-if="!editing">
           <div
             class="wiki-body markdown-body"
+            ref="bodyRef"
             v-html="renderContent(current.content)"
             @click="handleContentClick"
             @error.capture="handleImgError"
@@ -102,10 +103,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import http from '../api/http'
+import { mapImageSrc, signImageElement, signRenderedImages } from '../utils/imageSign'
 import { useAuthStore } from '../stores/auth'
 import MarkdownIt from 'markdown-it'
 import hljs from 'highlight.js'
@@ -143,6 +145,7 @@ const savingEdit = ref(false)
 const editForm = ref({ content: '', summary: '', category: '' })
 const groupInput = ref('')
 const savingGroup = ref(false)
+const bodyRef = ref<HTMLElement>()
 
 const isAdmin = computed(() =>
   (authStore.user?.groups || []).includes('__local_admin__')
@@ -257,13 +260,20 @@ const handleContentClick = (e: MouseEvent) => {
 const handleImgError = (e: Event) => {
   const el = e.target as HTMLImageElement
   const src = el.getAttribute('src') || ''
-  if (!src.includes('/api/upload/images/proxy') && /^https?:/.test(src)) {
-    // First failure: retry once through the no-Referer backend proxy.
-    el.src = window.location.origin + '/api/upload/images/proxy?url=' + encodeURIComponent(src)
+  if (mapImageSrc(src)) {
+    // 首次失败：请后端签名后重试（外链会自动改走带签名的代理）。
+    signImageElement(el)
     return
   }
   el.style.display = 'none'
 }
+
+// 正文渲染完成后把图片换成带签名的地址。
+watch(current, () => {
+  nextTick(() => {
+    if (bodyRef.value) signRenderedImages(bodyRef.value)
+  })
+})
 
 const rebuildWiki = async () => {
   rebuilding.value = true
