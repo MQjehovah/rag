@@ -237,6 +237,8 @@ def start_sync_selected(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
+    if "__local_admin__" not in current_user["groups"]:
+        raise HTTPException(status_code=403, detail="仅管理员可执行")
     if SYNC_STATUS["running"]:
         raise HTTPException(status_code=409, detail="同步正在进行中")
 
@@ -267,6 +269,8 @@ def start_sync(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
+    if "__local_admin__" not in current_user["groups"]:
+        raise HTTPException(status_code=403, detail="仅管理员可执行")
     if SYNC_STATUS["running"]:
         raise HTTPException(status_code=409, detail="同步正在进行中")
 

@@ -241,6 +241,12 @@ def update_page(page_id: str, data: PageUpdate, background_tasks: BackgroundTask
     if data.content is not None:
         page.content = data.content
     if data.notebook_id is not None:
+        # 改归属时既要校验目标笔记本存在，也要用与读取一致的组可见性规则
+        # 校验目标笔记本，避免把笔记写进无权访问的他组笔记本（管理员豁免）。
+        target_nb = db.query(Notebook).filter(Notebook.id == data.notebook_id).first()
+        if not target_nb:
+            raise HTTPException(status_code=403, detail="目标笔记本不存在")
+        _check_page_access_by_nb(data.notebook_id, current_user, db)
         page.notebook_id = data.notebook_id
     page.updated_at = datetime.now()
 

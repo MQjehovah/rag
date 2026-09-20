@@ -245,6 +245,8 @@ def get_graph_stats(db: Session = Depends(get_db), current_user=Depends(get_curr
 
 @router.post("/rebuild")
 def rebuild_graph(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    if "__local_admin__" not in current_user["groups"]:
+        raise HTTPException(status_code=403, detail="仅管理员可执行")
     pages = _get_visible_pages(db, current_user)
     if not pages:
         return {"message": "没有笔记，跳过构建"}
