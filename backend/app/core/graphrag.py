@@ -203,32 +203,44 @@ def search_communities(
     db: Session,
     query_embedding: List[float],
     top_k: int = 5,
+    visible_page_ids=None,
 ) -> List[Dict[str, Any]]:
-    rows = db.query(
-        GraphCommunity.id,
-        GraphCommunity.title,
-        GraphCommunity.summary,
-        GraphCommunity.embedding,
-    ).all()
-    if not rows:
+    communities = db.query(GraphCommunity).all()
+    if not communities:
         return []
+
+    # 可见性过滤：仅保留成员实体归属于可见页面的社区
+    if visible_page_ids is not None:
+        entity_ids = {
+            e[0]
+            for e in db.query(GraphEntity.id).filter(GraphEntity.page_id.in_(visible_page_ids)).all()
+        } if visible_page_ids else set()
+
+        def _members(c):
+            try:
+                return set(json.loads(c.member_ids or "[]"))
+            except Exception:
+                return set()
+
+        communities = [c for c in communities if _members(c) & entity_ids]
+
     q = np.array(query_embedding)
     qn = np.linalg.norm(q)
     if qn == 0:
         return []
     scored = []
-    for cid, title, summary, emb_json in rows:
-        if not emb_json:
+    for c in communities:
+        if not c.embedding:
             continue
         try:
-            v = np.array(json.loads(emb_json))
+            v = np.array(json.loads(c.embedding))
         except Exception:
             continue
         vn = np.linalg.norm(v)
         if vn == 0:
             continue
         sim = float(np.dot(q, v) / (qn * vn))
-        scored.append((sim, cid, title, summary))
+        scored.append((sim, c.id, c.title, c.summary))
     scored.sort(key=lambda x: x[0], reverse=True)
     return [
         {"id": cid, "title": title, "summary": summary, "score": round(s, 4)}

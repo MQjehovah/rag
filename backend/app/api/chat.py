@@ -8,6 +8,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -15,8 +16,9 @@ from app.core.rag import EmbeddingService, RerankerService
 from app.core.retrieval import RetrievalPipeline
 from app.core.llm import call_llm_text
 from app.core.graphrag import search_communities
-from app.models.database import Page
+from app.models.database import Notebook, Page
 from app.api.deps import get_db
+from app.api.search_common import get_visible_page_ids
 from app.core.jwt_utils import get_current_user
 
 router = APIRouter(prefix="/api/chat", tags=["AI问答"])
@@ -193,7 +195,9 @@ async def _agentic_search_notes(
     if not sufficient and settings.community_qa_enabled and settings.llm_api_url:
         try:
             emb = await pipeline.embedding_svc.encode(query)
-            communities = search_communities(db, emb, top_k=5)
+            # 只检索用户可见页面所属实体的社区，避免越权读取他组知识
+            visible_ids = get_visible_page_ids(db, current_user)
+            communities = search_communities(db, emb, top_k=5, visible_page_ids=visible_ids)
             for c in communities:
                 cid = f"community:{c['id']}"
                 if cid in seen_ids:
@@ -386,10 +390,22 @@ async def _call_llm_json(messages: list, context: str = "") -> dict:
         return {}
 
 
-def _get_kb_context(db: Session) -> dict:
-    notebooks = db.query(Notebook).all()
+def _get_kb_context(db: Session, current_user) -> dict:
+    """返回当前用户可见的笔记本与笔记，供知识整理提示词使用。"""
+    if "__local_admin__" in current_user["groups"]:
+        notebooks = db.query(Notebook).all()
+        pages_q = db.query(Page.id, Page.title, Page.notebook_id)
+    else:
+        visible_nb_filter = or_(
+            Notebook.group_id.in_(current_user["groups"]), Notebook.group_id.is_(None)
+        )
+        notebooks = db.query(Notebook).filter(visible_nb_filter).all()
+        visible_nb_ids = db.query(Notebook.id).filter(visible_nb_filter).subquery()
+        pages_q = db.query(Page.id, Page.title, Page.notebook_id).filter(
+            or_(Page.notebook_id.is_(None), Page.notebook_id.in_(visible_nb_ids))
+        )
     nb_list = [{"id": nb.id, "name": nb.name} for nb in notebooks]
-    pages = db.query(Page.id, Page.title, Page.notebook_id).order_by(Page.updated_at.desc()).limit(100).all()
+    pages = pages_q.order_by(Page.updated_at.desc()).limit(100).all()
     page_list = [{"id": p[0], "title": p[1], "notebook_id": p[2]} for p in pages]
     return {"notebooks": nb_list, "pages": page_list}
 
@@ -430,7 +446,7 @@ async def save_note(request: SaveNoteRequest, db: Session = Depends(get_db), cur
     if not settings.llm_api_url:
         raise HTTPException(status_code=500, detail="未配置 LLM API")
 
-    kb = _get_kb_context(db)
+    kb = _get_kb_context(db, current_user)
     prompt = ORGANIZE_PROMPT.format(
         kb_notebooks=json.dumps(kb["notebooks"], ensure_ascii=False),
         kb_pages=json.dumps(kb["pages"], ensure_ascii=False),
@@ -613,7 +629,7 @@ async def import_file(
     if not _looks_like_text(text):
         raise HTTPException(status_code=400, detail="无法从文件中提取有效文本（文件可能已损坏或格式不支持）")
 
-    kb = _get_kb_context(db)
+    kb = _get_kb_context(db, current_user)
     prompt = ORGANIZE_PROMPT.format(
         kb_notebooks=json.dumps(kb["notebooks"], ensure_ascii=False),
         kb_pages=json.dumps(kb["pages"], ensure_ascii=False),
@@ -659,7 +675,7 @@ async def import_url(request: ImportUrlRequest, db: Session = Depends(get_db), c
     if not _looks_like_text(text):
         raise HTTPException(status_code=400, detail="无法提取有效的网页正文内容")
 
-    kb = _get_kb_context(db)
+    kb = _get_kb_context(db, current_user)
     prompt = ORGANIZE_PROMPT.format(
         kb_notebooks=json.dumps(kb["notebooks"], ensure_ascii=False),
         kb_pages=json.dumps(kb["pages"], ensure_ascii=False),
@@ -695,7 +711,7 @@ async def import_text(request: ImportTextRequest, db: Session = Depends(get_db),
     if not request.text.strip():
         raise HTTPException(status_code=400, detail="文本内容为空")
 
-    kb = _get_kb_context(db)
+    kb = _get_kb_context(db, current_user)
     prompt = ORGANIZE_PROMPT.format(
         kb_notebooks=json.dumps(kb["notebooks"], ensure_ascii=False),
         kb_pages=json.dumps(kb["pages"], ensure_ascii=False),
