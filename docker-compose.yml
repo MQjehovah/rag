@@ -26,6 +26,7 @@ services:
     volumes:
       - ./backend/data:/app/data
     environment:
+      - APP_ENV=${APP_ENV:-production}
       - DATABASE_URL=${DATABASE_URL:-postgresql+psycopg2://postgres:postgres@db:5432/notesrag}
       - OLLAMA_HOST=http://host.docker.internal:11434
       - LDAP_SERVER_URL=${LDAP_SERVER_URL:-}
@@ -33,8 +34,9 @@ services:
       - LDAP_BIND_PASSWORD=${LDAP_BIND_PASSWORD:-}
       - LDAP_USER_BASE_DN=${LDAP_USER_BASE_DN:-}
       - LDAP_GROUP_BASE_DN=${LDAP_GROUP_BASE_DN:-}
-      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-change-me-in-production}
-      - LOCAL_ADMIN_PASSWORD=${LOCAL_ADMIN_PASSWORD:-}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:?JWT_SECRET_KEY is required}
+      - LOCAL_ADMIN_PASSWORD=${LOCAL_ADMIN_PASSWORD:?LOCAL_ADMIN_PASSWORD is required}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:?MINIO_SECRET_KEY is required}
     depends_on:
       db:
         condition: service_healthy

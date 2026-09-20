@@ -5,7 +5,6 @@
 """
 import logging
 import os
-import sys
 
 WEAK_VALUES = {
     "change-me-in-production",
@@ -23,20 +22,7 @@ WEAK_VALUES = {
 
 _PRODUCTION_NAMES = {"production", "prod"}
 
-
-class _StdoutHandler(logging.Handler):
-    """把告警写到当前 sys.stdout,便于控制台可见且被 capsys 捕获。"""
-
-    def emit(self, record: logging.LogRecord) -> None:
-        print(self.format(record), file=sys.stdout)
-
-
 logger = logging.getLogger(__name__)
-if not logger.handlers:
-    _handler = _StdoutHandler()
-    _handler.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
-    logger.addHandler(_handler)
-    logger.propagate = False
 
 
 def is_production() -> bool:
@@ -45,7 +31,8 @@ def is_production() -> bool:
 
 def require_secret(name: str, value: str | None, weak_values: set[str] = WEAK_VALUES) -> str | None:
     """校验秘密类配置:生产拒绝弱值/空值,开发放行并告警。"""
-    bad = (value is None) or (str(value).strip() == "") or (value in weak_values)
+    normalized = "" if value is None else str(value).strip()
+    bad = (normalized == "") or (normalized in weak_values)
     if not bad:
         return value
     if is_production():

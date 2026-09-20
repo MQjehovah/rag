@@ -1,3 +1,5 @@
+import logging
+
 import pytest
 
 from app.core.env_guard import WEAK_VALUES, is_production, require_secret
@@ -9,16 +11,26 @@ def test_production_拒绝弱值(monkeypatch):
         require_secret("JWT_SECRET_KEY", "change-me-in-production")
 
 
+def test_production_拒绝带空白的弱值(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "production")
+    with pytest.raises(RuntimeError, match="JWT_SECRET_KEY"):
+        require_secret("JWT_SECRET_KEY", " change-me ")
+
+
 def test_production_拒绝空值(monkeypatch):
     monkeypatch.setenv("APP_ENV", "production")
     with pytest.raises(RuntimeError):
         require_secret("MINIO_SECRET_KEY", "")
 
 
-def test_development_放行但告警(monkeypatch, capsys):
+def test_development_放行但告警(monkeypatch, caplog):
     monkeypatch.setenv("APP_ENV", "development")
-    assert require_secret("JWT_SECRET_KEY", "change-me-in-production") == "change-me-in-production"
-    assert "WARNING" in capsys.readouterr().out.upper() or "警告" in capsys.readouterr().out
+    with caplog.at_level(logging.WARNING):
+        assert require_secret("JWT_SECRET_KEY", "change-me-in-production") == "change-me-in-production"
+    assert any(
+        record.levelname == "WARNING" and "JWT_SECRET_KEY" in record.getMessage()
+        for record in caplog.records
+    )
 
 
 def test_正常值直接返回(monkeypatch):
