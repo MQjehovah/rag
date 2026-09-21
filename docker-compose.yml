@@ -27,6 +27,7 @@ services:
       - ./backend/data:/app/data
     environment:
       - APP_ENV=${APP_ENV:-production}
+      - PUBLIC_BASE_PATH=/rag
       - DATABASE_URL=${DATABASE_URL:-postgresql+psycopg2://postgres:postgres@db:5432/notesrag}
       - OLLAMA_HOST=http://host.docker.internal:11434
       - LDAP_SERVER_URL=${LDAP_SERVER_URL:-}

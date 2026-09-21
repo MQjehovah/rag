@@ -131,7 +131,7 @@ async def upload_image(file: UploadFile = File(...), current_user=Depends(get_cu
     with open(file_path, 'wb') as f:
         f.write(file_content)
 
-    url = f"/api/upload/images/{date_dir}/{file_name}"
+    url = f"{settings.public_base_path}/api/upload/images/{date_dir}/{file_name}"
     return {"url": url, "name": f"{date_dir}/{file_name}"}
 
 @router.get("/images/{date_dir}/{file_name}")

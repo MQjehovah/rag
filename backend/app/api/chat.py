@@ -85,7 +85,7 @@ def _normalize_image_url(u: str) -> str:
         return u
     if host in SAFE_IMAGE_HOSTS:
         return u
-    return "/api/upload/images/proxy?url=" + urllib.parse.quote(u, safe="")
+    return settings.public_base_path + "/api/upload/images/proxy?url=" + urllib.parse.quote(u, safe="")
 
 
 def _extract_images(text: str, limit: int = 6) -> list:

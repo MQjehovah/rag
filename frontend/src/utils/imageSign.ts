@@ -1,8 +1,14 @@
 import http from '../api/http'
 
+// 子路径部署时页面挂在 BASE_URL(如 /rag/)。签名接口经 http 实例自带 baseURL,
+// 但写回 <img src>/<a href> 的地址必须显式带前缀;发给后端签名的路径保持裸路径。
+const API_BASE = (import.meta.env.BASE_URL || '/').replace(/\/$/, '')
+
 const PROXY_PATH = '/api/upload/images/proxy?url='
 const LOCAL_PREFIX = '/api/upload/images/'
 const SIGN_ENDPOINT = '/api/upload/images/sign'
+
+const withBase = (path: string): string => (path.startsWith('/') ? API_BASE + path : path)
 
 /** 从已归一化的代理路径里取出被代理的原始地址；缺失或解码失败返回 null。 */
 const proxyTarget = (path: string): string | null => {
@@ -38,6 +44,11 @@ export const mapImageSrc = (src: string): string | null => {
     } else {
       return PROXY_PATH + encodeURIComponent(src)
     }
+  }
+
+  // 后端生成的地址可能自带子路径前缀(如 /rag/api/...);签名对象始终是不含前缀的裸路径。
+  if (API_BASE && (candidate === API_BASE || candidate.startsWith(API_BASE + '/'))) {
+    candidate = candidate.slice(API_BASE.length) || '/'
   }
 
   if (candidate.startsWith(LOCAL_PREFIX) && !candidate.startsWith(PROXY_PATH)) {
@@ -88,9 +99,9 @@ const drain = async () => {
           const next = signed[i]
           if (!next) return
           attempted.add(item.el)
-          item.el.src = next
+          item.el.src = withBase(next)
           const link = item.el.closest('a')
-          if (link) link.href = next
+          if (link) link.href = withBase(next)
         })
       } catch (e) {
         // 签名失败时保留原始 src，不影响其余渲染，也不弹窗打扰用户。

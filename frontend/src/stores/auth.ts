@@ -19,7 +19,7 @@ export const useAuthStore = defineStore('auth', () => {
   const isLoggedIn = computed(() => !!token.value)
 
   async function login(username: string, password: string) {
-    const res = await axios.post('/api/auth/login', { username, password })
+    const res = await axios.post((import.meta.env.BASE_URL || '/').replace(/\/$/, '') + '/api/auth/login', { username, password })
     token.value = res.data.token
     user.value = res.data.user
     localStorage.setItem('token', res.data.token)

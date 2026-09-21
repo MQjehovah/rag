@@ -140,6 +140,8 @@ const md = new MarkdownIt({
 
 const router = useRouter()
 
+const API_BASE = (import.meta.env.BASE_URL || '/').replace(/\/$/, '')
+
 interface Source {
   id: string
   title: string
@@ -250,7 +252,7 @@ const sendMessage = async () => {
 
   try {
     const token = localStorage.getItem('token')
-    const resp = await fetch('/api/chat', {
+    const resp = await fetch(`${API_BASE}/api/chat`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

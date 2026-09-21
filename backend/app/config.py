@@ -43,6 +43,9 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8000
 
+    # 对外公开的子路径前缀(如 /rag);为空表示部署在根路径
+    public_base_path: str = ""
+
     # CORS 白名单(逗号分隔);前端 dev 端口为 3000
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
 

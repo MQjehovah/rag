@@ -12,7 +12,7 @@ import Wiki from './views/Wiki.vue'
 import Sources from './views/Sources.vue'
 
 const router = createRouter({
-  history: createWebHistory(),
+  history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
     { path: '/login', component: Login, meta: { public: true } },
     { path: '/', component: Chat },

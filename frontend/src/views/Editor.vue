@@ -276,6 +276,8 @@ import TipTapEditor from '../components/TipTapEditor.vue'
 
 const route = useRoute()
 
+const API_BASE = (import.meta.env.BASE_URL || '/').replace(/\/$/, '')
+
 interface Notebook {
   id: string
   name: string
@@ -739,7 +741,7 @@ const handleOrganize = async () => {
   organizing.value = true
   try {
     const token = localStorage.getItem('token')
-    const resp = await fetch('/api/organize', {
+    const resp = await fetch(`${API_BASE}/api/organize`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
     })
