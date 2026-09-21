@@ -117,6 +117,7 @@ class WikiPage(Base):
     group_id = Column(String(255), nullable=True, index=True)
     content = Column(Text, default='')
     summary = Column(Text, default='')
+    embedding = Column(Text, nullable=True)
     source_note_ids = Column(Text, default='[]')
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
@@ -259,6 +260,31 @@ def _ensure_wiki_group_index(engine):
         logger.warning("创建 wiki_pages.group_id 索引失败", exc_info=True)
 
 
+def _ensure_wiki_embedding_column(engine):
+    """Postgres 上为 wiki_pages 补 embedding_vec 向量列与 HNSW 索引(裸 DDL,失败不阻断)。
+
+    SQLite 等方言整段 no-op。JSON 文本 embedding → embedding_vec 的一次性回填
+    与 page_chunks 同法,便于存量页面在新列建立前也能被检索。
+    """
+    try:
+        with engine.begin() as conn:
+            if engine.dialect.name == "postgresql":
+                conn.execute(sqlalchemy_text(
+                    "ALTER TABLE wiki_pages ADD COLUMN IF NOT EXISTS embedding_vec vector(1024)"
+                ))
+                conn.execute(sqlalchemy_text(
+                    "CREATE INDEX IF NOT EXISTS ix_wiki_pages_embedding_hnsw "
+                    "ON wiki_pages USING hnsw (embedding_vec vector_cosine_ops)"
+                ))
+                conn.execute(sqlalchemy_text(
+                    "UPDATE wiki_pages SET embedding_vec = embedding::vector "
+                    "WHERE embedding IS NOT NULL AND embedding_vec IS NULL"
+                ))
+    except Exception:
+        logger.warning("初始化 wiki_pages 向量列失败", exc_info=True)
+
+
+
 def init_db(engine):
     Base.metadata.create_all(engine)
     _migrate_schema(engine)
@@ -306,6 +332,9 @@ def init_db(engine):
                 logger.info("PostgreSQL pgvector extension initialized")
     except Exception as e:
         logger.warning(f"Vector extension setup skipped: {e}")
+
+    # 必须在 pgvector 扩展建立之后调用(vector 类型/ops 此时才可用)
+    _ensure_wiki_embedding_column(engine)
 
 
 def get_session(engine):
