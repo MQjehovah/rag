@@ -97,6 +97,11 @@ class Settings(BaseSettings):
     sso_issuer: str = ""
     sso_audience: str = ""
     sso_jwks_uri: str = ""
+    # 浏览器 SSO 登录(授权码流程):配置 client_id + redirect_uri 后 /api/auth/sso/start 可用
+    sso_client_id: str = ""
+    sso_client_secret: str = ""
+    sso_redirect_uri: str = ""
+    sso_redirect_target: str = "/login"
 
     class Config:
         env_file = ".env"

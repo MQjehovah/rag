@@ -5,9 +5,12 @@ RS256 token,通过则返回 claims,其中 sub 视为工号,供 D-ready 的
 get_current_user 接入使用。未配置 sso_issuer 时按 SSO 禁用处理。
 """
 
+import base64
 import json
+import secrets
 import threading
 import time
+import urllib.parse
 import urllib.request
 from urllib.parse import urlparse
 from urllib.request import url2pathname
@@ -94,11 +97,15 @@ def _public_key(kid: str | None):
     return jose_jwk.construct(jwk_dict, algorithm=ALGORITHM)
 
 
-def verify_sso_token(token: str) -> dict:
+def verify_sso_token(token: str, audience: str | None = None) -> dict:
     """校验 SSO 签发的 RS256 token,通过则返回 claims(含 sub 工号)。
 
     未配置 sso_issuer 视为 SSO 禁用;iss/aud 不匹配、签名无效、过期、
     缺少 sub(工号)等一律抛 SsoAuthError。
+
+    audience 显式传入时优先于 sso_audience 设置:授权码回调拿到的 id_token
+    的 aud 是本系统自己的 client_id,而资源服务器场景(sso_audience)认的是
+    调用方(如 dashboard)的 client_id,两者需要区分。
     """
     if not settings.sso_issuer:
         raise SsoAuthError("SSO not configured")
@@ -114,7 +121,7 @@ def verify_sso_token(token: str) -> dict:
             key,
             algorithms=[ALGORITHM],
             issuer=settings.sso_issuer,
-            audience=settings.sso_audience or None,
+            audience=audience or settings.sso_audience or None,
         )
     except SsoAuthError:
         raise
@@ -123,3 +130,83 @@ def verify_sso_token(token: str) -> dict:
     if not claims.get("sub"):
         raise SsoAuthError("SSO token 缺少 sub(工号)")
     return claims
+
+
+# ---- 授权码流程(浏览器 SSO 登录)----
+
+STATE_TTL_SECONDS = 600
+
+_states: dict[str, float] = {}
+_states_lock = threading.Lock()
+
+
+def sso_login_enabled() -> bool:
+    """浏览器 SSO 登录是否可用:issuer + client_id + redirect_uri 齐备。"""
+    return bool(settings.sso_issuer and settings.sso_client_id and settings.sso_redirect_uri)
+
+
+def build_authorize_url(state: str) -> str:
+    """构造 SSO OIDC 授权跳转 URL(浏览器访问, 故用配置的 issuer 公网地址)。"""
+    issuer = (settings.sso_issuer or "").rstrip("/")
+    if not sso_login_enabled() or not issuer:
+        raise SsoAuthError("SSO login not configured")
+    params = {
+        "response_type": "code",
+        "client_id": settings.sso_client_id,
+        "redirect_uri": settings.sso_redirect_uri,
+        "state": state,
+        "scope": "openid profile",
+    }
+    return issuer + "/authorize?" + urllib.parse.urlencode(params)
+
+
+def exchange_code(code: str) -> str:
+    """authorization_code → token 交换, 返回 id_token 字符串。
+
+    同时携带 client_secret_basic(Authorization 头)与 client_secret_post(client_secret
+    字段), 兼容两种支持方式。缺 id_token 抛 SsoAuthError。
+    """
+    issuer = (settings.sso_issuer or "").rstrip("/")
+    if not sso_login_enabled() or not issuer:
+        raise SsoAuthError("SSO login not configured")
+    form = {
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": settings.sso_redirect_uri,
+        "client_id": settings.sso_client_id,
+    }
+    secret = settings.sso_client_secret
+    if secret:
+        form["client_secret"] = secret
+    data = urllib.parse.urlencode(form).encode("utf-8")
+    req = urllib.request.Request(issuer + "/token", data=data, method="POST")
+    if secret:
+        basic = base64.b64encode(f"{settings.sso_client_id}:{secret}".encode()).decode("ascii")
+        req.add_header("Authorization", "Basic " + basic)
+    req.add_header("Content-Type", "application/x-www-form-urlencoded")
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except (OSError, ValueError) as e:
+        raise SsoAuthError(f"SSO token 交换失败: {e}") from e
+    id_token = payload.get("id_token")
+    if not id_token:
+        raise SsoAuthError("SSO token 响应缺少 id_token")
+    return id_token
+
+
+def new_state() -> str:
+    """生成一次性 state(随机短串)并记录时间戳。"""
+    st = secrets.token_urlsafe(16)
+    with _states_lock:
+        _states[st] = time.time()
+    return st
+
+
+def validate_state(state: str) -> bool:
+    """校验并消费 state: 过期/不存在返回 False。"""
+    with _states_lock:
+        found = _states.pop(state, None)
+    if found is None:
+        return False
+    return (time.time() - found) <= STATE_TTL_SECONDS

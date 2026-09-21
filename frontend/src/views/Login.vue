@@ -15,6 +15,7 @@
           <el-input v-model="password" type="password" placeholder="密码" size="large" prefix-icon="Lock" show-password @keyup.enter="handleLogin" />
         </el-form-item>
         <el-button type="primary" size="large" class="login-btn" @click="handleLogin" :loading="loading">登 录</el-button>
+        <el-button size="large" class="login-btn sso-btn" @click="handleSsoLogin" :loading="ssoLoading">企业 SSO 登录</el-button>
       </el-form>
       <p v-if="error" class="error-text">{{ error }}</p>
     </div>
@@ -22,15 +23,17 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { onMounted, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 
 const username = ref('')
 const password = ref('')
 const loading = ref(false)
+const ssoLoading = ref(false)
 const error = ref('')
 
+const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
 
@@ -50,6 +53,29 @@ const handleLogin = async () => {
     loading.value = false
   }
 }
+
+const handleSsoLogin = () => {
+  ssoLoading.value = true
+  error.value = ''
+  authStore.loginWithSso()
+}
+
+/** SSO 回调: 带 sso_token 回本页 → 落盘后进入主页; 带 error 则原样展示 */
+onMounted(async () => {
+  const ssoError = route.query.error
+  if (typeof ssoError === 'string' && ssoError) error.value = ssoError
+  const ssoToken = route.query.sso_token
+  if (typeof ssoToken !== 'string' || !ssoToken) return
+  loading.value = true
+  try {
+    await authStore.adoptSsoToken(ssoToken)
+    router.replace('/')
+  } catch {
+    error.value = 'SSO 登录失败,请重试'
+  } finally {
+    loading.value = false
+  }
+})
 </script>
 
 <style scoped>
@@ -131,6 +157,23 @@ const handleLogin = async () => {
 }
 .login-btn:hover {
   opacity: 0.9;
+}
+.sso-btn {
+  margin-top: 12px;
+  margin-left: 0;
+  width: 100%;
+  height: 44px;
+  border-radius: 10px;
+  font-size: 15px;
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid rgba(255,255,255,0.12);
+  color: #cbd5e1;
+  letter-spacing: 1px;
+}
+.sso-btn:hover {
+  border-color: rgba(56,189,248,0.4);
+  color: #e2e8f0;
+  background: rgba(15, 23, 42, 0.8);
 }
 .error-text {
   color: #f87171;

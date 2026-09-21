@@ -25,6 +25,18 @@ export const useAuthStore = defineStore('auth', () => {
     localStorage.setItem('token', res.data.token)
   }
 
+  /** SSO 登录:跳统一认证授权页(回调会带 sso_token 回到登录页) */
+  function loginWithSso() {
+    window.location.href = (import.meta.env.BASE_URL || '/').replace(/\/$/, '') + '/api/auth/sso/start'
+  }
+
+  /** SSO 回调带回来的本系统 token:落盘并拉取用户信息 */
+  async function adoptSsoToken(ssoToken: string) {
+    token.value = ssoToken
+    localStorage.setItem('token', ssoToken)
+    await fetchMe()
+  }
+
   function logout() {
     token.value = ''
     user.value = null
@@ -41,5 +53,5 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
-  return { token, user, isLoggedIn, login, logout, fetchMe }
+  return { token, user, isLoggedIn, login, loginWithSso, adoptSsoToken, logout, fetchMe }
 })

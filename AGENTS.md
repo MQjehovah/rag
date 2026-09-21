@@ -62,3 +62,12 @@ docker compose --profile pg up -d --build backend frontend
 - **`.env` required in `backend/`**. Old `.env` with `CHROMADB_PATH` causes pydantic validation errors — remove it. Production `.env` is baked into the image; changing it requires a rebuild.
 - **Frontend `npm run build`** runs `vue-tsc` first — type errors block the build. `noUnusedLocals`/`noUnusedParameters` are on.
 - **Reranker is optional** — empty `RERANKER_API_URL` skips reranking.
+- **SSO 双轨**: 资源轨(`SSO_ISSUER`/`SSO_AUDIENCE`/`SSO_JWKS_URI`)校验别的系统(dashboard)传来的 token;
+  登录轨(`SSO_CLIENT_ID`/`SSO_CLIENT_SECRET`/`SSO_REDIRECT_URI`/`SSO_REDIRECT_TARGET`)提供浏览器授权码流程
+  (`GET /api/auth/sso/start` + `GET /api/auth/oidc/callback`,前端登录页按钮「企业 SSO 登录」)。
+  回调拿到的 id_token `aud` 是本系统自己的 client_id,与资源轨受众不同,故 `verify_sso_token(token, audience=...)`
+  支持显式覆盖。SSO 只签发 `roles`(无 `groups`),`_normalize_claims_groups` 同时采纳两者,且 `roles` 含 `admin`
+  时补内部管理员标记 `__local_admin__`(全库管理端点均按该组名判定)。
+- **子路径部署**: 对外 `https://ai.xzrobot.com/rag/...` 由 45 的 nginx **剥掉 `/rag` 前缀**再转发到 34:8092,
+  故前端 nginx 只需处理根路径的 `/api`(不需要子路径规则);`PUBLIC_BASE_PATH=/rag` 仅用于生成对外绝对 URL。
+  **重建 backend 后必须一并重启/重建 frontend**(其 nginx 会缓存 backend 容器 IP)。

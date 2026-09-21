@@ -131,14 +131,29 @@ def _write_back_claims(db: Session, user: User, claims: dict) -> None:
 
 
 def _normalize_claims_groups(claims: dict) -> list[str]:
-    """把 claims 的 groups 归一化为清洗后的组名列表。
+    """把 claims 的 groups/roles 归一化为清洗后的组名列表。
 
     IdP 可能给 list[str] 或逗号分隔字符串;其余类型一律视为缺失。
     list[str] 元素会去空白、去空;逗号字符串按 "," 切分后同样清洗。
+    SSO 统一认证签发的是 roles,故一并采纳;roles 含 admin 时补 rag 内部
+    管理员标记 __local_admin__(全库管理端点均以该组名判定)与配置的
+    ldap_group_map_admin 组,使 SSO 管理员与本地/LDAP 管理员同权。
     """
-    groups = claims.get("groups")
-    if isinstance(groups, str):
-        return [g.strip() for g in groups.split(",") if g.strip()]
-    if isinstance(groups, list):
-        return [g.strip() for g in groups if isinstance(g, str) and g.strip()]
-    return []
+
+    def _as_list(value) -> list[str]:
+        if isinstance(value, str):
+            return [g.strip() for g in value.split(",") if g.strip()]
+        if isinstance(value, list):
+            return [g.strip() for g in value if isinstance(g, str) and g.strip()]
+        return []
+
+    groups = _as_list(claims.get("groups"))
+    for role in _as_list(claims.get("roles")):
+        if role not in groups:
+            groups.append(role)
+    if "admin" in groups:
+        if "__local_admin__" not in groups:
+            groups.append("__local_admin__")
+        if settings.ldap_group_map_admin and settings.ldap_group_map_admin not in groups:
+            groups.append(settings.ldap_group_map_admin)
+    return groups
