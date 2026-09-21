@@ -18,7 +18,40 @@
         size="small"
         class="wiki-filter"
       />
+      <div class="wiki-semantic">
+        <el-input
+          v-model="semanticQuery"
+          placeholder="语义搜索（回车）"
+          clearable
+          size="small"
+          @keyup.enter="runSemanticSearch"
+        >
+          <template #append>
+            <el-button :loading="searching" @click="runSemanticSearch">语义搜索</el-button>
+          </template>
+        </el-input>
+      </div>
       <div class="wiki-cat-list">
+        <div v-if="searched" class="wiki-search-results">
+          <div class="wiki-search-results-head">
+            <span>语义搜索结果</span>
+            <el-button size="small" text @click="clearSemanticSearch">清除</el-button>
+          </div>
+          <el-empty
+            v-if="!searchResults.length"
+            description="没有找到相关页面"
+            :image-size="50"
+          />
+          <div
+            v-for="r in searchResults"
+            :key="r.id"
+            class="wiki-page-item wiki-search-item"
+            @click="openPage(r.id)"
+          >
+            <div class="wiki-result-title">{{ r.title }}</div>
+            <div v-if="r.summary" class="wiki-result-summary">{{ r.summary }}</div>
+          </div>
+        </div>
         <div v-for="cat in filteredCategories" :key="cat.name" class="wiki-cat">
           <div class="wiki-cat-name">
             {{ cat.name }}
@@ -134,12 +167,24 @@ interface WikiPageListItem {
   summary: string
 }
 
+interface WikiSearchItem {
+  id: string
+  title: string
+  summary: string
+  category: string
+  score: number
+}
+
 const categories = ref<{ name: string; pages: WikiPageListItem[] }[]>([])
 const total = ref(0)
 const running = ref(false)
 const rebuilding = ref(false)
 const current = ref<any>(null)
 const filterText = ref('')
+const semanticQuery = ref('')
+const searching = ref(false)
+const searched = ref(false)
+const searchResults = ref<WikiSearchItem[]>([])
 const editing = ref(false)
 const savingEdit = ref(false)
 const editForm = ref({ content: '', summary: '', category: '' })
@@ -194,6 +239,26 @@ const openPage = async (pageId: string) => {
   } catch (e: any) {
     ElMessage.error(e?.response?.data?.detail || '加载页面失败')
   }
+}
+
+const runSemanticSearch = async () => {
+  const q = semanticQuery.value.trim()
+  if (!q) return
+  searching.value = true
+  try {
+    const res = await http.post('/api/wiki/search', { query: q, top_k: 8 })
+    searchResults.value = res.data.results || []
+    searched.value = true
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail || '语义搜索失败')
+  } finally {
+    searching.value = false
+  }
+}
+
+const clearSemanticSearch = () => {
+  searched.value = false
+  searchResults.value = []
 }
 
 const startEdit = () => {
@@ -367,6 +432,42 @@ onBeforeUnmount(() => {
 }
 .wiki-filter {
   padding: 0 16px 8px;
+}
+.wiki-semantic {
+  padding: 0 16px 8px;
+}
+.wiki-search-results {
+  margin: 4px 0 10px;
+  padding: 8px;
+  background: #f8fafc;
+  border-radius: 8px;
+}
+.wiki-search-results-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  font-weight: 600;
+  color: #64748b;
+  padding: 0 4px 4px;
+}
+.wiki-search-item {
+  margin-bottom: 4px;
+  background: #fff;
+  border: 1px solid #eef2f7;
+}
+.wiki-result-title {
+  font-size: 13px;
+  color: #1e293b;
+}
+.wiki-result-summary {
+  font-size: 12px;
+  color: #94a3b8;
+  margin-top: 2px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 .wiki-cat-list {
   flex: 1;

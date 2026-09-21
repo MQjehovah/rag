@@ -309,6 +309,10 @@ const sendMessage = async () => {
 
 const openSource = (src: any) => {
   if (src.id && String(src.id).startsWith('community:')) return
+  if (src.id && String(src.id).startsWith('wiki:')) {
+    router.push({ path: '/wiki/' + String(src.id).slice(5) })
+    return
+  }
   const chunk = src.chunks && src.chunks[0]
   try {
     sessionStorage.setItem('cite-snippet', JSON.stringify({

@@ -10,8 +10,10 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_db
 from app.api.search_common import get_visible_page_ids, visible_wiki_filter
 from app.core.jwt_utils import get_current_user
+from app.core.rag import EmbeddingService
 from app.core.wiki import build_wiki, refresh_stale_wiki
 from app.core.wiki_embedding import embed_wiki_pages
+from app.core.wiki_search import search_wiki
 from app.models.database import Page, WikiPage
 
 router = APIRouter(prefix="/api/wiki", tags=["Wiki"])
@@ -42,6 +44,11 @@ class WikiPageUpdate(BaseModel):
 
 class WikiGroupUpdate(BaseModel):
     group_id: str | None = None
+
+
+class WikiSearchRequest(BaseModel):
+    query: str
+    top_k: int = 5
 
 
 @router.get("")
@@ -75,6 +82,39 @@ def list_wiki(db: Session = Depends(get_db), current_user=Depends(get_current_us
 @router.get("/rebuild-status")
 def wiki_status(current_user=Depends(get_current_user)):
     return _wiki_status
+
+
+# 注意:必须定义在 @router.get("/{page_id}") 之前,否则单段的 /{page_id}
+# 会先匹配到 /search,导致语义搜索接口被吞掉。
+@router.post("/search")
+async def search_wiki_endpoint(
+    data: WikiSearchRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """语义检索当前用户可见的 wiki 页面。"""
+    query = (data.query or "").strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="查询内容不能为空")
+    svc = EmbeddingService()
+    try:
+        emb = await svc.encode(query)
+    finally:
+        await svc.close()
+    hits = await asyncio.to_thread(search_wiki, db, emb, data.top_k, current_user)
+    return {
+        "results": [
+            {
+                "id": h["id"],
+                "title": h["title"],
+                "summary": h["summary"],
+                "category": h["category"],
+                "score": h["score"],
+            }
+            for h in hits
+        ],
+        "total": len(hits),
+    }
 
 
 @router.get("/{page_id}")
@@ -159,6 +199,17 @@ async def rebuild_wiki(current_user=Depends(get_current_user)):
     _wiki_status.update({"running": True, "processed": 0, "total": 0, "message": "启动编译..."})
     _wiki_task = asyncio.create_task(build_wiki(_wiki_status))
     return {"started": True, "running": True}
+
+
+@router.post("/reindex-embeddings")
+async def reindex_wiki_embeddings(
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """管理员为存量 wiki 页补齐缺失向量(幂等)。"""
+    if "__local_admin__" not in current_user["groups"]:
+        raise HTTPException(status_code=403, detail="仅管理员可执行")
+    return await embed_wiki_pages(db.get_bind())
 
 
 @router.post("/refresh-stale")
