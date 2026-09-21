@@ -9,7 +9,15 @@ import pytest
 
 from app.config import settings
 from app.core.retrieval import RetrievalPipeline
-from app.models.database import Page, PageChunk, WikiPage, get_engine, get_session, init_db
+from app.models.database import (
+    Notebook,
+    Page,
+    PageChunk,
+    WikiPage,
+    get_engine,
+    get_session,
+    init_db,
+)
 
 DIM = 1024
 
@@ -70,6 +78,20 @@ def _seed_wiki(db, page_id, title, group_id):
         content=f"{title}正文",
         category="测试",
         group_id=group_id,
+        embedding=json.dumps(_vec(0)),
+    ))
+    db.commit()
+
+
+def _seed_invisible_page(db, page_id, group_id):
+    """他组笔记本里的笔记,对目标用户不可见。"""
+    db.add(Notebook(id=f"nb-{page_id}", name="他组笔记本", group_id=group_id))
+    db.add(Page(id=page_id, notebook_id=f"nb-{page_id}", title="他组笔记", content="他组正文"))
+    db.add(PageChunk(
+        id=str(uuid.uuid4()),
+        page_id=page_id,
+        chunk_index=0,
+        content="他组分块",
         embedding=json.dumps(_vec(0)),
     ))
     db.commit()
@@ -143,5 +165,44 @@ async def test_admin_sees_other_group_wiki(db):
     _seed_wiki(db, wid, "财务Wiki", "财务部")
 
     outcome = await _run(db, ["__local_admin__"])
+
+    assert f"wiki:{wid}" in {r["id"] for r in outcome["results"]}
+
+
+@pytest.mark.asyncio
+async def test_wiki_returned_when_no_visible_notes(db):
+    """没有可见笔记时不能提前返回:wiki 有独立可见性,仍应召回。"""
+    wid = str(uuid.uuid4())
+    _seed_wiki(db, wid, "公共Wiki", None)
+
+    outcome = await _run(db, ["研发部"])
+
+    assert [r["id"] for r in outcome["results"]] == [f"wiki:{wid}"]
+    assert outcome["results"][0]["sources"] == ["wiki"]
+
+
+@pytest.mark.asyncio
+async def test_no_notes_no_wiki_returns_empty(db):
+    """无可见笔记且无可见 wiki 时仍返回空结果。"""
+    _seed_invisible_page(db, "page-fin", "财务部")
+    wid = str(uuid.uuid4())
+    _seed_wiki(db, wid, "财务Wiki", "财务部")
+
+    outcome = await _run(db, ["研发部"])
+
+    assert outcome["results"] == []
+
+
+@pytest.mark.asyncio
+async def test_wiki_survives_mmr(db, monkeypatch):
+    """wiki 没有分块向量,_fetch_embeddings 取不到;排除出 MMR 后不应被 top_k 截掉。"""
+    monkeypatch.setattr(settings, "mmr_enabled", True)
+    for i in range(10):
+        _seed_page(db, f"page-{i}")
+    wid = str(uuid.uuid4())
+    _seed_wiki(db, wid, "公共Wiki", None)
+
+    # top_k=1 时若不排除 wiki,MMR 只会从笔记里选 1 条而丢掉 wiki。
+    outcome = await _run(db, ["研发部"], top_k=1)
 
     assert f"wiki:{wid}" in {r["id"] for r in outcome["results"]}

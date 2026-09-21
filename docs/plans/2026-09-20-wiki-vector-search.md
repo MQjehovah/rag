@@ -194,5 +194,5 @@ async def search_wiki_endpoint(data: WikiSearchRequest, db=Depends(get_db), curr
 
 - 一页一向量（嵌 `title + summary`），长页细节可能召回不到。
 - 不做嵌入模型切换保护；`vector(1024)` 与现有 bge-large-zh 绑定。
-- 不做 wiki 分块；不做 wiki 结果的 rerank 与 MMR（本期只参与 RRF 与最终排序）。
+- 不做 wiki 分块；wiki 不参与 rerank 与 MMR：它没有 `page_chunks` 向量，MMR 拿不到相似度。wiki 只按 RRF 融合分参与最终排序——MMR 开启时先从笔记候选里为可见 wiki 预留名额（按融合分降序），剩余名额交给 MMR，最终顺序为 MMR 选出的笔记在前、wiki 在后；MMR 关闭时与笔记一起按融合分整体排序。无可见笔记时仍照常召回 wiki（不依赖笔记可见集）。`_fetch_embeddings` 只覆盖 `page_chunks`，故 `_mmr_rank` 的候选需显式剔除 `wiki:` 前缀。
 - SQLite 回退为 O(n) 全表余弦，页数上千需改回 pgvector 专用路径。

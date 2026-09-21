@@ -169,8 +169,9 @@ class RetrievalPipeline:
         top_k: int = 5,
     ) -> Dict[str, Any]:
         visible_ids = await asyncio.to_thread(get_visible_page_ids, self.db, current_user)
-        if not visible_ids:
-            return {"results": [], "queries": [query], "graph_expanded": 0}
+        # 可见笔记为空不能提前返回:wiki 有独立的可见性,仍要召回。
+        # has_notes 只用来跳过依赖 visible_ids 的笔记召回与后处理。
+        has_notes = bool(visible_ids)
 
         queries = [query]
         queries += await _rewrite_query(query)
@@ -186,37 +187,39 @@ class RetrievalPipeline:
         bm25_rank: List[str] = []
         best_chunks: Dict[str, Dict[str, Any]] = {}
 
-        for q, emb in zip(queries, embeddings):
-            try:
-                vec_results = await self.vector.search(emb, recall_k, visible_ids)
-            except Exception as e:
-                logger.warning(f"Vector search error: {e}")
-                vec_results = []
-
-            per_page: Dict[str, Dict[str, Any]] = {}
-            for item in vec_results:
-                pid = item["page_id"]
-                if pid not in per_page:
-                    per_page[pid] = item
-            for pid, item in per_page.items():
-                best = best_chunks.get(pid)
-                if best is None or item["distance"] < best["distance"]:
-                    best_chunks[pid] = {
-                        "distance": item["distance"],
-                        "content": item.get("content", ""),
-                        "context": item.get("context", "") or "",
-                        "chunk_index": item.get("chunk_index", 0),
-                    }
-            vector_rank = _merge_rank(vector_rank, [i["page_id"] for i in vec_results])
-
-            if settings.hybrid_bm25_enabled:
+        # 笔记召回依赖 visible_ids;无可见笔记时整段跳过,但保留 embeddings 供 wiki 召回使用。
+        if has_notes:
+            for q, emb in zip(queries, embeddings):
                 try:
-                    bm = await asyncio.to_thread(
-                        self.hybrid.search, q, visible_ids, recall_k
-                    )
-                    bm25_rank = _merge_rank(bm25_rank, [pid for pid, _ in bm])
+                    vec_results = await self.vector.search(emb, recall_k, visible_ids)
                 except Exception as e:
-                    logger.warning(f"BM25 search error: {e}")
+                    logger.warning(f"Vector search error: {e}")
+                    vec_results = []
+
+                per_page: Dict[str, Dict[str, Any]] = {}
+                for item in vec_results:
+                    pid = item["page_id"]
+                    if pid not in per_page:
+                        per_page[pid] = item
+                for pid, item in per_page.items():
+                    best = best_chunks.get(pid)
+                    if best is None or item["distance"] < best["distance"]:
+                        best_chunks[pid] = {
+                            "distance": item["distance"],
+                            "content": item.get("content", ""),
+                            "context": item.get("context", "") or "",
+                            "chunk_index": item.get("chunk_index", 0),
+                        }
+                vector_rank = _merge_rank(vector_rank, [i["page_id"] for i in vec_results])
+
+                if settings.hybrid_bm25_enabled:
+                    try:
+                        bm = await asyncio.to_thread(
+                            self.hybrid.search, q, visible_ids, recall_k
+                        )
+                        bm25_rank = _merge_rank(bm25_rank, [pid for pid, _ in bm])
+                    except Exception as e:
+                        logger.warning(f"BM25 search error: {e}")
 
         # wiki 召回:与页面召回并列参与 RRF。id 加 wiki: 前缀,避免与 pages.id 撞车。
         wiki_hits: List[Dict[str, Any]] = []
@@ -237,7 +240,9 @@ class RetrievalPipeline:
         candidates = sorted(rrf_scores, key=rrf_scores.get, reverse=True)
 
         entity_boost: Dict[str, float] = {}
-        if settings.entity_graph_enabled:
+        # 空 visible_ids 会让 expand_candidates 失去可见性约束(其内部用 not visible_ids 放行全部),
+        # 因此无可见笔记时必须跳过实体扩展。
+        if has_notes and settings.entity_graph_enabled:
             try:
                 entity_boost = await asyncio.to_thread(
                     self.entities.expand_candidates, query, None, visible_ids
@@ -253,7 +258,7 @@ class RetrievalPipeline:
             if pid not in candidate_ids:
                 candidate_ids.append(pid)
         page_map: Dict[str, Page] = {}
-        if candidate_ids:
+        if has_notes and candidate_ids:
             ids = list(candidate_ids)
             for chunk in _chunk_placeholders(ids):
                 ph = ",".join(f":v{i}" for i in range(len(chunk)))
@@ -330,7 +335,8 @@ class RetrievalPipeline:
 
         graph_expanded = 0
         try:
-            seeds = sorted(final, key=final.get, reverse=True)[: max(top_k * 2, 10)]
+            # 图扩展只在笔记之间进行;无可见笔记时没有可扩展的种子。
+            seeds = sorted(final, key=final.get, reverse=True)[: max(top_k * 2, 10)] if has_notes else []
             if seeds:
                 seed_chunks = _chunk_placeholders(seeds)
                 edges = []
@@ -372,14 +378,22 @@ class RetrievalPipeline:
 
         if settings.mmr_enabled and len(final) > 1:
             candidates = list(final.keys())[:40]
-            ranked_ids = _mmr_rank(
-                candidates,
+            # wiki 没有 page_chunks 向量,_fetch_embeddings 取不到,sim 恒为 0。
+            # 若混入 MMR 会按错误的相似度排序甚至被 top_k 截掉,因此把它排除在 MMR 候选之外,
+            # 先按融合分为 wiki 保留名额,其余名额交给 MMR 从笔记里选,最后按"MMR 笔记在前、wiki 在后"合并。
+            wiki_ids = [pid for pid in candidates if pid.startswith("wiki:")]
+            note_ids = [pid for pid in candidates if not pid.startswith("wiki:")]
+            wiki_ids.sort(key=lambda p: final.get(p, 0.0), reverse=True)
+            note_slots = max(top_k - len(wiki_ids), 0)
+            ranked_note_ids = _mmr_rank(
+                note_ids,
                 final,
-                _fetch_embeddings(self.db, candidates),
+                _fetch_embeddings(self.db, note_ids),
                 lam=settings.mmr_lambda,
-                top_k=top_k,
+                top_k=note_slots,
             )
-            ranked = [(pid, final[pid]) for pid in ranked_ids]
+            ranked = [(pid, final[pid]) for pid in ranked_note_ids]
+            ranked += [(pid, final[pid]) for pid in wiki_ids]
         else:
             ranked = sorted(final.items(), key=lambda x: x[1], reverse=True)
         results = []
