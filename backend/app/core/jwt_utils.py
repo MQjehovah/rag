@@ -5,6 +5,7 @@ from typing import List, Optional
 from jose import JWTError, jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -81,7 +82,16 @@ def _resolve_sso_user(db: Session, claims: dict) -> dict:
     缺失字段保持原值,与 LDAP login 分支一致);有 groups 声明才同步。
     """
     username = str(claims["sub"])
-    user = db.query(User).filter(User.username == username).first()
+    raw_email = (claims.get("email") or "").strip() or None
+    claim_email = raw_email.lower() if raw_email else None
+
+    # 邮箱优先: 与系统自建账号(本地注册/按邮箱登录的)对齐, 避免同一人两份账号;
+    # 邮箱缺失时退回按工号匹配(SSO 侧未取到 LDAP mail 的极少数情况)。
+    user = None
+    if claim_email:
+        user = db.query(User).filter(func.lower(User.email) == claim_email).first()
+    if user is None:
+        user = db.query(User).filter(User.username == username).first()
 
     if user is None:
         user = User(
@@ -100,6 +110,9 @@ def _resolve_sso_user(db: Session, claims: dict) -> dict:
             # 并发建号竞态:username 唯一约束被别的请求抢建,回滚后回查兜底
             db.rollback()
             user = db.query(User).filter(User.username == username).first()
+            if user is None and claim_email:
+                # 也可能是邮箱撞了并发/已存在账号, 再按邮箱回查一次
+                user = db.query(User).filter(func.lower(User.email) == claim_email).first()
             if user is None:
                 raise
 

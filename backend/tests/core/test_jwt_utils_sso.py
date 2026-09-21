@@ -165,3 +165,31 @@ def test_get_current_user_sso_keeps_groups_when_no_groups_claim(sso_env, db):
     assert sorted(payload["groups"]) == ["旧组", "研发部"]
     rows = db.query(UserGroup).filter(UserGroup.user_id == existing.id).all()
     assert sorted(r.group_name for r in rows) == ["旧组", "研发部"]
+
+
+def test_get_current_user_sso_matches_existing_account_by_email(db, sso_env):
+    """SSO token 的邮箱命中系统自建账号时复用该账号(不新建、不改 username)。
+
+    与网关控制台/market 一致: 邮箱是首选唯一标识, 避免同一人两份账号。
+    """
+    key, _ = sso_env
+    existing = User(
+        id=str(uuid.uuid4()),
+        username="jimingqing",  # 系统自建账号: username 不是工号
+        email="jimingqing@xzrobot.com",
+        display_name="旧名字",
+        is_local=False,
+        is_active=True,
+    )
+    db.add(existing)
+    db.commit()
+
+    token = sign_token(
+        valid_claims(sub="202202100024", name="季明清", email="jimingqing@xzrobot.com"), key
+    )
+    payload = get_current_user(_bearer(token), db)
+
+    assert payload["id"] == existing.id
+    assert payload["username"] == "jimingqing"
+    assert payload["display_name"] == "季明清"
+    assert db.query(User).filter(User.email == "jimingqing@xzrobot.com").count() == 1
