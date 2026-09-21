@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.core.llm import call_llm_json, call_llm_text
+from app.core.wiki_embedding import embed_wiki_pages
 from app.models.database import Notebook, Page, WikiPage, get_engine, get_session, init_db
 
 logger = logging.getLogger(__name__)
@@ -138,10 +139,12 @@ def _apply_ops(
     return changed
 
 
-def _persist(engine, changed: List[Dict[str, Any]]) -> None:
+def _persist(engine, changed: List[Dict[str, Any]]) -> List[str]:
+    """写回变更页面,返回本次写入的 page id 列表(供随后按需嵌入)。"""
     if not changed:
-        return
+        return []
     db = get_session(engine)
+    written: List[str] = []
     try:
         for p in changed:
             row = db.query(WikiPage).filter(WikiPage.title == p["title"]).first()
@@ -152,13 +155,16 @@ def _persist(engine, changed: List[Dict[str, Any]]) -> None:
             row.content = p["content"]
             row.summary = p["summary"]
             row.source_note_ids = json.dumps(sorted(p["sources"]), ensure_ascii=False)
+            written.append(row.id)
         db.commit()
+        return written
     except Exception as e:
         logger.warning(f"Wiki persist error: {e}")
         try:
             db.rollback()
         except Exception:
             pass
+        return []
     finally:
         db.close()
 
@@ -244,10 +250,14 @@ async def _ingest_one(
     if lock:
         async with lock:
             changed = _apply_ops(pages, final_ops, note_id)
-            _persist(engine, changed)
+            changed_ids = _persist(engine, changed)
     else:
         changed = _apply_ops(pages, final_ops, note_id)
-        _persist(engine, changed)
+        changed_ids = _persist(engine, changed)
+
+    # 嵌入放在锁外:网络调用不能持锁,否则并发蒸馏会被阻塞
+    if changed_ids:
+        await embed_wiki_pages(engine, changed_ids)
 
 
 async def refresh_note_wiki(note_id: str) -> None:
@@ -345,6 +355,8 @@ async def refresh_stale_wiki(status: Dict[str, Any]) -> None:
             status["message"] = f"刷新 {done}/{total}"
 
     await asyncio.gather(*(worker(n) for n in notes))
+    # 收尾扫描:补齐本轮因并发去重/嵌入失败而遗漏的页面
+    await embed_wiki_pages(engine)
     status["running"] = False
     status["message"] = f"刷新完成：{total} 篇笔记重新编译"
 
@@ -410,4 +422,6 @@ async def build_wiki(
         f"Wiki 编译完成：{len(pages)} 个页面，"
         f"用时 {round((time.time() - started) / 60, 1)} 分钟"
     )
+    # 收尾扫描:补齐本轮因并发去重/嵌入失败而遗漏的页面
+    await embed_wiki_pages(engine)
     logger.info(f"Wiki build done: {len(pages)} pages")

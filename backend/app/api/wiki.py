@@ -11,6 +11,7 @@ from app.api.deps import get_db
 from app.api.search_common import get_visible_page_ids, visible_wiki_filter
 from app.core.jwt_utils import get_current_user
 from app.core.wiki import build_wiki, refresh_stale_wiki
+from app.core.wiki_embedding import embed_wiki_pages
 from app.models.database import Page, WikiPage
 
 router = APIRouter(prefix="/api/wiki", tags=["Wiki"])
@@ -107,7 +108,7 @@ def get_wiki_page(
 
 
 @router.put("/{page_id}")
-def update_wiki_page(
+async def update_wiki_page(
     page_id: str,
     data: WikiPageUpdate,
     db: Session = Depends(get_db),
@@ -125,6 +126,8 @@ def update_wiki_page(
     if data.category is not None:
         page.category = data.category or "未分类"
     db.commit()
+    # 人工编辑后刷新该页向量,否则编辑内容不会被语义检索命中
+    await embed_wiki_pages(db.get_bind(), [page.id])
     return {"message": "已保存", "id": page.id, "updated_at": page.updated_at}
 
 
