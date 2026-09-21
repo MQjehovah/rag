@@ -251,7 +251,7 @@ const sendMessage = async () => {
   messages.value.push(assistantMsg)
 
   try {
-    const token = localStorage.getItem('token')
+    const token = localStorage.getItem('rag_token')
     const resp = await fetch(`${API_BASE}/api/chat`, {
       method: 'POST',
       headers: {

@@ -26,7 +26,7 @@ const router = createRouter({
 
 router.beforeEach((to) => {
   if (to.meta.public) return true
-  const token = localStorage.getItem('token')
+  const token = localStorage.getItem('rag_token')
   if (!token) return { path: '/login' }
   return true
 })

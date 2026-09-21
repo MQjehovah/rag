@@ -740,7 +740,7 @@ const confirmImport = async () => {
 const handleOrganize = async () => {
   organizing.value = true
   try {
-    const token = localStorage.getItem('token')
+    const token = localStorage.getItem('rag_token')
     const resp = await fetch(`${API_BASE}/api/organize`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },

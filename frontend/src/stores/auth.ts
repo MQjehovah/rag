@@ -13,7 +13,7 @@ interface User {
 }
 
 export const useAuthStore = defineStore('auth', () => {
-  const token = ref<string>(localStorage.getItem('token') || '')
+  const token = ref<string>(localStorage.getItem('rag_token') || '')
   const user = ref<User | null>(null)
 
   const isLoggedIn = computed(() => !!token.value)
@@ -22,7 +22,7 @@ export const useAuthStore = defineStore('auth', () => {
     const res = await axios.post((import.meta.env.BASE_URL || '/').replace(/\/$/, '') + '/api/auth/login', { username, password })
     token.value = res.data.token
     user.value = res.data.user
-    localStorage.setItem('token', res.data.token)
+    localStorage.setItem('rag_token', res.data.token)
   }
 
   /** SSO 登录:跳统一认证授权页(回调会带 sso_token 回到登录页) */
@@ -33,14 +33,14 @@ export const useAuthStore = defineStore('auth', () => {
   /** SSO 回调带回来的本系统 token:落盘并拉取用户信息 */
   async function adoptSsoToken(ssoToken: string) {
     token.value = ssoToken
-    localStorage.setItem('token', ssoToken)
+    localStorage.setItem('rag_token', ssoToken)
     await fetchMe()
   }
 
   function logout() {
     token.value = ''
     user.value = null
-    localStorage.removeItem('token')
+    localStorage.removeItem('rag_token')
   }
 
   async function fetchMe() {
