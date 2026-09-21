@@ -86,3 +86,30 @@ POST /api/wiki/reindex-embeddings   (管理员) → { embedded, errors, total }
 - **`wiki:` 前缀是新的 id 命名约定**：现有 `community:` 是唯一先例；需同时改 `Chat.vue`，否则点击会错误跳到 `/notes`。
 - **嵌入失败静默**：`encode_batch` 会吞异常并返回空向量（`rag.py:80-84`），因此嵌入失败可能只表现为"搜不到"；回填端点与分析日志需能暴露这种情况。
 - **SQLite 回退是 O(n) 全表余弦**：wiki 页数量级小（百级）可接受；若未来上千需改回 pgvector 专用路径。
+
+## 实施结果（2026-09-20）
+
+实施计划：`docs/plans/2026-09-20-wiki-vector-search.md`。提交：`231cee0`（向量列与迁移）、`e56aba4`（嵌入与随写刷新）、`30aa521`（检索模块）、`95d0d1c`（管线与聊天合并）、`be4258b`（接口与前端）、`0278d82`（短路与 MMR 修正）。
+
+| 验收标准 | 结果 | 证据 |
+|---|---|---|
+| 1. `POST /api/wiki/search` 返回按相关度排序、且只含可见页面 | ✅ | `tests/core/test_wiki_search.py`（13，含可见性/排序/top_k/无向量跳过/空查询）；`test_wiki_search_api.py`（5，含路由顺序与可达性） |
+| 2. 聊天 `sources` 含 `wiki:` 条目且前端点击跳 wiki 页 | ✅ | `test_retrieval_wiki.py`；`Chat.vue` 新增 `wiki:` 分支走既有 `/wiki/:id` 路由（`main.ts:22`），复用 `Wiki.vue` 的 `route.params.id` watcher |
+| 3. 管理员见全部、普通用户见公共+本组 | ✅ | 裸 SQL 与 ORM 两种可见性实现由等价性测试锁定（`test_wiki_search.py` 参数化 5 种用户） |
+| 4. 编译新笔记后可无需重启被搜到 | ✅ | `_persist` 返回变更 page id，`_ingest_one` 在**锁外**调用 `embed_wiki_pages`；`build_wiki`/`refresh_stale_wiki` 末尾各一次补齐扫尾 |
+| 5. `POST /api/wiki/reindex-embeddings` 幂等 | ✅ | `test_wiki_embedding.py`（重复调用 `embedded == 0`）；非管理员 403 |
+| 6. 既有测试全绿 | ✅ | **142 passed / 0 errors**（基线 109）；前端 `npm run build`（含 `vue-tsc`）通过 |
+
+评审/实现期间发现并修复的两个行为偏差：
+
+1. **空笔记集短路**：`retrieve` 原先在「用户没有任何可见笔记」时直接返回空，导致这类用户即使有可见 wiki 也搜不到。已改为只短路「笔记召回」各阶段，wiki 召回照常执行。反向验证：恢复短路后新测试失败。
+2. **wiki 被 MMR 误伤**：wiki 没有 `page_chunks` 向量，进入 MMR 会以 `sim=0` 被任意裁剪。已把 `wiki:` 条目排除出 MMR 候选集，按 RRF 融合分为其**预留**名额（`min(len(wiki_ids), top_k)`），MMR 只填充剩余名额；最终顺序为「MMR 选中的笔记在前，wiki 按融合分在后」。反向验证：恢复原 MMR 调用后新测试失败。
+
+### 未在本机执行的部分（如实标注）
+
+- **pgvector 分支未真实运行**：本机测试走 SQLite，`embedding_vec <=> CAST(:q AS vector)` 的 SQL 仅由 `core/rag.py:347-378` 的既有写法推理而来；等价性测试只锁定可见性条件，不锁定向量 SQL 文本。上线前需在真实 PostgreSQL 上验证一次。
+- **嵌入真实调用未执行**：测试全部使用假 `EmbeddingService`，未打网关。真实 `encode_batch` 会吞异常并返回空向量（`rag.py:80-84`），本实现把空向量计为 `errors` 且不落库，但「嵌入静默失败」仍只表现为搜不到——`/reindex-embeddings` 的 `errors` 计数是唯一的观测点。
+
+### 沿用本设计已声明的限制
+
+一页一向量（嵌 `title + summary`）；不做嵌入模型切换保护；不做 wiki 分块；wiki 结果不参与 rerank；SQLite 回退为 O(n) 全表余弦。
