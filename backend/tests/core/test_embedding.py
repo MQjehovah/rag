@@ -56,3 +56,72 @@ async def test_encode_batch_returns_one_vector_per_input():
         await svc.close()
 
     assert result == [[1.0], [2.0]]
+
+
+# ---- 回归: 网关鉴权头 / 空向量短路(2026-09-21 问答故障) ----
+
+
+@pytest.mark.asyncio
+async def test_encode_sends_bearer_token(monkeypatch):
+    """走公司网关时必须带 Bearer(缺头曾被网关 401,导致检索向量为空、答案无来源)。"""
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "llm_api_key", "sk-test-abc")
+    svc = _make_service()
+    svc.client.post = AsyncMock(
+        return_value=_mock_response({"data": [{"embedding": [0.5]}]})
+    )
+    try:
+        await svc.encode("你好")
+        _, kwargs = svc.client.post.call_args
+        assert kwargs["headers"]["Authorization"] == "Bearer sk-test-abc"
+    finally:
+        await svc.close()
+
+
+@pytest.mark.asyncio
+async def test_encode_batch_sends_bearer_token(monkeypatch):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "llm_api_key", "sk-test-abc")
+    svc = _make_service()
+    svc.client.post = AsyncMock(
+        return_value=_mock_response({"data": [{"embedding": [0.5]}]})
+    )
+    try:
+        await svc.encode_batch(["一段"])
+        _, kwargs = svc.client.post.call_args
+        assert kwargs["headers"]["Authorization"] == "Bearer sk-test-abc"
+    finally:
+        await svc.close()
+
+
+def test_headers_empty_without_key(monkeypatch):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "llm_api_key", "")
+    svc = EmbeddingService()
+    assert svc._headers == {}
+
+
+def test_search_sync_short_circuits_empty_embedding():
+    """空向量必须直接返回,不能走到 CAST('[]' AS vector) —— 那会报错并污染事务。"""
+
+    class FakeDb:
+        def __init__(self):
+            self.executed = 0
+            self.rolled_back = False
+
+        def execute(self, *a, **k):
+            self.executed += 1
+            raise AssertionError("空向量时不应发起任何 SQL")
+
+        def rollback(self):
+            self.rolled_back = True
+
+    from app.core.rag import VectorStore
+
+    db = FakeDb()
+    store = VectorStore(db)
+    assert store._search_sync([], top_k=5) == []
+    assert db.executed == 0

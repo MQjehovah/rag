@@ -36,16 +36,27 @@ class EmbeddingService:
     def _is_ollama(self) -> bool:
         return "/api/embed" in self.api_url
 
+    @property
+    def _headers(self) -> Dict[str, str]:
+        """服务端到网关的鉴权头。
+
+        走公司 LLM 网关时必须在请求上带 Bearer,否则网关 401(此前缺失导致
+        检索查询向量为空、答案无参考来源);Ollama 等本地服务无需鉴权,
+        LLM_API_KEY 为空时不加头。
+        """
+        key = (settings.llm_api_key or "").strip()
+        return {"Authorization": f"Bearer {key}"} if key else {}
+
     async def encode(self, text: str) -> List[float]:
         if self._is_ollama:
             payload = {"input": text, "model": self.model}
-            response = await self.client.post(self.api_url, json=payload)
+            response = await self.client.post(self.api_url, json=payload, headers=self._headers)
             response.raise_for_status()
             data = response.json()
             return data.get("embeddings", [[]])[0]
         else:
             payload = {"input": text, "model": self.model}
-            response = await self.client.post(self.api_url, json=payload)
+            response = await self.client.post(self.api_url, json=payload, headers=self._headers)
             response.raise_for_status()
             data = response.json()
             return data.get("data", [{}])[0].get("embedding", [])
@@ -57,7 +68,7 @@ class EmbeddingService:
                 batch = texts[i:i + batch_size]
                 payload = {"input": batch, "model": self.model}
                 try:
-                    response = await self.client.post(self.api_url, json=payload)
+                    response = await self.client.post(self.api_url, json=payload, headers=self._headers)
                     response.raise_for_status()
                     data = response.json()
                     results.extend(data.get("embeddings", []))
@@ -72,7 +83,7 @@ class EmbeddingService:
                 batch = texts[i:i + batch_size]
                 payload = {"input": batch, "model": self.model}
                 try:
-                    response = await self.client.post(self.api_url, json=payload)
+                    response = await self.client.post(self.api_url, json=payload, headers=self._headers)
                     response.raise_for_status()
                     data = response.json()
                     embeddings = [d.get("embedding", []) for d in data.get("data", [])]
@@ -344,6 +355,13 @@ class VectorStore:
         top_k: int = 50,
         visible_page_ids=None,
     ) -> List[Dict[str, Any]]:
+        # 查询向量为空(embedding 服务不可用/鉴权失败)时直接跳过向量路:
+        # 既避免 CAST('[]' AS vector) 报错,也避免该报错污染事务导致
+        # 后续 BM25/实体扩展全部 InFailedSqlTransaction。
+        if not query_embedding:
+            logger.warning("查询向量为空(embedding 不可用?),跳过向量检索,仅用 BM25")
+            return []
+
         emb_str = "[" + ",".join(str(v) for v in query_embedding) + "]"
 
         dialect = self.db.bind.dialect.name
@@ -378,6 +396,12 @@ class VectorStore:
                 return results
             except Exception as e:
                 logger.warning(f"pgvector search failed, falling back: {e}")
+                # 关键:失败后回滚被污染的事务,否则同一 session 里的
+                # BM25/实体等后续查询会全部报 InFailedSqlTransaction
+                try:
+                    self.db.rollback()
+                except Exception:
+                    logger.exception("回滚失败后仍继续降级")
 
         if visible_page_ids:
             ids = list(visible_page_ids)
