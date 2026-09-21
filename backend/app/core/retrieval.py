@@ -14,6 +14,7 @@ from app.core.entity_graph import EntityGraphStore
 from app.core.hybrid import HybridIndex
 from app.core.llm import call_llm_json
 from app.core.rag import EmbeddingService, RerankerService, VectorStore
+from app.core.wiki_search import search_wiki
 from app.models.database import GraphEdge
 
 logger = logging.getLogger(__name__)
@@ -217,7 +218,22 @@ class RetrievalPipeline:
                 except Exception as e:
                     logger.warning(f"BM25 search error: {e}")
 
-        rrf_scores = _rrf([vector_rank, bm25_rank])
+        # wiki 召回:与页面召回并列参与 RRF。id 加 wiki: 前缀,避免与 pages.id 撞车。
+        wiki_hits: List[Dict[str, Any]] = []
+        if embeddings:
+            try:
+                wiki_hits = await asyncio.to_thread(
+                    search_wiki, self.db, embeddings[0], recall_k, current_user
+                )
+            except Exception as e:
+                logger.warning(f"Wiki search error: {e}")
+                wiki_hits = []
+        wiki_map: Dict[str, Dict[str, Any]] = {
+            f"wiki:{w['id']}": w for w in wiki_hits
+        }
+        wiki_rank = list(wiki_map.keys())
+
+        rrf_scores = _rrf([vector_rank, bm25_rank, wiki_rank])
         candidates = sorted(rrf_scores, key=rrf_scores.get, reverse=True)
 
         entity_boost: Dict[str, float] = {}
@@ -299,11 +315,14 @@ class RetrievalPipeline:
         sources_map: Dict[str, Set[str]] = defaultdict(set)
         vec_set = set(vector_rank)
         bm_set = set(bm25_rank)
+        wiki_set = set(wiki_rank)
         for pid in final:
             if pid in vec_set:
                 sources_map[pid].add("vector")
             if pid in bm_set:
                 sources_map[pid].add("keyword")
+            if pid in wiki_set:
+                sources_map[pid].add("wiki")
             if entity_boost.get(pid):
                 sources_map[pid].add("entity")
             if rr_scores.get(pid, 0.0) > 0:
@@ -365,6 +384,21 @@ class RetrievalPipeline:
             ranked = sorted(final.items(), key=lambda x: x[1], reverse=True)
         results = []
         for pid, score in ranked[:top_k]:
+            if pid.startswith("wiki:"):
+                # wiki 结果从独立的 wiki_map 取文段,不能用 pages 的 page_map
+                w = wiki_map.get(pid) or {}
+                summary = w.get("summary") or ""
+                content = w.get("content") or ""
+                snippet = summary or content[:300]
+                results.append({
+                    "id": pid,
+                    "title": w.get("title") or "",
+                    "content": snippet,
+                    "score": round(score, 4),
+                    "sources": sorted(sources_map.get(pid, set())),
+                    "chunks": [{"content": summary or content[:300]}],
+                })
+                continue
             p = page_map.get(pid) or {}
             chunk = best_chunks.get(pid)
             snippet = chunk["content"] if chunk and chunk["content"] else (p.get("content") or "")[:300]

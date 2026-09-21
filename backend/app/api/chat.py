@@ -168,6 +168,8 @@ async def _agentic_search_notes(
     for hop in range(max_hops):
         outcome = await pipeline.retrieve(current_q, current_user, top_k=5)
         for note in outcome["results"]:
+            if note["id"].startswith("wiki:"):
+                note["source_kind"] = "wiki"
             if note["id"] not in seen_ids:
                 seen_ids.add(note["id"])
                 all_notes.append(note)
