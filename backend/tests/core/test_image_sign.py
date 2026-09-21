@@ -25,6 +25,32 @@ def _query(url: str) -> dict:
     return {k: v[0] for k, v in parse_qs(urlparse(url).query).items()}
 
 
+# ---- 密钥选择:空白 image_sign_secret 必须回退 jwt_secret_key ----
+
+def test_secret_whitespace_falls_back_to_jwt(monkeypatch):
+    from app.core import image_sign
+
+    monkeypatch.setattr(settings, "image_sign_secret", "   ")
+    monkeypatch.setattr(settings, "jwt_secret_key", "strong-jwt-key")
+    assert image_sign._secret() == b"strong-jwt-key"
+
+
+def test_secret_real_value_is_used_and_trimmed(monkeypatch):
+    from app.core import image_sign
+
+    monkeypatch.setattr(settings, "image_sign_secret", "  real-sign-key  ")
+    monkeypatch.setattr(settings, "jwt_secret_key", "strong-jwt-key")
+    assert image_sign._secret() == b"real-sign-key"
+
+
+def test_secret_empty_falls_back_to_jwt(monkeypatch):
+    from app.core import image_sign
+
+    monkeypatch.setattr(settings, "image_sign_secret", "")
+    monkeypatch.setattr(settings, "jwt_secret_key", "strong-jwt-key")
+    assert image_sign._secret() == b"strong-jwt-key"
+
+
 # ---- 本地上传路径:签路径本身 ----
 
 def test_local_signature_verifies():

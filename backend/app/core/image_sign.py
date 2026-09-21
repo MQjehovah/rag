@@ -14,7 +14,7 @@ DEFAULT_TTL_SECONDS = 3600
 
 
 def _secret() -> bytes:
-    key = getattr(settings, "image_sign_secret", "") or settings.jwt_secret_key
+    key = (getattr(settings, "image_sign_secret", "") or "").strip() or settings.jwt_secret_key
     return key.encode("utf-8")
 
 
