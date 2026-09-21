@@ -3,7 +3,7 @@
     <div class="login-bg"></div>
     <div class="login-card">
       <div class="login-logo">
-        <div class="logo-dot"></div>
+        <img class="login-logo-img" :src="logoUrl" alt="Rosiwit" />
         <h1>Notes RAG</h1>
         <p class="login-subtitle">企业智能知识库</p>
       </div>
@@ -26,6 +26,7 @@
 import { onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
+import logoUrl from '../assets/logo.svg'
 
 const username = ref('')
 const password = ref('')
@@ -110,13 +111,14 @@ onMounted(async () => {
   text-align: center;
   margin-bottom: 36px;
 }
-.logo-dot {
-  width: 12px;
-  height: 12px;
-  background: #38bdf8;
-  border-radius: 50%;
+.login-logo-img {
+  width: 52px;
+  height: 52px;
+  display: block;
+  object-fit: contain;
+  border-radius: 14px;
   margin: 0 auto 16px;
-  box-shadow: 0 0 20px rgba(56,189,248,0.4);
+  box-shadow: 0 8px 24px rgba(56,189,248,0.25);
 }
 .login-logo h1 {
   color: #f1f5f9;
