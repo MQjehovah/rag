@@ -5,6 +5,8 @@ docs/plans/*
 # 例外:本阶段设计与计划需入库以便评审与追溯
 !docs/plans/2026-09-20-knowledge-authz-design.md
 !docs/plans/2026-09-20-knowledge-authz.md
+!docs/plans/2026-09-20-wiki-vector-search-design.md
+!docs/plans/2026-09-20-wiki-vector-search.md
 
 __pycache__/
 backend/data/
