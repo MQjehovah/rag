@@ -193,3 +193,30 @@ def test_get_current_user_sso_matches_existing_account_by_email(db, sso_env):
     assert payload["username"] == "jimingqing"
     assert payload["display_name"] == "季明清"
     assert db.query(User).filter(User.email == "jimingqing@xzrobot.com").count() == 1
+
+
+def test_normalize_claims_groups_includes_dept_as_group():
+    """dept 即 group: SSO 只发 dept 时, 部门作为可见性组名纳入。"""
+    from app.core.jwt_utils import _normalize_claims_groups
+
+    groups = _normalize_claims_groups({"sub": "10086", "dept": "研发部", "roles": "user"})
+    assert "研发部" in groups
+    assert "user" in groups
+    # department 别名同样采纳, 且不与 dept 去重前后重复
+    groups2 = _normalize_claims_groups({"department": "财务部"})
+    assert "财务部" in groups2
+
+
+def test_get_current_user_sso_dept_becomes_visibility_group(sso_env, db):
+    """SSO token 仅含 dept(无 groups)时, 该部门被同步为该用户的可见性组。"""
+    key, _ = sso_env
+    token = sign_token(
+        valid_claims(sub="202202100099", name="部门用户", dept="研发部"), key
+    )
+
+    payload = get_current_user(_bearer(token), db)
+
+    assert "研发部" in payload["groups"]
+    user = db.query(User).filter(User.username == "202202100099").first()
+    rows = db.query(UserGroup).filter(UserGroup.user_id == user.id).all()
+    assert "研发部" in [r.group_name for r in rows]

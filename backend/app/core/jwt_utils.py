@@ -144,13 +144,17 @@ def _write_back_claims(db: Session, user: User, claims: dict) -> None:
 
 
 def _normalize_claims_groups(claims: dict) -> list[str]:
-    """把 claims 的 groups/roles 归一化为清洗后的组名列表。
+    """把 claims 的 groups/roles/dept 归一化为清洗后的组名列表。
 
     IdP 可能给 list[str] 或逗号分隔字符串;其余类型一律视为缺失。
     list[str] 元素会去空白、去空;逗号字符串按 "," 切分后同样清洗。
     SSO 统一认证签发的是 roles,故一并采纳;roles 含 admin 时补 rag 内部
     管理员标记 __local_admin__(全库管理端点均以该组名判定)与配置的
     ldap_group_map_admin 组,使 SSO 管理员与本地/LDAP 管理员同权。
+
+    **dept 即 group**(2026-09-25 拍板):SSO 目前只签发 dept(部门),不发 groups;
+    故把 dept/department 也作为可见性组名纳入,使「部门 = 知识可见性组」,
+    与 LDAP 登录轨的 groups 语义统一(不再新增 groups claim,由消费端归一)。
     """
 
     def _as_list(value) -> list[str]:
@@ -164,6 +168,10 @@ def _normalize_claims_groups(claims: dict) -> list[str]:
     for role in _as_list(claims.get("roles")):
         if role not in groups:
             groups.append(role)
+    # dept 即 group: 部门作为可见性组名纳入(SSO 只发 dept, 不发 groups)
+    for dept in _as_list(claims.get("dept")) + _as_list(claims.get("department")):
+        if dept and dept not in groups:
+            groups.append(dept)
     if "admin" in groups:
         if "__local_admin__" not in groups:
             groups.append("__local_admin__")
