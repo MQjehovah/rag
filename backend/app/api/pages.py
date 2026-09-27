@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import or_, text, func
 from typing import List, Optional
 import uuid
+import secrets
 import time
 from datetime import datetime
 import logging
@@ -285,7 +286,7 @@ def list_trash(db: Session = Depends(get_db), current_user=Depends(get_current_u
 def get_page(page_id: str, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     row = db.execute(
         text(
-            "SELECT id, title, content, notebook_id, icon, cover, parent_id, position, created_at, updated_at "
+            "SELECT id, title, content, notebook_id, icon, cover, parent_id, position, share_token, created_at, updated_at "
             "FROM pages WHERE id = :pid AND deleted_at IS NULL"
         ),
         {"pid": page_id},
@@ -296,7 +297,7 @@ def get_page(page_id: str, db: Session = Depends(get_db), current_user=Depends(g
     return PageResponse(
         id=row[0], title=row[1], content=row[2], notebook_id=row[3],
         icon=row[4] or '', cover=row[5] or '', parent_id=row[6], position=row[7] or 0,
-        created_at=row[8], updated_at=row[9],
+        share_token=row[8], created_at=row[9], updated_at=row[10],
     )
 
 @router.get("/{page_id}/backlinks")
@@ -384,6 +385,28 @@ def restore_revision(page_id: str, rev_id: str, background_tasks: BackgroundTask
     if _should_index(page.id):
         background_tasks.add_task(background_index_page, page.id)
     return page
+
+@router.post("/{page_id}/share")
+def share_page(page_id: str, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    """生成(或返回已有)公开只读分享令牌。"""
+    page = db.query(Page).filter(Page.id == page_id).first()
+    if not page or page.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="笔记不存在")
+    _check_page_access(page, current_user, db)
+    if not page.share_token:
+        page.share_token = secrets.token_urlsafe(18)
+        db.commit()
+    return {"token": page.share_token}
+
+@router.delete("/{page_id}/share")
+def unshare_page(page_id: str, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    page = db.query(Page).filter(Page.id == page_id).first()
+    if not page or page.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="笔记不存在")
+    _check_page_access(page, current_user, db)
+    page.share_token = None
+    db.commit()
+    return {"message": "已取消分享"}
 
 @router.put("/{page_id}", response_model=PageResponse)
 def update_page(page_id: str, data: PageUpdate, background_tasks: BackgroundTasks, db: Session = Depends(get_db), current_user=Depends(get_current_user)):

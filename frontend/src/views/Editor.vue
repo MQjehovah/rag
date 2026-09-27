@@ -182,6 +182,7 @@
                   <el-dropdown-item command="dup">创建副本</el-dropdown-item>
                   <el-dropdown-item command="export">导出 Markdown</el-dropdown-item>
                   <el-dropdown-item command="history">版本历史</el-dropdown-item>
+                  <el-dropdown-item command="share">分享只读链接</el-dropdown-item>
                   <el-dropdown-item command="wide" divided>{{ pageWide ? '关闭全宽' : '全宽显示' }}</el-dropdown-item>
                   <el-dropdown-item command="small">{{ pageSmall ? '取消小字号' : '小字号' }}</el-dropdown-item>
                   <el-dropdown-item command="delete" divided>移到回收站</el-dropdown-item>
@@ -423,6 +424,24 @@
       </template>
     </el-dialog>
 
+    <!-- 分享 -->
+    <el-dialog v-model="shareOpen" title="分享" width="520px">
+      <template v-if="shareUrl">
+        <p class="muted-hint" style="margin-bottom: 10px">任何获得链接的人都可以只读查看此页面（无需登录）。</p>
+        <div class="share-row">
+          <el-input v-model="shareUrl" readonly />
+          <el-button type="primary" @click="copyShareUrl">复制</el-button>
+        </div>
+        <div style="margin-top: 12px">
+          <el-button link type="danger" @click="cancelShare">取消分享</el-button>
+        </div>
+      </template>
+      <template v-else>
+        <p class="muted-hint" style="margin-bottom: 12px">发布后将生成只读链接，任何获得链接的人无需登录即可查看。</p>
+        <el-button type="primary" @click="createShare">创建分享链接</el-button>
+      </template>
+    </el-dialog>
+
     <!-- 版本历史 -->
     <el-dialog v-model="historyOpen" title="版本历史" width="780px">
       <div class="history-wrap">
@@ -540,6 +559,7 @@ interface Page {
   cover?: string
   parent_id?: string | null
   position?: number
+  share_token?: string | null
   updated_at: string
 }
 
@@ -1210,7 +1230,41 @@ const onPageMenu = (cmd: string) => {
   else if (cmd === 'wide') toggleWide()
   else if (cmd === 'small') toggleSmall()
   else if (cmd === 'history') openHistory()
+  else if (cmd === 'share') openShare()
   else if (cmd === 'delete') deleteCurrent()
+}
+
+// 分享(只读公开链接)
+const shareOpen = ref(false)
+const shareUrl = ref('')
+const openShare = () => {
+  if (!currentPage.value) return
+  shareUrl.value = currentPage.value.share_token
+    ? `${window.location.origin}${API_BASE}/share/${currentPage.value.share_token}`
+    : ''
+  shareOpen.value = true
+}
+const createShare = async () => {
+  if (!currentPage.value) return
+  try {
+    const res = await http.post(`/api/pages/${currentPage.value.id}/share`)
+    currentPage.value.share_token = res.data.token
+    shareUrl.value = `${window.location.origin}${API_BASE}/share/${res.data.token}`
+  } catch { ElMessage.error('创建分享失败') }
+}
+const cancelShare = async () => {
+  if (!currentPage.value) return
+  try {
+    await http.delete(`/api/pages/${currentPage.value.id}/share`)
+    currentPage.value.share_token = null
+    shareUrl.value = ''
+    ElMessage.success('已取消分享')
+  } catch { ElMessage.error('取消失败') }
+}
+const copyShareUrl = async () => {
+  if (!shareUrl.value) return
+  await copyText(shareUrl.value)
+  ElMessage.success('链接已复制')
 }
 
 // 版本历史
@@ -2346,6 +2400,9 @@ html, body, #app { height: 100%; }
 }
 .link-panel-head .count { background: #e3e3e0; color: #6b6b68; border-radius: 8px; padding: 0 7px; font-size: 11px; }
 .link-list { max-height: 220px; overflow-y: auto; padding-bottom: 14px; }
+
+/* 分享 */
+.share-row { display: flex; gap: 8px; }
 
 /* 版本历史 */
 .history-wrap { display: flex; gap: 14px; height: 520px; }

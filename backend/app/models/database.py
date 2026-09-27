@@ -41,6 +41,8 @@ class Page(Base):
     position = Column(Integer, default=0)
     # 软删除(回收站); NULL 表示正常
     deleted_at = Column(DateTime, nullable=True, index=True)
+    # 公开分享令牌; 非空表示已发布为只读分享链接
+    share_token = Column(String(64), nullable=True, index=True)
     keywords = Column(Text, default='')
     term_count = Column(Integer, nullable=True, default=0)
     created_at = Column(DateTime, default=datetime.now)

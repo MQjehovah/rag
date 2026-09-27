@@ -144,6 +144,7 @@ class PageMove(BaseModel):
 class PageResponse(PageBase):
     id: str
     position: int = 0
+    share_token: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 

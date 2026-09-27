@@ -43,7 +43,7 @@ import { useAuthStore } from './stores/auth'
 const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
-const showNav = computed(() => route.path !== '/login')
+const showNav = computed(() => route.path !== '/login' && !route.path.startsWith('/share'))
 const isLoggedIn = computed(() => authStore.isLoggedIn)
 
 const handleLogout = () => {
