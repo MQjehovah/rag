@@ -234,7 +234,9 @@ import xml from 'highlight.js/lib/languages/xml'
 import css from 'highlight.js/lib/languages/css'
 import markdown from 'highlight.js/lib/languages/markdown'
 import CodeBlockComponent from './CodeBlockComponent.vue'
-import { Callout } from './editorExt'
+import ImageNodeView from './ImageNodeView.vue'
+import ToggleNodeView from './ToggleNodeView.vue'
+import { Callout, Toggle } from './editorExt'
 import { Markdown } from 'tiptap-markdown'
 import mermaid from 'mermaid'
 import http from '../api/http'
@@ -320,6 +322,7 @@ const SLASH_ITEMS: SlashItem[] = [
   { title: '成功框', desc: '成功/完成提示块', icon: '✅', keywords: ['success', '成功', '完成', '框'], action: (e, r) => { e.chain().focus().deleteRange(r).insertContent({ type: 'callout', attrs: { type: 'success' }, content: [{ type: 'paragraph' }] }).run() } },
   { title: '警告框', desc: '警告/注意提示块', icon: '⚠️', keywords: ['warn', 'warning', '警告', '注意', '框'], action: (e, r) => { e.chain().focus().deleteRange(r).insertContent({ type: 'callout', attrs: { type: 'warn' }, content: [{ type: 'paragraph' }] }).run() } },
   { title: '危险框', desc: '严重风险提示块', icon: '⛔', keywords: ['danger', 'error', '危险', '错误', '框'], action: (e, r) => { e.chain().focus().deleteRange(r).insertContent({ type: 'callout', attrs: { type: 'danger' }, content: [{ type: 'paragraph' }] }).run() } },
+  { title: '折叠块', desc: '可展开/收起的内容', icon: '▸', keywords: ['toggle', 'collapse', '折叠', '收起', '展开'], action: (e, r) => { e.chain().focus().deleteRange(r).insertContent({ type: 'toggle', attrs: { open: true, title: '折叠块' }, content: [{ type: 'paragraph' }] }).run() } },
   { title: '图片', desc: '上传或插入图片', icon: '▧', keywords: ['image', 'img', '图片', '照片'], action: (e, r) => { e.chain().focus().deleteRange(r).run(); handleImageUpload() } },
   { title: '图表', desc: 'Mermaid 流程图/时序图', icon: '◈', keywords: ['mermaid', 'chart', 'diagram', '图表', '流程图'], action: (e, r) => { e.chain().focus().deleteRange(r).run(); insertMermaid() } },
 ]
@@ -392,6 +395,39 @@ const editor = useEditor({
       .configure({ lowlight, defaultLanguage: 'plaintext' }),
     Placeholder.configure({ placeholder: '开始写笔记... 输入 “/” 插入内容块' }),
     Image.extend({
+      addAttributes() {
+        return {
+          ...(this.parent?.() ?? {}),
+          width: {
+            default: null,
+            parseHTML: (el: HTMLElement) => {
+              const w = el.getAttribute('width')
+              return w ? parseInt(w, 10) || null : null
+            },
+            renderHTML: (attrs: Record<string, any>) => (attrs.width ? { width: attrs.width } : {}),
+          },
+        }
+      },
+      addNodeView() {
+        return VueNodeViewRenderer(ImageNodeView)
+      },
+      addStorage() {
+        return {
+          markdown: {
+            serialize(state: any, node: any) {
+              const { src, alt, title, width } = node.attrs
+              if (width) {
+                const a = String(alt || '').replace(/"/g, '&quot;')
+                const t = title ? ` title="${String(title).replace(/"/g, '&quot;')}"` : ''
+                state.write(`<img src="${src}" alt="${a}"${t} width="${width}">`)
+              } else {
+                const t = title ? ` "${String(title).replace(/"/g, '\\"')}"` : ''
+                state.write(`![${alt || ''}](${src}${t})`)
+              }
+            },
+          },
+        }
+      },
       addProseMirrorPlugins() {
         return [
           new Plugin({
@@ -445,6 +481,7 @@ const editor = useEditor({
     Typography,
     CharacterCount,
     Callout,
+    Toggle.extend({ addNodeView() { return VueNodeViewRenderer(ToggleNodeView) } }),
     SlashCommand,
     Markdown.configure({ html: true, breaks: true, linkify: true }),
   ],

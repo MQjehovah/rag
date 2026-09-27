@@ -123,6 +123,8 @@ class PageBase(BaseModel):
     title: str = '无标题'
     content: str = ''
     notebook_id: Optional[str] = None
+    icon: str = ''
+    cover: str = ''
 
 class PageCreate(PageBase):
     pass
@@ -131,11 +133,18 @@ class PageUpdate(BaseModel):
     title: Optional[str] = None
     content: Optional[str] = None
     notebook_id: Optional[str] = None
+    icon: Optional[str] = None
+    cover: Optional[str] = None
 
 class PageResponse(PageBase):
     id: str
     created_at: datetime
     updated_at: datetime
+
+    @field_validator('icon', 'cover', mode='before')
+    @classmethod
+    def _coerce_text(cls, v):
+        return v or ''
 
     class Config:
         from_attributes = True

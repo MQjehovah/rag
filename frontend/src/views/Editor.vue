@@ -119,12 +119,34 @@
       <!-- 主编辑区 -->
       <main class="main-content">
         <div v-if="currentPage" class="editor-wrapper">
-          <input
-            v-model="currentPage.title"
-            class="title-input"
-            placeholder="无标题"
-            @input="scheduleSave"
-          />
+          <div v-if="currentPage.cover" class="page-cover">
+            <img :src="currentPage.cover" alt="封面" />
+            <div class="cover-actions">
+              <el-button size="small" @click="pickCover">更换封面</el-button>
+              <el-button size="small" @click="removeCover">移除</el-button>
+            </div>
+          </div>
+          <div class="title-row">
+            <button
+              class="page-icon-btn"
+              :title="currentPage.icon ? '更换图标' : '添加图标'"
+              @click="iconPickerVisible = !iconPickerVisible"
+            >
+              <span v-if="currentPage.icon" class="page-icon">{{ currentPage.icon }}</span>
+              <span v-else class="page-icon-add">＋</span>
+            </button>
+            <input
+              v-model="currentPage.title"
+              class="title-input"
+              placeholder="无标题"
+              @input="scheduleSave"
+            />
+            <el-button v-if="!currentPage.cover" link size="small" class="cover-add" @click="pickCover">＋ 封面</el-button>
+          </div>
+          <div v-if="iconPickerVisible" class="icon-picker">
+            <span v-for="emo in EMOJIS" :key="emo" class="emoji-opt" @click="setIcon(emo)">{{ emo }}</span>
+            <span class="emoji-opt emoji-clear" @click="setIcon('')">移除</span>
+          </div>
           <div v-loading="pageLoading" class="editor-body">
             <TipTapEditor v-model="currentPage.content" @update:modelValue="scheduleSave" />
           </div>
@@ -301,6 +323,8 @@ interface Page {
   notebook_id: string | null
   title: string
   content: string
+  icon?: string
+  cover?: string
   updated_at: string
 }
 
@@ -477,6 +501,8 @@ const selectPage = async (page: PageListItem) => {
     notebook_id: page.notebook_id ?? null,
     title: page.title,
     content: '',
+    icon: '',
+    cover: '',
     updated_at: page.updated_at,
   }
   pageLoading.value = true
@@ -500,7 +526,7 @@ const selectPage = async (page: PageListItem) => {
 }
 
 const openPageById = async (pageId: string) => {
-  currentPage.value = { id: pageId, notebook_id: null, title: '加载中...', content: '', updated_at: '' }
+  currentPage.value = { id: pageId, notebook_id: null, title: '加载中...', content: '', icon: '', cover: '', updated_at: '' }
   pageLoading.value = true
   const seq = ++pageLoadSeq
   loadAbort?.abort()
@@ -631,7 +657,9 @@ const savePage = async (target?: Page) => {
   try {
     await http.put(`/api/pages/${page.id}`, {
       title: page.title,
-      content: page.content
+      content: page.content,
+      icon: page.icon || '',
+      cover: page.cover || ''
     })
     if (currentPage.value?.id === page.id) {
       saveStatus.value = 'saved'
@@ -646,6 +674,47 @@ const savePage = async (target?: Page) => {
       saveStatus.value = 'unsaved'
     }
   }
+}
+
+const iconPickerVisible = ref(false)
+const EMOJIS = [
+  '📄', '📝', '📌', '📎', '📁', '📚', '📖', '🧠', '💡', '🔥',
+  '✅', '⚠️', '⛔', '❓', '❗', '⭐', '🎯', '🚀', '🛠️', '⚙️',
+  '🔧', '🔍', '🧪', '🧩', '📊', '📈', '🗂️', '🗓️', '💬', '🔗',
+  '🤖', '🐛', '🌐', '🏷️', '🧭', '🗺️', '🔒', '🔑', '📦', '🌱',
+]
+
+const pickCover = () => {
+  const input = document.createElement('input')
+  input.type = 'file'
+  input.accept = 'image/*'
+  input.onchange = async (e: Event) => {
+    const file = (e.target as HTMLInputElement).files?.[0]
+    if (!file || !currentPage.value) return
+    try {
+      const formData = new FormData()
+      formData.append('file', file)
+      const res = await http.post('/api/upload/image', formData)
+      currentPage.value.cover = res.data.url
+      scheduleSave()
+    } catch {
+      ElMessage.error('封面上传失败')
+    }
+  }
+  input.click()
+}
+
+const removeCover = () => {
+  if (!currentPage.value) return
+  currentPage.value.cover = ''
+  scheduleSave()
+}
+
+const setIcon = (emoji: string) => {
+  if (!currentPage.value) return
+  currentPage.value.icon = emoji
+  iconPickerVisible.value = false
+  scheduleSave()
 }
 
 const reindexCurrentPage = async () => {
@@ -682,7 +751,7 @@ const doSearch = async () => {
 
 const openFromSearch = async (result: any) => {
   showSearch.value = false
-  currentPage.value = { id: result.id, notebook_id: null, title: result.title || '加载中...', content: '', updated_at: '' }
+  currentPage.value = { id: result.id, notebook_id: null, title: result.title || '加载中...', content: '', icon: '', cover: '', updated_at: '' }
   pageLoading.value = true
   const seq = ++pageLoadSeq
   loadAbort?.abort()
@@ -994,7 +1063,79 @@ html, body, #app { height: 100%; }
   min-height: calc(100vh - 104px);
   padding: 32px 44px;
 }
+.editor-wrapper { position: relative; }
+.page-cover {
+  position: relative;
+  margin: -32px -44px 18px;
+  height: 200px;
+  overflow: hidden;
+  border-radius: 12px 12px 0 0;
+  background: #f1f5f9;
+}
+.page-cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.cover-actions {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  display: flex;
+  gap: 6px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.page-cover:hover .cover-actions { opacity: 1; }
+.title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.page-icon-btn {
+  flex: 0 0 auto;
+  width: 40px;
+  height: 40px;
+  border: none;
+  background: transparent;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 28px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #cbd5e1;
+}
+.page-icon-btn:hover { background: #f1f5f9; }
+.page-icon-add { font-size: 22px; color: #cbd5e1; }
+.cover-add { margin-left: auto; color: #94a3b8; }
+.icon-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 10px;
+  margin-bottom: 12px;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
+}
+.emoji-opt {
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  border-radius: 7px;
+  cursor: pointer;
+}
+.emoji-opt:hover { background: #f1f5f9; }
+.emoji-clear { width: auto; padding: 0 10px; font-size: 12px; color: #94a3b8; }
 .title-input {
+  flex: 1 1 auto;
   width: 100%;
   font-size: 26px;
   font-weight: 700;

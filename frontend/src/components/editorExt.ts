@@ -36,3 +36,42 @@ export const Callout = Node.create({
     ]
   },
 })
+
+/**
+ * 折叠块(toggle)。标题存于 `title` 属性, 正文为块级内容; 序列化为
+ * `<details data-toggle open><summary>标题</summary><div class="toggle-content">…</div></details>`。
+ */
+export const Toggle = Node.create({
+  name: 'toggle',
+  group: 'block',
+  content: 'block+',
+  defining: true,
+
+  addAttributes() {
+    return {
+      open: {
+        default: true,
+        parseHTML: (el: HTMLElement) => el.hasAttribute('open'),
+        renderHTML: (attrs: Record<string, any>) => (attrs.open ? { open: '' } : {}),
+      },
+      title: {
+        default: '',
+        parseHTML: (el: HTMLElement) => el.querySelector('summary')?.textContent || '',
+        renderHTML: () => ({}),
+      },
+    }
+  },
+
+  parseHTML() {
+    return [{ tag: 'details[data-toggle]', contentElement: 'div.toggle-content' }]
+  },
+
+  renderHTML({ node, HTMLAttributes }) {
+    return [
+      'details',
+      mergeAttributes(HTMLAttributes, { 'data-toggle': '' }),
+      ['summary', {}, node.attrs.title || '折叠块'],
+      ['div', { class: 'toggle-content' }, 0],
+    ]
+  },
+})

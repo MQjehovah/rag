@@ -314,9 +314,10 @@ const renderContent = (text: string) => {
     }
     return `<strong>${title}</strong>`
   })
-  // 笔记可含 HTML(如提示框/下划线/高亮),渲染前统一做白名单净化,防止 XSS
+  // 笔记可含 HTML(如提示框/折叠块/下划线/高亮),渲染前统一做白名单净化,防止 XSS
   return DOMPurify.sanitize(md.render(withLinks), {
-    ADD_ATTR: ['data-id', 'data-callout', 'target'],
+    ADD_TAGS: ['details', 'summary'],
+    ADD_ATTR: ['data-id', 'data-callout', 'data-toggle', 'open', 'target'],
   })
 }
 
@@ -677,6 +678,31 @@ onBeforeUnmount(() => {
 .wiki-body :deep(.callout-success) { border-left-color: #10b981; background: #ecfdf5; }
 .wiki-body :deep(.callout-warn) { border-left-color: #f59e0b; background: #fffbeb; }
 .wiki-body :deep(.callout-danger) { border-left-color: #ef4444; background: #fef2f2; }
+.wiki-body :deep(details[data-toggle]) {
+  margin: 10px 0;
+  padding: 6px 0;
+}
+.wiki-body :deep(details[data-toggle] > summary) {
+  cursor: pointer;
+  font-weight: 600;
+  color: #1e293b;
+  padding: 4px 0;
+  list-style: none;
+}
+.wiki-body :deep(details[data-toggle] > summary::-webkit-details-marker) { display: none; }
+.wiki-body :deep(details[data-toggle] > summary::before) {
+  content: '▸';
+  display: inline-block;
+  margin-right: 6px;
+  color: #94a3b8;
+  transition: transform 0.15s;
+}
+.wiki-body :deep(details[data-toggle][open] > summary::before) { transform: rotate(90deg); }
+.wiki-body :deep(details[data-toggle] .toggle-content) {
+  padding-left: 20px;
+  border-left: 2px solid #eef2f7;
+  margin-left: 6px;
+}
 .wiki-link {
   color: #2563eb;
   text-decoration: none;

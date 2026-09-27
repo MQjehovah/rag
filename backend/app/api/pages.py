@@ -145,7 +145,10 @@ def create_page(data: PageCreate, background_tasks: BackgroundTasks, db: Session
         if nb and "__local_admin__" not in current_user["groups"]:
             if nb.group_id and nb.group_id not in current_user["groups"]:
                 raise HTTPException(status_code=403, detail="无权在该笔记本创建笔记")
-    page = Page(id=str(uuid.uuid4()), title=data.title, content=data.content, notebook_id=data.notebook_id)
+    page = Page(
+        id=str(uuid.uuid4()), title=data.title, content=data.content,
+        notebook_id=data.notebook_id, icon=data.icon or '', cover=data.cover or '',
+    )
     db.add(page)
     db.commit()
     db.refresh(page)
@@ -222,15 +225,19 @@ def get_tags(db: Session = Depends(get_db), current_user=Depends(get_current_use
 @router.get("/{page_id}", response_model=PageResponse)
 def get_page(page_id: str, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     row = db.execute(
-        text("SELECT id, title, content, notebook_id, created_at, updated_at FROM pages WHERE id = :pid"),
+        text(
+            "SELECT id, title, content, notebook_id, icon, cover, created_at, updated_at "
+            "FROM pages WHERE id = :pid"
+        ),
         {"pid": page_id},
     ).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="笔记不存在")
     _check_page_access_by_nb(row[3], current_user, db)
     return PageResponse(
-        id=row[0], title=row[1], content=row[2],
-        notebook_id=row[3], created_at=row[4], updated_at=row[5],
+        id=row[0], title=row[1], content=row[2], notebook_id=row[3],
+        icon=row[4] or '', cover=row[5] or '',
+        created_at=row[6], updated_at=row[7],
     )
 
 @router.put("/{page_id}", response_model=PageResponse)
@@ -252,6 +259,10 @@ def update_page(page_id: str, data: PageUpdate, background_tasks: BackgroundTask
             raise HTTPException(status_code=403, detail="目标笔记本不存在")
         _check_page_access_by_nb(data.notebook_id, current_user, db)
         page.notebook_id = data.notebook_id
+    if data.icon is not None:
+        page.icon = data.icon
+    if data.cover is not None:
+        page.cover = data.cover
     page.updated_at = datetime.now()
 
     db.commit()
