@@ -143,6 +143,16 @@ def get_groups(current_user=Depends(get_current_user)):
     return [GroupResponse(group_name=g) for g in current_user["groups"]]
 
 
+@router.get("/users")
+def list_users(current_user=Depends(get_current_user), db: Session = Depends(get_db)):
+    """用户列表(用于 @ 提及)。"""
+    rows = db.query(User).order_by(User.username.asc()).limit(500).all()
+    return [
+        {"id": u.id, "username": u.username, "display_name": u.display_name or u.username}
+        for u in rows
+    ]
+
+
 # ---- 浏览器 SSO 登录(授权码流程) ----
 
 def _login_redirect(error: str = "") -> RedirectResponse:

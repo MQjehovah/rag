@@ -12,7 +12,7 @@ from collections import Counter
 logger = logging.getLogger(__name__)
 
 from app.models.database import Page, Notebook, PageChunk, PageRevision, PageComment, User, get_engine
-from app.models.schema import PageCreate, PageUpdate, PageMove, CommentCreate, PageResponse, PageListItem, PageListResponse
+from app.models.schema import PageCreate, PageUpdate, PageMove, PageViewUpdate, CommentCreate, PageResponse, PageListItem, PageListResponse
 from app.core.rag import EmbeddingService, VectorStore
 from app.core.hybrid import HybridIndex
 from app.core.entity_graph import EntityGraphStore
@@ -157,6 +157,7 @@ def create_page(data: PageCreate, background_tasks: BackgroundTasks, db: Session
     page = Page(
         id=str(uuid.uuid4()), title=data.title, content=data.content,
         notebook_id=data.notebook_id, icon=data.icon or '', cover=data.cover or '',
+        cover_offset=int(data.cover_offset or 50),
         parent_id=parent_id, position=(max_pos or 0) + 1,
     )
     db.add(page)
@@ -243,7 +244,7 @@ def page_tree(notebook_id: str, db: Session = Depends(get_db), current_user=Depe
         raise HTTPException(status_code=404, detail="笔记本不存在")
     if "__local_admin__" not in current_user["groups"] and nb.group_id and nb.group_id not in current_user["groups"]:
         raise HTTPException(status_code=403, detail="无权访问该笔记本")
-    rows = db.query(Page.id, Page.title, Page.parent_id, Page.position, Page.updated_at).filter(
+    rows = db.query(Page.id, Page.title, Page.parent_id, Page.position, Page.view_type, Page.status, Page.updated_at).filter(
         Page.notebook_id == notebook_id,
         Page.deleted_at.is_(None),
     ).order_by(Page.position.asc(), Page.created_at.asc()).all()
@@ -254,7 +255,9 @@ def page_tree(notebook_id: str, db: Session = Depends(get_db), current_user=Depe
                 "title": r[1] or "无标题",
                 "parent_id": r[2],
                 "position": r[3] or 0,
-                "updated_at": r[4],
+                "view_type": r[4] or "doc",
+                "status": r[5] or "",
+                "updated_at": r[6],
             }
             for r in rows
         ]
@@ -286,7 +289,8 @@ def list_trash(db: Session = Depends(get_db), current_user=Depends(get_current_u
 def get_page(page_id: str, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     row = db.execute(
         text(
-            "SELECT id, title, content, notebook_id, icon, cover, parent_id, position, share_token, created_at, updated_at "
+            "SELECT id, title, content, notebook_id, icon, cover, parent_id, position, share_token, "
+            "cover_offset, view_type, status, created_at, updated_at "
             "FROM pages WHERE id = :pid AND deleted_at IS NULL"
         ),
         {"pid": page_id},
@@ -297,7 +301,9 @@ def get_page(page_id: str, db: Session = Depends(get_db), current_user=Depends(g
     return PageResponse(
         id=row[0], title=row[1], content=row[2], notebook_id=row[3],
         icon=row[4] or '', cover=row[5] or '', parent_id=row[6], position=row[7] or 0,
-        share_token=row[8], created_at=row[9], updated_at=row[10],
+        share_token=row[8], cover_offset=row[9] if row[9] is not None else 50,
+        view_type=row[10] or 'doc', status=row[11] or '',
+        created_at=row[12], updated_at=row[13],
     )
 
 @router.get("/{page_id}/backlinks")
@@ -486,6 +492,19 @@ def resolve_comment(page_id: str, comment_id: str, db: Session = Depends(get_db)
     return {"resolved": bool(c.resolved)}
 
 
+@router.put("/{page_id}/view")
+def set_page_view(page_id: str, data: PageViewUpdate, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    page = db.query(Page).filter(Page.id == page_id).first()
+    if not page or page.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="笔记不存在")
+    _check_page_access(page, current_user, db)
+    if data.view_type not in ("doc", "table", "board", "calendar"):
+        raise HTTPException(status_code=400, detail="不支持的视图类型")
+    page.view_type = data.view_type
+    page.updated_at = datetime.now()
+    db.commit()
+    return {"view_type": page.view_type}
+
 @router.put("/{page_id}", response_model=PageResponse)
 def update_page(page_id: str, data: PageUpdate, background_tasks: BackgroundTasks, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     page = db.query(Page).filter(Page.id == page_id).first()
@@ -509,6 +528,10 @@ def update_page(page_id: str, data: PageUpdate, background_tasks: BackgroundTask
         page.icon = data.icon
     if data.cover is not None:
         page.cover = data.cover
+    if data.cover_offset is not None:
+        page.cover_offset = max(0, min(100, int(data.cover_offset)))
+    if data.status is not None:
+        page.status = data.status
     page.updated_at = datetime.now()
 
     # 历史版本: 内容变化时按 2 分钟节流存快照, 每页最多保留 50 条

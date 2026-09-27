@@ -28,6 +28,19 @@
           </div>
         </template>
 
+        <template v-if="templates.length">
+          <div class="side-section">
+            <span class="side-section-label">模板</span>
+          </div>
+          <div class="tpl-list">
+            <div v-for="t in templates" :key="t.id" class="page-item tpl" @click="newFromTemplate(t)">
+              <span class="tpl-icon">{{ t.icon || '📄' }}</span>
+              <span class="page-title">{{ t.name }}</span>
+              <button class="icon-btn" title="删除模板" @click.stop="deleteTemplate(t.id)">✕</button>
+            </div>
+          </div>
+        </template>
+
         <div class="side-section">
           <span class="side-section-label">笔记本</span>
           <button class="icon-btn" title="新建笔记本" @click="showNewNotebook = true">＋</button>
@@ -68,13 +81,28 @@
             </div>
             <el-empty v-if="tagPages.length === 0" description="该标签下暂无笔记" :image-size="40" />
           </div>
-          <div
-            v-for="nb in notebooks"
-            :key="nb.id"
-            class="notebook-item"
-            :class="{ active: currentNotebook?.id === nb.id }"
-          >
-            <div class="notebook-info" @click="selectNotebook(nb)">
+          <template v-for="grp in notebookGroups" :key="grp.section">
+            <div v-if="grp.section" class="side-section nb-group">{{ grp.section }}</div>
+            <div
+              v-for="nb in grp.items"
+              :key="nb.id"
+              class="notebook-item"
+              :class="{
+                active: currentNotebook?.id === nb.id,
+                dragging: nbDragId === nb.id,
+                'nb-drop-before': nbDrop?.id === nb.id && nbDrop.zone === 'before',
+                'nb-drop-after': nbDrop?.id === nb.id && nbDrop.zone === 'after',
+              }"
+            >
+            <div
+              class="notebook-info"
+              draggable="true"
+              @click="selectNotebook(nb)"
+              @dragstart="onNbDragStart(nb, $event)"
+              @dragover="onNbDragOver(nb, $event)"
+              @drop.stop="onNbDrop(nb, $event)"
+              @dragend="onNbDragEnd"
+            >
               <span class="nb-chevron" :class="{ open: currentNotebook?.id === nb.id }">›</span>
               <span class="notebook-icon">📁</span>
               <span class="notebook-name">{{ nb.name }}</span>
@@ -134,7 +162,8 @@
                 <span>＋ 添加笔记</span>
               </div>
             </div>
-          </div>
+            </div>
+          </template>
 
           <div v-if="notebooks.length === 0" class="empty-tip">
             暂无笔记本
@@ -182,7 +211,14 @@
                   <el-dropdown-item command="link">复制链接</el-dropdown-item>
                   <el-dropdown-item command="dup">创建副本</el-dropdown-item>
                   <el-dropdown-item command="export">导出 Markdown</el-dropdown-item>
-                  <el-dropdown-item command="history">版本历史</el-dropdown-item>
+                  <el-dropdown-item command="export-html">导出 HTML</el-dropdown-item>
+                  <el-dropdown-item command="export-pdf">导出 PDF</el-dropdown-item>
+                  <el-dropdown-item command="template">另存为模板</el-dropdown-item>
+                  <el-dropdown-item command="view-doc" divided>视图：文档</el-dropdown-item>
+                  <el-dropdown-item command="view-table">视图：表格</el-dropdown-item>
+                  <el-dropdown-item command="view-board">视图：看板</el-dropdown-item>
+                  <el-dropdown-item command="view-calendar">视图：日历</el-dropdown-item>
+                  <el-dropdown-item command="history" divided>版本历史</el-dropdown-item>
                   <el-dropdown-item command="share">分享只读链接</el-dropdown-item>
                   <el-dropdown-item command="wide" divided>{{ pageWide ? '关闭全宽' : '全宽显示' }}</el-dropdown-item>
                   <el-dropdown-item command="small">{{ pageSmall ? '取消小字号' : '小字号' }}</el-dropdown-item>
@@ -194,14 +230,80 @@
           </div>
         </div>
         <div class="doc-scroll">
-        <div v-if="currentPage" class="editor-wrapper" :class="{ wide: pageWide, small: pageSmall }">
+        <div v-if="currentPage && isDatabase" class="db-view">
+          <div class="db-head">
+            <span class="db-title">{{ currentPage.icon }} {{ currentPage.title || '无标题' }}</span>
+            <div class="db-head-actions">
+              <button class="icon-btn" :class="{ 'is-on': currentPage.view_type === 'table' }" title="表格视图" @click="setViewType('table')">▦</button>
+              <button class="icon-btn" :class="{ 'is-on': currentPage.view_type === 'board' }" title="看板视图" @click="setViewType('board')">▤</button>
+              <button class="icon-btn" :class="{ 'is-on': currentPage.view_type === 'calendar' }" title="日历视图" @click="setViewType('calendar')">🗓</button>
+              <button class="icon-btn" title="文档视图" @click="setViewType('doc')">📄</button>
+              <el-button size="small" type="primary" @click="addRow">＋ 新建</el-button>
+            </div>
+          </div>
+
+          <div v-if="currentPage.view_type === 'table'" class="db-table">
+            <div class="db-row db-row-head">
+              <span class="db-c-title">标题</span>
+              <span class="db-c-status">状态</span>
+              <span class="db-c-time">更新时间</span>
+            </div>
+            <div v-for="c in dbChildren" :key="c.id" class="db-row">
+              <span class="db-c-title"><a class="db-link" @click="openPageById(c.id)">{{ c.title || '无标题' }}</a></span>
+              <span class="db-c-status">
+                <el-select :model-value="c.status || ''" size="small" style="width: 112px" @change="(v: string) => setChildStatus(c.id, v)">
+                  <el-option v-for="s in STATUS_OPTIONS" :key="s" :label="s || '未设置'" :value="s" />
+                </el-select>
+              </span>
+              <span class="db-c-time">{{ formatTime(c.updated_at) }}</span>
+            </div>
+            <div v-if="!dbChildren.length" class="muted-hint" style="padding: 16px">暂无数据，点击右上角「新建」添加</div>
+          </div>
+
+          <div v-else-if="currentPage.view_type === 'board'" class="db-board">
+            <div v-for="col in ['待办', '进行中', '完成', '']" :key="col" class="db-col" @dragover.prevent @drop="onBoardDrop(col, $event)">
+              <div class="db-col-head">{{ col || '未设置' }}<span class="db-col-count">{{ dbChildren.filter(c => (c.status || '') === col).length }}</span></div>
+              <div class="db-col-body">
+                <div
+                  v-for="c in dbChildren.filter(x => (x.status || '') === col)"
+                  :key="c.id"
+                  class="db-card"
+                  draggable="true"
+                  @dragstart="boardDragId = c.id"
+                  @dragend="boardDragId = null"
+                  @click="openPageById(c.id)"
+                >{{ c.title || '无标题' }}</div>
+              </div>
+            </div>
+          </div>
+
+          <div v-else-if="currentPage.view_type === 'calendar'" class="db-cal">
+            <div class="db-cal-head">{{ calendar.label }}</div>
+            <div class="db-cal-grid">
+              <div v-for="d in ['日', '一', '二', '三', '四', '五', '六']" :key="d" class="db-cal-dow">{{ d }}</div>
+              <div v-for="i in calendar.pad" :key="'p' + i" class="db-cal-cell empty"></div>
+              <div v-for="cell in calendar.cells" :key="cell.day" class="db-cal-cell">
+                <div class="db-cal-day">{{ cell.day }}</div>
+                <div v-for="c in cell.items" :key="c.id" class="db-cal-item" @click="openPageById(c.id)">{{ c.title }}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div v-else-if="currentPage" class="editor-wrapper" :class="{ wide: pageWide, small: pageSmall }">
           <div
             v-if="currentPage.cover"
             class="page-cover"
             :class="{ 'is-gradient': coverIsGradient }"
             :style="coverIsGradient ? { background: coverGradientStyle } : {}"
           >
-            <img v-if="!coverIsGradient" :src="currentPage.cover" alt="封面" />
+            <img
+              v-if="!coverIsGradient"
+              :src="currentPage.cover"
+              alt="封面"
+              class="cover-img"
+              :style="{ objectPosition: 'center ' + (currentPage.cover_offset ?? 50) + '%' }"
+              @mousedown="startCoverDrag"
+            />
             <div class="cover-actions">
               <el-button size="small" @click="coverPickerVisible = !coverPickerVisible">更换封面</el-button>
               <el-button size="small" @click="removeCover">移除</el-button>
@@ -532,6 +634,22 @@ import type { UploadFile as ElUploadFile } from 'element-plus'
 import http from '../api/http'
 import TipTapEditor from '../components/TipTapEditor.vue'
 import { useAuthStore } from '../stores/auth'
+import MarkdownIt from 'markdown-it'
+import taskLists from 'markdown-it-task-lists'
+import DOMPurify from 'dompurify'
+import hljs from 'highlight.js'
+
+const exportMd = new MarkdownIt({
+  html: true,
+  linkify: true,
+  typographer: true,
+  highlight(str: string, lang: string) {
+    if (lang && hljs.getLanguage(lang)) {
+      try { return (hljs.highlight(str, { language: lang }) as any).value } catch { /* ignore */ }
+    }
+    return (hljs.highlightAuto(str) as any).value
+  },
+}).use(taskLists, { enabled: false, label: true })
 
 const route = useRoute()
 
@@ -560,6 +678,8 @@ interface Notebook {
   name: string
   description?: string
   embedding_profile_id?: string | null
+  position?: number
+  section?: string
 }
 
 interface EmbeddingProfile {
@@ -574,6 +694,8 @@ interface PageListItem {
   notebook_id: string | null
   parent_id?: string | null
   position?: number
+  view_type?: string
+  status?: string
   updated_at: string
 }
 
@@ -584,8 +706,11 @@ interface Page {
   content: string
   icon?: string
   cover?: string
+  cover_offset?: number
   parent_id?: string | null
   position?: number
+  view_type?: string
+  status?: string
   share_token?: string | null
   updated_at: string
 }
@@ -1259,6 +1384,10 @@ const onPageMenu = (cmd: string) => {
   else if (cmd === 'small') toggleSmall()
   else if (cmd === 'history') openHistory()
   else if (cmd === 'share') openShare()
+  else if (cmd === 'export-html') exportHtml()
+  else if (cmd === 'export-pdf') exportPdf()
+  else if (cmd === 'template') saveAsTemplate()
+  else if (cmd.startsWith('view-')) setViewType(cmd.slice(5))
   else if (cmd === 'delete') deleteCurrent()
 }
 
@@ -1409,6 +1538,177 @@ const deleteComment = async (cid: string) => {
   } catch { ElMessage.error('删除失败') }
 }
 const commentTime = (s: string) => (s ? new Date(s).toLocaleString('zh-CN', { hour12: false }) : '')
+
+// ---------------- 导出 HTML / PDF ----------------
+const buildExportHtml = () => {
+  const title = currentPage.value?.title || '无标题'
+  const body = DOMPurify.sanitize(exportMd.render(currentPage.value?.content || ''), {
+    ADD_TAGS: ['details', 'summary'],
+    ADD_ATTR: ['data-callout', 'data-toggle', 'open', 'target'],
+  })
+  const css = "body{font-family:-apple-system,'PingFang SC','Microsoft YaHei',sans-serif;max-width:820px;margin:0 auto;padding:48px 24px;color:#1f2430;line-height:1.75}"
+    + "h1{font-size:32px}h2{font-size:24px;margin-top:1.2em}h3{font-size:19px}img{max-width:100%;border-radius:10px}"
+    + "pre{background:#282c34;color:#abb2bf;padding:14px 18px;border-radius:10px;overflow:auto}code{font-family:'Fira Code',monospace}"
+    + "blockquote{border-left:3px solid #93c5fd;padding-left:14px;color:#4b5563;background:#f8fafc;margin:12px 0}"
+    + "table{border-collapse:collapse;width:100%}th,td{border:1px solid #e5e7eb;padding:8px 12px}th{background:#f8fafc}"
+    + "mark{background:#fef08a}.callout{border-left:4px solid #3b82f6;background:#eff6ff;padding:12px 16px;border-radius:10px;margin:14px 0}"
+  return `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><title>${title}</title><style>${css}</style></head><body><h1>${title}</h1>${body}</body></html>`
+}
+const exportHtml = () => {
+  if (!currentPage.value) return
+  const blob = new Blob([buildExportHtml()], { type: 'text/html;charset=utf-8' })
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(blob)
+  a.download = (currentPage.value.title || 'note').replace(/[\\/:*?"<>|]/g, '_') + '.html'
+  a.click()
+  URL.revokeObjectURL(a.href)
+}
+const exportPdf = () => {
+  if (!currentPage.value) return
+  const w = window.open('', '_blank')
+  if (!w) { ElMessage.warning('请允许弹出窗口以导出 PDF'); return }
+  w.document.write(buildExportHtml())
+  w.document.close()
+  w.focus()
+  window.setTimeout(() => { w.print() }, 400)
+}
+
+// ---------------- 封面纵向位置 ----------------
+const startCoverDrag = (ev: MouseEvent) => {
+  if (!currentPage.value || coverIsGradient.value) return
+  const startY = ev.clientY
+  const startOffset = currentPage.value.cover_offset ?? 50
+  const h = (ev.currentTarget as HTMLElement).getBoundingClientRect().height || 200
+  const onMove = (e: MouseEvent) => {
+    const delta = ((e.clientY - startY) / h) * 100
+    if (currentPage.value) currentPage.value.cover_offset = Math.max(0, Math.min(100, Math.round(startOffset - delta)))
+  }
+  const onUp = () => {
+    document.removeEventListener('mousemove', onMove)
+    document.removeEventListener('mouseup', onUp)
+    document.body.style.userSelect = ''
+    scheduleSave()
+  }
+  document.body.style.userSelect = 'none'
+  document.addEventListener('mousemove', onMove)
+  document.addEventListener('mouseup', onUp)
+}
+
+// ---------------- 模板库 ----------------
+const templates = ref<{ id: string; name: string; icon: string; content: string; created_at: string }[]>(
+  JSON.parse(localStorage.getItem('rag-templates') || '[]')
+)
+const saveTemplates = () => localStorage.setItem('rag-templates', JSON.stringify(templates.value))
+const saveAsTemplate = async () => {
+  if (!currentPage.value) return
+  let name = currentPage.value.title || '未命名模板'
+  try {
+    const res = await ElMessageBox.prompt('模板名称', '另存为模板', { inputValue: name })
+    name = res.value
+  } catch { return }
+  const id = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now())
+  templates.value = [{ id, name, icon: currentPage.value.icon || '', content: currentPage.value.content || '', created_at: new Date().toISOString() }, ...templates.value]
+  saveTemplates()
+  ElMessage.success('已保存为模板')
+}
+const newFromTemplate = async (t: { name: string; icon: string; content: string }) => {
+  if (!currentNotebook.value) { ElMessage.warning('请先选择笔记本'); return }
+  try {
+    const res = await http.post('/api/pages', { title: t.name, content: t.content, icon: t.icon, notebook_id: currentNotebook.value.id })
+    currentPage.value = res.data
+    await loadTree()
+  } catch { ElMessage.error('创建失败') }
+}
+const deleteTemplate = (id: string) => {
+  templates.value = templates.value.filter(t => t.id !== id)
+  saveTemplates()
+}
+
+// ---------------- 笔记本分组 + 拖拽排序 ----------------
+const notebookGroups = computed(() => {
+  const groups: { section: string; items: Notebook[] }[] = []
+  for (const nb of notebooks.value) {
+    const sec = nb.section || ''
+    let g = groups.find(x => x.section === sec)
+    if (!g) { g = { section: sec, items: [] }; groups.push(g) }
+    g.items.push(nb)
+  }
+  return groups
+})
+const nbDragId = ref<string | null>(null)
+const nbDrop = ref<{ id: string; zone: 'before' | 'after' } | null>(null)
+const onNbDragStart = (nb: Notebook, ev: DragEvent) => {
+  nbDragId.value = nb.id
+  if (ev.dataTransfer) { ev.dataTransfer.effectAllowed = 'move'; ev.dataTransfer.setData('text/plain', nb.id) }
+}
+const onNbDragOver = (nb: Notebook, ev: DragEvent) => {
+  if (!nbDragId.value || nbDragId.value === nb.id) return
+  ev.preventDefault()
+  const rect = (ev.currentTarget as HTMLElement).getBoundingClientRect()
+  nbDrop.value = { id: nb.id, zone: (ev.clientY - rect.top) < rect.height / 2 ? 'before' : 'after' }
+}
+const onNbDrop = async (nb: Notebook, ev: DragEvent) => {
+  ev.preventDefault()
+  const dragId = nbDragId.value
+  const t = nbDrop.value
+  nbDragId.value = null
+  nbDrop.value = null
+  if (!dragId || !t || dragId === nb.id) return
+  const section = nb.section || ''
+  const sameSection = notebooks.value.filter(n => (n.section || '') === section && n.id !== dragId)
+  const idx = sameSection.findIndex(n => n.id === nb.id)
+  const position = t.zone === 'before' ? Math.max(0, idx) : idx + 1
+  try {
+    await http.post(`/api/notebooks/${dragId}/move`, { position, section })
+    await loadNotebooks()
+  } catch { ElMessage.error('移动失败') }
+}
+const onNbDragEnd = () => { nbDragId.value = null; nbDrop.value = null }
+
+// ---------------- 数据库视图(子页面为数据行) ----------------
+const STATUS_OPTIONS = ['待办', '进行中', '完成', '']
+const isDatabase = computed(() => (currentPage.value?.view_type || 'doc') !== 'doc')
+const dbChildren = computed(() =>
+  treeRows.value.filter(r => (r.page.parent_id ?? null) === currentPage.value?.id).map(r => r.page)
+)
+const calendar = computed(() => {
+  const now = new Date()
+  const year = now.getFullYear()
+  const month = now.getMonth()
+  const daysInMonth = new Date(year, month + 1, 0).getDate()
+  const startDay = new Date(year, month, 1).getDay()
+  const cells: { day: number; items: PageListItem[] }[] = []
+  for (let d = 1; d <= daysInMonth; d++) {
+    const items = dbChildren.value.filter(c => {
+      const dt = new Date(c.updated_at)
+      return dt.getFullYear() === year && dt.getMonth() === month && dt.getDate() === d
+    })
+    cells.push({ day: d, items })
+  }
+  return { pad: Array.from({ length: startDay }, (_, i) => i), cells, label: `${year} 年 ${month + 1} 月` }
+})
+const setChildStatus = async (childId: string, status: string) => {
+  try {
+    await http.put(`/api/pages/${childId}`, { status })
+    await loadTree()
+  } catch { ElMessage.error('更新失败') }
+}
+const setViewType = async (vt: string) => {
+  if (!currentPage.value) return
+  try {
+    await http.put(`/api/pages/${currentPage.value.id}/view`, { view_type: vt })
+    currentPage.value.view_type = vt
+  } catch { ElMessage.error('切换视图失败') }
+}
+const addRow = async () => { await createPage(currentPage.value?.id ?? null) }
+const boardDragId = ref<string | null>(null)
+const onBoardDrop = async (status: string, ev: DragEvent) => {
+  ev.preventDefault()
+  const id = boardDragId.value
+  boardDragId.value = null
+  if (!id) return
+  await setChildStatus(id, status)
+}
 
 const reindexCurrentPage = async () => {
   if (!currentPage.value) return
@@ -2535,4 +2835,55 @@ html, body, #app { height: 100%; }
   color: #374151;
   margin: 0;
 }
+
+/* 封面拖动 */
+.cover-img { cursor: grab; }
+.cover-img:active { cursor: grabbing; }
+
+/* 模板 */
+.tpl-list { padding: 0 8px 6px; }
+.page-item.tpl { padding: 5px 8px; }
+.tpl-icon { margin-right: 7px; font-size: 13px; }
+.page-item.tpl .icon-btn { opacity: 0; }
+.page-item.tpl:hover .icon-btn { opacity: 1; }
+
+/* 笔记本拖拽/分组 */
+.side-section.nb-group { padding-top: 10px; color: #59616f; font-weight: 700; }
+.notebook-item.dragging { opacity: 0.5; }
+.notebook-item.nb-drop-before > .notebook-info { box-shadow: inset 0 2px 0 var(--primary, #4f46e5); }
+.notebook-item.nb-drop-after > .notebook-info { box-shadow: inset 0 -2px 0 var(--primary, #4f46e5); }
+
+/* 数据库视图 */
+.db-view { max-width: 1120px; margin: 0 auto; padding: 40px 48px 140px; }
+.db-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; }
+.db-title { font-size: 26px; font-weight: 700; color: #37352f; }
+.db-head-actions { display: flex; align-items: center; gap: 6px; }
+.db-table { border: 1px solid #eceef2; border-radius: 12px; overflow: hidden; }
+.db-row {
+  display: grid;
+  grid-template-columns: 1fr 150px 180px;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid #f2f2f0;
+}
+.db-row:last-child { border-bottom: none; }
+.db-row-head { background: #f8f9fc; font-size: 12px; color: #9b9a97; font-weight: 600; }
+.db-link { color: #37352f; cursor: pointer; }
+.db-link:hover { color: #4f46e5; text-decoration: underline; }
+.db-c-time { font-size: 12px; color: #9b9a97; }
+.db-board { display: flex; gap: 14px; align-items: flex-start; overflow-x: auto; }
+.db-col { flex: 1 1 0; min-width: 200px; background: #f7f7f5; border-radius: 12px; padding: 10px; }
+.db-col-head { display: flex; justify-content: space-between; font-size: 13px; font-weight: 600; color: #59616f; margin-bottom: 8px; padding: 0 4px; }
+.db-col-count { color: #9b9a97; }
+.db-col-body { min-height: 40px; }
+.db-card { background: #fff; border: 1px solid #eceef2; border-radius: 8px; padding: 8px 10px; margin-bottom: 6px; font-size: 13px; color: #37352f; cursor: pointer; }
+.db-card:hover { border-color: #cdcbf8; }
+.db-cal-head { font-size: 15px; font-weight: 600; color: #37352f; margin-bottom: 10px; }
+.db-cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
+.db-cal-dow { text-align: center; font-size: 12px; color: #9b9a97; padding: 4px 0; }
+.db-cal-cell { min-height: 78px; border: 1px solid #f0f0ef; border-radius: 8px; padding: 4px 6px; font-size: 11px; overflow: hidden; }
+.db-cal-cell.empty { border: none; }
+.db-cal-day { color: #b9b9b6; margin-bottom: 2px; }
+.db-cal-item { background: #eef0ff; color: #4f46e5; border-radius: 5px; padding: 1px 5px; margin-bottom: 2px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 </style>

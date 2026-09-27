@@ -20,6 +20,9 @@ class Notebook(Base):
     name = Column(String(255), nullable=False)
     description = Column(Text, default='')
     group_id = Column(String(255), nullable=True, index=True)
+    # 侧边栏排序位次与分组名(用户自定义)
+    position = Column(Integer, default=0)
+    section = Column(String(128), default='')
     # 该笔记本使用的嵌入模型档案;NULL 表示使用系统默认档案
     embedding_profile_id = Column(String(36), nullable=True, index=True)
     created_at = Column(DateTime, default=datetime.now)
@@ -36,6 +39,12 @@ class Page(Base):
     # 页面图标(emoji)与封面图 URL/渐变(Notion 风格)
     icon = Column(String(32), default='')
     cover = Column(Text, default='')
+    # 封面纵向位置(0-100, 百分比)
+    cover_offset = Column(Integer, default=50)
+    # 视图类型: doc(文档) | table | board | calendar —— 非 doc 时把子页面作为数据行展示
+    view_type = Column(String(16), default='doc')
+    # 子页面作为数据行时的状态字段
+    status = Column(String(32), default='')
     # 页面树: 父页面 + 同级排序位次
     parent_id = Column(String(36), ForeignKey('pages.id', ondelete='SET NULL'), nullable=True, index=True)
     position = Column(Integer, default=0)
@@ -403,6 +412,21 @@ def _backfill_text_defaults(engine):
             ))
             conn.execute(sqlalchemy_text(
                 "UPDATE pages SET position = 0 WHERE position IS NULL"
+            ))
+            conn.execute(sqlalchemy_text(
+                "UPDATE pages SET cover_offset = 50 WHERE cover_offset IS NULL"
+            ))
+            conn.execute(sqlalchemy_text(
+                "UPDATE pages SET status = '' WHERE status IS NULL"
+            ))
+            conn.execute(sqlalchemy_text(
+                "UPDATE pages SET view_type = 'doc' WHERE view_type IS NULL"
+            ))
+            conn.execute(sqlalchemy_text(
+                "UPDATE notebooks SET position = 0 WHERE position IS NULL"
+            ))
+            conn.execute(sqlalchemy_text(
+                "UPDATE notebooks SET section = '' WHERE section IS NULL"
             ))
     except Exception:
         logger.warning("回填文本列默认值失败", exc_info=True)

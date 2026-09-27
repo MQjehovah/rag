@@ -204,6 +204,29 @@
       </div>
     </Teleport>
 
+    <!-- @ 用户提及 -->
+    <Teleport to="body">
+      <div
+        v-if="userMention.open && userMention.items.length"
+        class="slash-menu"
+        :style="{ top: userMention.y + 'px', left: userMention.x + 'px' }"
+        @mousedown.prevent
+      >
+        <div class="slash-header">提及用户</div>
+        <div
+          v-for="(item, i) in userMention.items"
+          :key="item.id"
+          class="slash-item"
+          :class="{ active: i === userMention.index }"
+          @mouseenter="userMention.index = i"
+          @click="pickUser(i)"
+        >
+          <span class="slash-icon">@</span>
+          <span class="slash-text"><span class="slash-title">{{ item.name }}</span></span>
+        </div>
+      </div>
+    </Teleport>
+
     <!-- 拖拽落点指示线 -->
     <div v-if="drag.active && drag.toIndex >= 0" class="drop-indicator" :style="dragIndicatorStyle"></div>
 
@@ -502,6 +525,77 @@ const PageMention = Extension.create({
   },
 })
 
+// ---------------- @ 用户提及 ----------------
+const userMention = reactive({ open: false, items: [] as { id: string; name: string }[], index: 0, x: 0, y: 0 })
+let userMentionCommand: ((item: { id: string; name: string }) => void) | null = null
+let userList: { id: string; name: string }[] = []
+let userLoaded = false
+
+async function ensureUsers() {
+  if (userLoaded) return
+  try {
+    const res = await http.get('/api/auth/users')
+    userList = (res.data || []).map((u: any) => ({ id: u.id, name: u.display_name || u.username }))
+    userLoaded = true
+  } catch { /* ignore */ }
+}
+function pickUser(i: number) {
+  const item = userMention.items[i]
+  if (item && userMentionCommand) userMentionCommand(item)
+  userMention.open = false
+}
+
+const UserMention = Extension.create({
+  name: 'userMention',
+  addProseMirrorPlugins() {
+    return [
+      Suggestion({
+        editor: this.editor,
+        pluginKey: new PluginKey('userMentionSuggestion'),
+        char: '@',
+        startOfLine: false,
+        allowSpaces: false,
+        items: async ({ query }: { query: string }) => {
+          await ensureUsers()
+          const q = (query || '').trim().toLowerCase()
+          if (!q) return userList.slice(0, 20)
+          return userList.filter(u => u.name.toLowerCase().includes(q)).slice(0, 20)
+        },
+        command: ({ editor, range, props: item }: any) => {
+          editor.chain().focus().deleteRange(range).insertContent({ type: 'text', text: `@${item.name}` }).run()
+        },
+        render: () => ({
+          onStart: (p: any) => {
+            userMention.items = p.items || []
+            userMention.index = 0
+            userMention.open = userMention.items.length > 0
+            userMentionCommand = (it: any) => p.command(it)
+            const rect = p.clientRect?.()
+            if (rect) { userMention.x = rect.left; userMention.y = rect.bottom + 6 }
+          },
+          onUpdate: (p: any) => {
+            userMention.items = p.items || []
+            userMention.index = 0
+            userMention.open = userMention.items.length > 0
+            userMentionCommand = (it: any) => p.command(it)
+            const rect = p.clientRect?.()
+            if (rect) { userMention.x = rect.left; userMention.y = rect.bottom + 6 }
+          },
+          onKeyDown: (p: any) => {
+            if (!userMention.open || !userMention.items.length) return false
+            if (p.event.key === 'ArrowDown') { userMention.index = (userMention.index + 1) % userMention.items.length; return true }
+            if (p.event.key === 'ArrowUp') { userMention.index = (userMention.index - 1 + userMention.items.length) % userMention.items.length; return true }
+            if (p.event.key === 'Enter') { pickUser(userMention.index); return true }
+            if (p.event.key === 'Escape') { userMention.open = false; return true }
+            return false
+          },
+          onExit: () => { userMention.open = false },
+        }),
+      }),
+    ]
+  },
+})
+
 const editor = useEditor({
   extensions: [
     StarterKit.configure({ codeBlock: false, history: props.collab ? false : undefined }),
@@ -600,6 +694,7 @@ const editor = useEditor({
     ...collabExtensions,
     SlashCommand,
     PageMention,
+    UserMention,
     Markdown.configure({ html: true, breaks: true, linkify: true }),
   ],
   content: props.modelValue,

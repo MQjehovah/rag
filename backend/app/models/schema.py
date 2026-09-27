@@ -10,18 +10,26 @@ class NotebookCreate(NotebookBase):
     group_id: Optional[str] = None
     description: str = ''
     embedding_profile_id: Optional[str] = None
+    section: str = ''
 
 class NotebookUpdate(BaseModel):
     name: Optional[str] = None
     group_id: Optional[str] = None
     description: Optional[str] = None
     embedding_profile_id: Optional[str] = None
+    section: Optional[str] = None
+
+class NotebookMove(BaseModel):
+    position: int = 0
+    section: Optional[str] = None
 
 class NotebookResponse(NotebookBase):
     id: str
     group_id: Optional[str] = None
     description: str = ''
     embedding_profile_id: Optional[str] = None
+    position: int = 0
+    section: str = ''
     created_at: datetime
     updated_at: datetime
 
@@ -125,6 +133,7 @@ class PageBase(BaseModel):
     notebook_id: Optional[str] = None
     icon: str = ''
     cover: str = ''
+    cover_offset: int = 50
     parent_id: Optional[str] = None
 
 class PageCreate(PageBase):
@@ -136,10 +145,15 @@ class PageUpdate(BaseModel):
     notebook_id: Optional[str] = None
     icon: Optional[str] = None
     cover: Optional[str] = None
+    cover_offset: Optional[int] = None
+    status: Optional[str] = None
 
 class PageMove(BaseModel):
     parent_id: Optional[str] = None
     position: int = 0
+
+class PageViewUpdate(BaseModel):
+    view_type: str = 'doc'
 
 class CommentCreate(BaseModel):
     content: str = ''
@@ -148,10 +162,13 @@ class PageResponse(PageBase):
     id: str
     position: int = 0
     share_token: Optional[str] = None
+    cover_offset: int = 50
+    view_type: str = 'doc'
+    status: str = ''
     created_at: datetime
     updated_at: datetime
 
-    @field_validator('icon', 'cover', mode='before')
+    @field_validator('icon', 'cover', 'view_type', 'status', mode='before')
     @classmethod
     def _coerce_text(cls, v):
         return v or ''
