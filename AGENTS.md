@@ -52,7 +52,8 @@ docker compose --profile pg up -d --build backend frontend
 - **Agentic chat** (`app/api/chat.py`): history-aware query rewrite, multi-hop sufficiency judging, and a **GraphRAG global fallback** that searches `graph_communities` when local results are insufficient.
 - **LLM Wiki** (`app/core/wiki.py`): per-note incremental ingest (concurrent, merge-aware so human edits survive), `wiki_pages` table, admin rebuild endpoint. Note saves auto-refresh linked wiki pages (60s throttle) via `pages.py`.
 - **GraphRAG** (`app/core/graphrag.py`): Louvain community detection over `graph_entity_edges`, LLM community summaries with embeddings, `search_communities()` for global Q&A.
-- **Frontend**: routes `/` (Chat), `/notes` (Editor), `/graph` (KnowledgeGraph), `/wiki` (Wiki), `/pipelines` (Pipelines), `/embeddings` (Embeddings). Routes defined inline in `main.ts` — `router/index.ts` is dead code. Notebook embedding model is chosen in Editor's notebook "设置" dialog; profile list is visible to all users but only admins can edit (api_key is masked for non-admins).
+- **Frontend**: routes `/` (Chat), `/notes` (Editor), `/graph` (KnowledgeGraph), `/wiki` (Wiki), `/pipelines` (Pipelines), `/embeddings` (Embeddings). Routes defined inline in `main.ts` — `router/index.ts` is dead code. Notebook embedding model is chosen in Editor's notebook "设置" dialog; profile list is visible to all users but only admins can edit (api_key is masked for non-admins). There is no "未分类/unassigned" section (removed).
+- **Editor** (`components/TipTapEditor.vue`): Notion-style TipTap editor — slash `/` insert menu (`@tiptap/suggestion`), selection bubble toolbar, task lists, links, underline, highlight, text-align, typography, character count, plus tables / code-block-lowlight / mermaid / paste-drop image upload. Content is stored/serialized as Markdown via `tiptap-markdown` (`editor.storage.markdown.getMarkdown()`).
 
 ## Key Gotchas
 

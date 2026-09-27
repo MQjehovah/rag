@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from typing import Any, Dict, List, Optional
 from datetime import datetime
 
@@ -24,6 +24,12 @@ class NotebookResponse(NotebookBase):
     embedding_profile_id: Optional[str] = None
     created_at: datetime
     updated_at: datetime
+
+    @field_validator('description', mode='before')
+    @classmethod
+    def _coerce_description(cls, v):
+        # 历史行在迁移补列后 description 可能为 NULL,统一归一为空串
+        return v or ''
 
     class Config:
         from_attributes = True

@@ -353,9 +353,21 @@ def _ensure_wiki_embedding_column(engine):
 
 
 
+def _backfill_text_defaults(engine):
+    """补齐迁移新增的文本列在历史行上的 NULL(否则响应模型校验失败)。"""
+    try:
+        with engine.begin() as conn:
+            conn.execute(sqlalchemy_text(
+                "UPDATE notebooks SET description = '' WHERE description IS NULL"
+            ))
+    except Exception:
+        logger.warning("回填 notebooks.description 失败", exc_info=True)
+
+
 def init_db(engine):
     Base.metadata.create_all(engine)
     _migrate_schema(engine)
+    _backfill_text_defaults(engine)
     _ensure_wiki_group_index(engine)
 
     try:

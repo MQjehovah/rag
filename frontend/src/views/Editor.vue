@@ -110,37 +110,7 @@
             </div>
           </div>
 
-          <div class="notebook-item" :class="{ active: currentNotebook?.id === '__unassigned__' }">
-            <div class="notebook-info" @click="selectUnassigned">
-               <span class="notebook-icon">📋</span>
-              <span class="notebook-name">未分类</span>
-              <el-tag size="small" type="info" v-if="unassignedCount > 0">{{ unassignedCount }}</el-tag>
-            </div>
-            <div v-if="currentNotebook?.id === '__unassigned__'" class="page-list">
-              <div
-                v-for="page in unassignedPages"
-                :key="page.id"
-                class="page-item"
-                :class="{ active: currentPage?.id === page.id }"
-              >
-                <div class="page-info" @click="selectPage(page)">
-                   <span class="page-icon">📝</span>
-                  <span class="page-title">{{ page.title || '无标题' }}</span>
-                </div>
-                <el-dropdown trigger="click" @command="(cmd: string) => handlePageCmd(cmd, page)">
-                  <el-button size="small" text class="page-menu-btn">⋮</el-button>
-                  <template #dropdown>
-                    <el-dropdown-menu>
-                      <el-dropdown-item command="index">重新索引</el-dropdown-item>
-                      <el-dropdown-item command="delete" divided>删除</el-dropdown-item>
-                    </el-dropdown-menu>
-                  </template>
-                </el-dropdown>
-              </div>
-            </div>
-          </div>
-
-          <div v-if="notebooks.length === 0 && unassignedCount === 0" class="empty-tip">
+          <div v-if="notebooks.length === 0" class="empty-tip">
             暂无笔记本
           </div>
         </div>
@@ -373,8 +343,6 @@ const totalPages = ref(0)
 const pageSize = 50
 
 const hasMorePages = ref(false)
-const unassignedPages = ref<PageListItem[]>([])
-const unassignedCount = ref(0)
 const tagOptions = ref<{ tag: string; count: number }[]>([])
 const activeTag = ref('')
 const tagPages = ref<PageListItem[]>([])
@@ -397,28 +365,10 @@ watch(activeTag, async (tag) => {
   } catch { /* ignore */ }
 })
 
-const loadUnassignedPages = async () => {
-  try {
-    const res = await http.get('/api/pages', { params: { unassigned: true, page: 1, page_size: 50 } })
-    unassignedPages.value = res.data.items
-    unassignedCount.value = res.data.total
-  } catch { /* ignore */ }
-}
-
-const selectUnassigned = async () => {
-  if (currentNotebook.value?.id === '__unassigned__') {
-    currentNotebook.value = null
-    return
-  }
-  currentNotebook.value = { id: '__unassigned__', name: '未分类' }
-  await loadUnassignedPages()
-}
-
 const loadNotebooks = async () => {
   try {
     const res = await http.get('/api/notebooks')
     notebooks.value = res.data.notebooks
-    unassignedCount.value = res.data.unassigned_count
   } catch (e) {
     ElMessage.error('加载笔记本失败')
   }
@@ -566,13 +516,7 @@ const openPageById = async (pageId: string) => {
       if (nb) {
         currentNotebook.value = nb
         loadPages(true)
-      } else {
-        currentNotebook.value = { id: '__unassigned__', name: '未分类' }
-        loadUnassignedPages()
       }
-    } else {
-      currentNotebook.value = { id: '__unassigned__', name: '未分类' }
-      loadUnassignedPages()
     }
   } catch (e: any) {
     if (seq !== pageLoadSeq) return
@@ -633,7 +577,6 @@ const handlePageCmd = async (cmd: string, page: PageListItem) => {
       if (currentPage.value?.id === page.id) {
         currentPage.value = null
       }
-      loadUnassignedPages()
     } catch {
       ElMessage.error('删除失败')
     }
