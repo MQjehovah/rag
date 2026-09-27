@@ -1,28 +1,21 @@
 <template>
-  <div class="app-container">
-    <!-- Header -->
-    <header class="app-header">
-      <div class="search-box">
-        <el-input v-model="searchQuery" placeholder="搜索笔记..." @keyup.enter="doSearch">
-          <template #append>
-            <el-button @click="doSearch">搜索</el-button>
-          </template>
-        </el-input>
-      </div>
-      <div class="header-actions">
-        <el-tag type="success" v-if="saveStatus === 'saved'">已保存</el-tag>
-        <el-tag type="warning" v-else-if="saveStatus === 'saving'">保存中...</el-tag>
-        <el-button @click="importDialogVisible = true">导入知识</el-button>
-        <el-button :loading="organizing" @click="handleOrganize">{{ organizing ? '整理中...' : '自动整理' }}</el-button>
-        <el-button type="primary" @click="showNewNotebook = true">新建笔记本</el-button>
-      </div>
-    </header>
-
+  <div class="app-container" :class="{ 'sidebar-collapsed': sidebarCollapsed }">
     <div class="app-body">
       <!-- 侧边栏 -->
       <aside class="sidebar">
-        <div class="sidebar-header">
-          <span>笔记本</span>
+        <div class="ws-head">
+          <span class="ws-badge">R</span>
+          <span class="ws-name">我的笔记</span>
+          <button class="icon-btn" title="收起侧边栏" @click="sidebarCollapsed = true">«</button>
+        </div>
+
+        <div class="side-search">
+          <el-input v-model="searchQuery" placeholder="搜索笔记..." clearable @keyup.enter="doSearch" />
+        </div>
+
+        <div class="side-section">
+          <span class="side-section-label">笔记本</span>
+          <button class="icon-btn" title="新建笔记本" @click="showNewNotebook = true">＋</button>
         </div>
 
         <div class="tag-filter">
@@ -54,7 +47,7 @@
               @click="selectPage(page)"
             >
               <div class="page-info">
-                <span class="page-icon">📄</span>
+                <span class="page-dot"></span>
                 <span class="page-title">{{ page.title || '无标题' }}</span>
               </div>
             </div>
@@ -67,7 +60,8 @@
             :class="{ active: currentNotebook?.id === nb.id }"
           >
             <div class="notebook-info" @click="selectNotebook(nb)">
-               <span class="notebook-icon">📂</span>
+              <span class="nb-chevron" :class="{ open: currentNotebook?.id === nb.id }">›</span>
+              <span class="notebook-icon">📁</span>
               <span class="notebook-name">{{ nb.name }}</span>
               <el-dropdown trigger="click" @command="(cmd: string) => handleNotebookCmd(cmd, nb)">
                 <el-button size="small" text>⋮</el-button>
@@ -88,7 +82,7 @@
                 :class="{ active: currentPage?.id === page.id }"
               >
                 <div class="page-info" @click="selectPage(page)">
-                   <span class="page-icon">📝</span>
+                  <span class="page-dot"></span>
                   <span class="page-title">{{ page.title || '无标题' }}</span>
                 </div>
                 <el-dropdown trigger="click" @command="(cmd: string) => handlePageCmd(cmd, page)">
@@ -118,6 +112,23 @@
 
       <!-- 主编辑区 -->
       <main class="main-content">
+        <div class="doc-topbar">
+          <button v-if="sidebarCollapsed" class="icon-btn expand" title="展开侧边栏" @click="sidebarCollapsed = false">»</button>
+          <div class="crumb">
+            <span class="crumb-nb">{{ currentNotebook?.name || '未选择笔记本' }}</span>
+            <template v-if="currentPage">
+              <span class="crumb-sep">/</span>
+              <span class="crumb-page">{{ currentPage.title || '无标题' }}</span>
+            </template>
+          </div>
+          <div class="topbar-actions">
+            <span class="save-badge" :class="saveStatus">{{ saveStatus === 'saved' ? '已保存' : saveStatus === 'saving' ? '保存中…' : '未保存' }}</span>
+            <el-button size="small" @click="importDialogVisible = true">导入</el-button>
+            <el-button size="small" :loading="organizing" @click="handleOrganize">{{ organizing ? '整理中…' : '自动整理' }}</el-button>
+            <el-button size="small" type="primary" @click="showNewNotebook = true">新建</el-button>
+          </div>
+        </div>
+        <div class="doc-scroll">
         <div v-if="currentPage" class="editor-wrapper">
           <div v-if="currentPage.cover" class="page-cover">
             <img :src="currentPage.cover" alt="封面" />
@@ -161,8 +172,10 @@
           </div>
         </div>
         <div v-else class="empty-state">
-          <h2>欢迎使用笔记系统</h2>
-          <p>选择左侧笔记本或创建新笔记本</p>
+          <div class="empty-emoji">📝</div>
+          <h2>开始记录你的知识</h2>
+          <p>从左侧选择一个笔记本，或新建一个</p>
+        </div>
         </div>
       </main>
     </div>
@@ -359,6 +372,7 @@ const currentPage = ref<Page | null>(null)
 const saveStatus = ref<'saved' | 'saving' | 'unsaved'>('saved')
 
 const searchQuery = ref('')
+const sidebarCollapsed = ref(false)
 const showNewNotebook = ref(false)
 const newNotebookName = ref('')
 const profiles = ref<EmbeddingProfile[]>([])
@@ -1309,14 +1323,213 @@ html, body, #app { height: 100%; }
   font-weight: 500;
 }
 .add-page:hover { background: var(--primary-weak, #eef0ff); }
+/* ================= Notion 风格 ================= */
+.app-container { background: #fff; }
+.app-body { height: 100%; }
+
+/* 侧边栏 */
+.sidebar {
+  width: 260px;
+  flex: 0 0 auto;
+  background: #f7f7f5;
+  border-right: 1px solid #ececea;
+  transition: width 0.18s ease, opacity 0.18s ease;
+}
+.app-container.sidebar-collapsed .sidebar {
+  width: 0;
+  opacity: 0;
+  border-right: none;
+  overflow: hidden;
+}
+.ws-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 10px 10px;
+}
+.ws-badge {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  background: linear-gradient(135deg, #6366f1, #4f46e5);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+}
+.ws-name { font-weight: 600; font-size: 14px; color: #37352f; flex: 1; }
+.icon-btn {
+  border: none;
+  background: transparent;
+  color: #9b9a97;
+  cursor: pointer;
+  border-radius: 6px;
+  min-width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  transition: background 0.12s, color 0.12s;
+}
+.icon-btn:hover { background: #ebebe9; color: #37352f; }
+.icon-btn.expand { margin-right: 4px; }
+.side-search { padding: 0 10px 8px; }
+.side-search :deep(.el-input__wrapper) {
+  background: #fff;
+  border: 1px solid #e9e9e7;
+  box-shadow: none;
+  border-radius: 6px;
+}
+.side-search :deep(.el-input__wrapper.is-focus) { border-color: #d3d3d0; background: #fff; }
+.side-search :deep(.el-input__inner) { color: #37352f; }
+.side-section {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px 2px 12px;
+}
+.side-section-label { font-size: 12px; font-weight: 600; color: #9b9a97; }
+.tag-filter { padding: 0 10px 8px; border-bottom: none; }
+.tag-filter :deep(.el-select__wrapper) { background: #fff; box-shadow: none; border: 1px solid #e9e9e7; }
+.notebook-list { padding: 2px 8px 12px; }
+.notebook-list::-webkit-scrollbar-thumb { background: #dededb; }
+.notebook-item { margin-bottom: 1px; }
+.notebook-info { padding: 6px 8px; border-radius: 6px; gap: 0; }
+.notebook-info:hover { background: #ebebe9; }
+.notebook-item.active > .notebook-info { background: #e8e8e6; color: #37352f; }
+.notebook-info .el-button { color: #b9b9b6; }
+.nb-chevron {
+  width: 14px;
+  color: #b9b9b6;
+  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.15s;
+}
+.nb-chevron.open { transform: rotate(90deg); }
+.notebook-icon { font-size: 14px; margin: 0 7px 0 3px; }
+.notebook-name { font-weight: 500; font-size: 14px; color: #37352f; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.page-list { padding-left: 0; margin-left: 18px; border-left: 1px solid #e9e9e7; }
+.page-item { padding: 5px 8px; border-radius: 6px; margin: 0; }
+.page-item:hover { background: #ebebe9; }
+.page-item.active { background: #e8e8e6; }
+.page-info { gap: 0; }
+.page-icon { display: none; }
+.page-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #c9c9c5;
+  margin: 0 9px 0 6px;
+  flex: 0 0 auto;
+}
+.page-item.active .page-dot { background: #37352f; }
+.page-title { font-size: 14px; color: #37352f; }
+.page-item.active .page-title { color: #37352f; font-weight: 500; }
+.page-menu-btn { color: #b9b9b6; }
+.add-page { color: #9b9a97; font-size: 13px; }
+.add-page:hover { background: #ebebe9; color: #37352f; }
+.empty-tip { color: #9b9a97; padding: 24px 16px; }
+
+/* 主区 */
 .main-content {
-  padding: 24px 32px 40px;
-  background: var(--bg, #f6f7fb);
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  padding: 0;
+  overflow: hidden;
 }
+.doc-topbar {
+  height: 45px;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 16px;
+  border-bottom: 1px solid #f0f0ef;
+  background: rgba(255, 255, 255, 0.9);
+  backdrop-filter: blur(6px);
+  position: relative;
+  z-index: 5;
+}
+.crumb { display: flex; align-items: center; gap: 7px; font-size: 13px; min-width: 0; flex: 1; }
+.crumb-nb { color: #37352f; font-weight: 500; white-space: nowrap; }
+.crumb-sep { color: #d3d3d0; }
+.crumb-page { color: #9b9a97; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.topbar-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+.topbar-actions :deep(.el-button) { height: 30px; }
+.save-badge { font-size: 12px; color: #9b9a97; }
+.save-badge.saving { color: #f59e0b; }
+.save-badge.unsaved { color: #ef4444; }
+.doc-scroll { flex: 1; overflow-y: auto; background: #fff; }
+.doc-scroll::-webkit-scrollbar-thumb { background: #e0e0de; }
+
+/* 页面主体(无卡片,全宽白纸) */
 .editor-wrapper {
-  max-width: 880px;
-  border-radius: var(--radius-lg, 14px);
-  border: 1px solid var(--border, #e6e8f0);
-  box-shadow: var(--shadow, 0 4px 16px rgba(16, 24, 40, 0.07));
+  max-width: 780px;
+  margin: 0 auto;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  border-radius: 0;
+  min-height: auto;
+  padding: 54px 96px 180px;
+  position: relative;
 }
+.page-cover {
+  margin: -54px -96px 22px;
+  height: 210px;
+  border-radius: 0;
+}
+.title-row { gap: 6px; align-items: flex-start; }
+.page-icon-btn {
+  width: auto;
+  height: auto;
+  padding: 2px 4px;
+  margin-top: 4px;
+  border-radius: 8px;
+  font-size: 42px;
+  line-height: 1;
+}
+.page-icon { font-size: 42px; }
+.page-icon-add { font-size: 24px; color: #d3d3d0; }
+.title-input {
+  font-size: 40px;
+  font-weight: 700;
+  color: #37352f;
+  letter-spacing: -0.02em;
+  padding: 2px 0 6px;
+  margin-bottom: 6px;
+  line-height: 1.2;
+}
+.title-input::placeholder { color: #d8d8d5; }
+.cover-add { color: #b9b9b6; }
+.editor-body { min-height: 300px; }
+.editor-footer {
+  margin-top: 20px;
+  padding-top: 12px;
+  border-top: 1px solid #f2f2f0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.editor-hint { color: #b9b9b6; font-size: 12px; }
+.empty-state {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: #9b9a97;
+}
+.empty-emoji { font-size: 52px; margin-bottom: 14px; opacity: 0.85; }
+.empty-state h2 { font-size: 20px; font-weight: 600; color: #37352f; margin-bottom: 6px; }
+.empty-state p { font-size: 14px; color: #9b9a97; }
 </style>
