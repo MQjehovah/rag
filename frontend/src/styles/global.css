@@ -1,18 +1,22 @@
-/* 全局设计系统: 设计变量 + Element Plus 覆写 + 滚动条 + 基础排版 */
+/* ==========================================================================
+   企业知识库设计系统 (参考 Outline / Docmost / Wiki.js 的中性色与信息层级)
+   —— 亮色为主, html.dark 切换深色; 令牌驱动, 全站统一。
+   ========================================================================== */
 :root {
-  --bg: #f6f7fb;
+  --bg: #f7f8fa;
   --surface: #ffffff;
-  --surface-2: #f2f4f9;
-  --surface-3: #eceff6;
-  --border: #e6e8f0;
-  --border-strong: #d8dce8;
-  --text: #1f2430;
-  --text-2: #59616f;
-  --text-3: #8b93a4;
+  --surface-2: #f3f4f7;
+  --surface-3: #eceef2;
+  --surface-hover: #f0f1f5;
+  --border: #e5e7ec;
+  --border-strong: #d3d7df;
+  --text: #1a1d23;
+  --text-2: #565d6b;
+  --text-3: #8b93a3;
   --primary: #4f46e5;
   --primary-hover: #4338ca;
   --primary-weak: #eef0ff;
-  --primary-weak-2: #e3e6ff;
+  --primary-weak-2: #e0e3ff;
   --success: #10b981;
   --warning: #f59e0b;
   --danger: #ef4444;
@@ -21,7 +25,7 @@
   --radius-lg: 14px;
   --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.05);
   --shadow: 0 4px 16px rgba(16, 24, 40, 0.07);
-  --shadow-lg: 0 16px 40px rgba(16, 24, 40, 0.12);
+  --shadow-lg: 0 18px 44px rgba(16, 24, 40, 0.14);
 
   /* Element Plus 主题映射 */
   --el-color-primary: #4f46e5;
@@ -29,108 +33,212 @@
   --el-color-primary-light-5: #a5a1f4;
   --el-color-primary-light-7: #cdcbf8;
   --el-color-primary-light-8: #deddfa;
-  --el-color-primary-light-9: #eeeffd;
+  --el-color-primary-light-9: #eef0ff;
   --el-color-primary-dark-2: #4338ca;
   --el-border-radius-base: 8px;
-  --el-text-color-primary: #1f2430;
-  --el-text-color-regular: #3d4658;
-  --el-border-color: #e6e8f0;
-  --el-border-color-light: #eceef4;
-  --el-fill-color-light: #f2f4f9;
+  --el-text-color-primary: #1a1d23;
+  --el-text-color-regular: #3d4553;
+  --el-border-color: #e5e7ec;
+  --el-border-color-light: #eceef2;
+  --el-fill-color-light: #f3f4f7;
 }
 
-html,
-body,
-#app {
-  height: 100%;
+html.dark {
+  color-scheme: dark;
+  --bg: #0f1115;
+  --surface: #171a20;
+  --surface-2: #1d222b;
+  --surface-3: #252c37;
+  --surface-hover: #20262f;
+  --border: #2b323d;
+  --border-strong: #3a4351;
+  --text: #e7ebf2;
+  --text-2: #a8b0be;
+  --text-3: #78828f;
+  --primary: #8b86f0;
+  --primary-hover: #a09cf5;
+  --primary-weak: #20244a;
+  --primary-weak-2: #2a2f5e;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 20px 48px rgba(0, 0, 0, 0.55);
+
+  --el-color-primary: #8b86f0;
+  --el-color-primary-light-3: #6f6ad9;
+  --el-color-primary-light-5: #55519e;
+  --el-color-primary-light-7: #3b3a74;
+  --el-color-primary-light-8: #2c2c56;
+  --el-color-primary-light-9: #20244a;
+  --el-color-primary-dark-2: #a09cf5;
+  --el-bg-color: #171a20;
+  --el-bg-color-page: #0f1115;
+  --el-bg-color-overlay: #1d222b;
+  --el-text-color-primary: #e7ebf2;
+  --el-text-color-regular: #c3cad6;
+  --el-text-color-secondary: #a8b0be;
+  --el-border-color: #2b323d;
+  --el-border-color-light: #2b323d;
+  --el-border-color-lighter: #252b34;
+  --el-fill-color-light: #1d222b;
+  --el-fill-color-blank: #171a20;
 }
+
+html, body, #app { height: 100%; }
 
 body {
   background: var(--bg);
   color: var(--text);
   font-size: 14px;
+  -webkit-font-smoothing: antialiased;
 }
 
 /* 滚动条 */
-::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-}
-::-webkit-scrollbar-thumb {
-  background: #d6dae4;
-  border-radius: 6px;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: #c3c8d6;
-}
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-* {
-  scrollbar-width: thin;
-  scrollbar-color: #d6dae4 transparent;
+::-webkit-scrollbar { width: 9px; height: 9px; }
+::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 6px; border: 2px solid transparent; background-clip: padding-box; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-3); background-clip: padding-box; }
+::-webkit-scrollbar-track { background: transparent; }
+* { scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
+
+/* Element Plus 统一 */
+.el-button { border-radius: 8px; font-weight: 500; }
+.el-button--primary { --el-button-hover-bg-color: var(--primary-hover); --el-button-hover-border-color: var(--primary-hover); }
+.el-input__wrapper, .el-textarea__inner, .el-select__wrapper { border-radius: 8px; }
+.el-card, .el-dialog { border-radius: var(--radius-lg); }
+.el-dialog__header { font-weight: 600; }
+.el-table th.el-table__cell { background: var(--surface-2); color: var(--text-2); font-weight: 600; }
+.el-table { --el-table-border-color: var(--border); }
+.el-tag { border-radius: 6px; }
+.el-dropdown-menu, .el-select-dropdown, .el-message, .el-popover { border-radius: 10px; }
+.el-drawer { border-radius: 14px 0 0 14px; }
+.el-empty__description p { color: var(--text-3); }
+
+:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 4px; }
+.el-button, .el-input__wrapper, .el-dropdown-menu__item, .nav-link { transition: background-color 0.15s, color 0.15s, border-color 0.15s; }
+
+/* ==========================================================================
+   深色主题对各页面自定义容器的适配
+   (这些类多为 scoped 样式, html.dark 选择器特异性更高, 可覆盖; 稳妥处加 !important)
+   ========================================================================== */
+html.dark .main-content,
+html.dark .doc-scroll,
+html.dark .editor-wrapper,
+html.dark .db-view,
+html.dark .chat-page,
+html.dark .wiki-main,
+html.dark .wiki-content-card,
+html.dark .sources-page,
+html.dark .graph-page,
+html.dark .page,
+html.dark .outline-panel,
+html.dark .comments-panel {
+  background: var(--surface) !important;
+  color: var(--text);
 }
 
-/* Element Plus 组件圆角/质感统一 */
-.el-button {
-  border-radius: 8px;
-  font-weight: 500;
-}
-.el-button--primary {
-  --el-button-hover-bg-color: var(--primary-hover);
-  --el-button-hover-border-color: var(--primary-hover);
-}
-.el-input__wrapper,
-.el-textarea__inner,
-.el-select__wrapper {
-  border-radius: 8px;
-}
-.el-card,
-.el-dialog {
-  border-radius: var(--radius-lg);
-}
-.el-dialog__header {
-  font-weight: 600;
-}
-.el-table th.el-table__cell {
-  background: var(--surface-2);
-  color: var(--text-2);
-  font-weight: 600;
-}
-.el-table {
-  --el-table-border-color: var(--border);
-}
-.el-tag {
-  border-radius: 6px;
-}
-.el-dropdown-menu,
-.el-select-dropdown {
-  border-radius: 10px;
-}
-.el-message {
-  border-radius: 10px;
-}
-.el-popover {
-  border-radius: 10px;
-}
-.el-drawer {
-  border-radius: 14px 0 0 14px;
-}
-.el-empty__description p {
-  color: var(--text-3);
+html.dark .sidebar,
+html.dark .wiki-sidebar,
+html.dark .doc-topbar,
+html.dark .chat-input-area,
+html.dark .editor-toolbar,
+html.dark .notebook-info:hover,
+html.dark .page-item:hover,
+html.dark .side-foot-btn:hover,
+html.dark .trash-item:hover,
+html.dark .db-col,
+html.dark .comment-item,
+html.dark .icon-picker,
+html.dark .cover-picker,
+html.dark .quick-box {
+  background: var(--surface-2) !important;
 }
 
-/* 键盘可达性: 聚焦环 */
-:focus-visible {
-  outline: 2px solid var(--primary, #4f46e5);
-  outline-offset: 2px;
-  border-radius: 4px;
+html.dark .notebook-item.active > .notebook-info,
+html.dark .page-item.active,
+html.dark .db-card,
+html.dark .db-row-head,
+html.dark .wiki-page-item.active,
+html.dark .emoji-opt.active,
+html.dark .quick-item:hover,
+html.dark .history-item.active {
+  background: var(--primary-weak) !important;
 }
 
-/* 平滑过渡(减少突兀) */
-.el-button,
-.el-input__wrapper,
-.el-dropdown-menu__item,
-.nav-link {
-  transition: background-color 0.15s, color 0.15s, border-color 0.15s;
+html.dark .db-table,
+html.dark .comment-item,
+html.dark .db-card,
+html.dark .icon-picker,
+html.dark .cover-picker,
+html.dark .quick-box,
+html.dark .history-content,
+html.dark .source-card,
+html.dark .reindex {
+  border-color: var(--border) !important;
+  background: var(--surface) !important;
 }
+
+html.dark .db-row,
+html.dark .history-content,
+html.dark .comment-input,
+html.dark .outline-head,
+html.dark .link-panel-head,
+html.dark .side-foot,
+html.dark .wiki-sidebar-header,
+html.dark .doc-topbar {
+  border-color: var(--border) !important;
+}
+
+html.dark .page-title,
+html.dark .notebook-name,
+html.dark .wiki-cat-name,
+html.dark .source-name,
+html.dark .comment-author,
+html.dark .history-time,
+html.dark .db-title,
+html.dark .db-link,
+html.dark .wiki-body p,
+html.dark .title-input {
+  color: var(--text) !important;
+}
+
+html.dark .title-input,
+html.dark .quick-input,
+html.dark .tb-select,
+html.dark .comment-input .el-textarea__inner {
+  background: var(--surface) !important;
+  color: var(--text) !important;
+  border-color: var(--border) !important;
+}
+
+html.dark .crumb-nb,
+html.dark .page-title,
+html.dark .outline-item,
+html.dark .comment-content { color: var(--text-2); }
+html.dark .crumb-page,
+html.dark .muted,
+html.dark .muted-hint { color: var(--text-3) !important; }
+
+html.dark .db-cal-cell,
+html.dark .wiki-search-item { border-color: var(--border) !important; }
+html.dark .db-cal-item { background: var(--primary-weak); color: var(--primary); }
+
+/* 编辑器正文(ProseMirror)与渲染 Markdown 的深色适配 */
+html.dark .ProseMirror { color: var(--text) !important; }
+html.dark .ProseMirror h1, html.dark .ProseMirror h2, html.dark .ProseMirror h3,
+html.dark .ProseMirror h4 { color: var(--text) !important; }
+html.dark .ProseMirror code { background: var(--surface-3) !important; color: #f472b6 !important; }
+html.dark .ProseMirror mark { background: #6b5f1a; color: #fde68a; }
+html.dark .ProseMirror blockquote { background: var(--surface-2) !important; color: var(--text-2) !important; border-left-color: var(--primary) !important; }
+html.dark .ProseMirror table th { background: var(--surface-2) !important; }
+html.dark .ProseMirror th, html.dark .ProseMirror td { border-color: var(--border) !important; }
+html.dark .markdown-body pre { background: #0c1017 !important; border-color: var(--border) !important; }
+html.dark .markdown-body code { background: var(--surface-3) !important; color: #f472b6 !important; }
+html.dark .markdown-body blockquote { color: var(--text-2) !important; border-left-color: var(--primary) !important; }
+html.dark .markdown-body th, html.dark .markdown-body td { border-color: var(--border) !important; }
+html.dark .markdown-body th { background: var(--surface-2) !important; }
+html.dark .markdown-body strong { color: var(--text) !important; }
+html.dark .chat-message.assistant .message-content { background: var(--surface-2) !important; border-color: var(--border) !important; color: var(--text) !important; }
+html.dark .source-chip { background: var(--surface-2) !important; border-color: var(--border) !important; color: var(--text-2) !important; }
+html.dark .chat-input-area .el-textarea__inner { background: var(--surface-2) !important; border-color: var(--border) !important; color: var(--text) !important; }
+html.dark .wiki-body h1, html.dark .wiki-body h2, html.dark .wiki-body h3 { color: var(--text) !important; }
+html.dark .login-card { background: var(--surface) !important; }
+html.dark .login-page { background: var(--bg) !important; }

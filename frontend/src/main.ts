@@ -2,8 +2,16 @@ import { createApp } from 'vue'
 import { createPinia } from 'pinia'
 import ElementPlus from 'element-plus'
 import 'element-plus/dist/index.css'
+import 'element-plus/theme-chalk/dark/css-vars.css'
 import './styles/global.css'
 import App from './App.vue'
+
+// 主题: 默认亮色, 可切换深色/跟随系统(挂载前应用避免闪烁)
+const savedTheme = localStorage.getItem('rag-theme') || 'light'
+const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
+if (savedTheme === 'dark' || (savedTheme === 'system' && prefersDark)) {
+  document.documentElement.classList.add('dark')
+}
 import { createRouter, createWebHistory } from 'vue-router'
 import Editor from './views/Editor.vue'
 import KnowledgeGraph from './views/KnowledgeGraph.vue'
