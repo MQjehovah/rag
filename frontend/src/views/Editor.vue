@@ -1994,8 +1994,8 @@ onMounted(async () => {
   await loadProfiles()
   await loadTags()
   auth.fetchMe().catch(() => {})
-  // 探测协同服务: 可用才进入协同模式(否则保持单机编辑)
-  http.get('/api/collab/health').then(() => { collabEnabled.value = true }).catch(() => { collabEnabled.value = false })
+  // 协同编辑暂时停用: 修复"每次打开重复插入内容"的问题, 改为单机编辑(内容以 Markdown 为准)。
+  collabEnabled.value = false
   window.addEventListener('keydown', handleKeydown)
   document.addEventListener('mousedown', onDocMousedown)
   const targetId = route.query.page as string | undefined

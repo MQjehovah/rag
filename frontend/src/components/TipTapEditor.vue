@@ -346,6 +346,7 @@ let applyingExternal = false
 // 协同(Yjs): 每个页面一个房间; 未启用时为普通单机编辑
 let ydoc: Y.Doc | null = null
 let provider: WebsocketProvider | null = null
+let collabSynced = false
 const collabExtensions: any[] = []
 if (props.collab) {
   ydoc = new Y.Doc()
@@ -705,7 +706,7 @@ const editor = useEditor({
     nextTick(() => { scheduleMermaid(); disableSpellcheck() })
   },
   onCreate: () => {
-    nextTick(() => { scheduleMermaid(); disableSpellcheck(); seedCollabIfEmpty() })
+    nextTick(() => { scheduleMermaid(); disableSpellcheck() })
   },
   onSelectionUpdate: () => {
     keepCaretCentered()
@@ -723,7 +724,11 @@ const editor = useEditor({
 })
 
 if (provider) {
-  provider.on('sync', () => { nextTick(() => seedCollabIfEmpty()) })
+  // 仅在初次与服务器同步完成后才允许播种, 避免"本地插入 + 服务器内容"并发合并导致重复
+  provider.on('sync', () => {
+    collabSynced = true
+    nextTick(() => seedCollabIfEmpty())
+  })
 }
 
 function seedCollabIfEmpty() {
@@ -1085,8 +1090,8 @@ async function setLink() {
 
 watch(() => props.modelValue, (newValue) => {
   if (props.collab) {
-    // 协同模式内容由 Yjs 驱动; 仅在文档仍为空时用最新 Markdown 播种
-    if (ydoc && newValue && ydoc.getXmlFragment('default').length === 0) {
+    // 协同模式内容由 Yjs 驱动; 仅在"已完成初始同步且文档为空"时用最新 Markdown 播种
+    if (collabSynced && ydoc && newValue && ydoc.getXmlFragment('default').length === 0) {
       editor.value?.commands.setContent(newValue)
     }
     return
