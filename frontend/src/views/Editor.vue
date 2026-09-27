@@ -190,21 +190,21 @@
       <main class="main-content">
         <div class="doc-topbar">
           <button v-if="sidebarCollapsed" class="icon-btn expand" title="展开侧边栏" @click="sidebarCollapsed = false">»</button>
-          <div class="crumb">
-            <span class="crumb-nb">{{ currentNotebook?.name || '未选择笔记本' }}</span>
-            <template v-if="currentPage">
-              <span class="crumb-sep">/</span>
-              <span class="crumb-page">{{ currentPage.title || '无标题' }}</span>
-            </template>
+          <div v-if="currentPage" class="doc-tab" :title="currentPage.title">
+            <span class="doc-tab-icon">{{ currentPage.icon || '📄' }}</span>
+            <span class="doc-tab-title">{{ currentPage.title || '无标题' }}</span>
           </div>
+          <div v-else class="doc-tab doc-tab-empty">{{ currentNotebook?.name || '未选择笔记本' }}</div>
           <div class="topbar-actions">
-            <button class="icon-btn" :class="{ 'is-on': commentsOpen }" title="评论" @click="toggleComments">💬<span v-if="comments.length" class="badge">{{ comments.length }}</span></button>
-            <button class="icon-btn" :class="{ 'is-on': outlineOpen }" title="大纲" @click="outlineOpen = !outlineOpen; if (outlineOpen) commentsOpen = false">☰</button>
             <span
               class="save-dot"
               :class="saveStatus"
               :title="saveStatus === 'saved' ? '已保存' : saveStatus === 'saving' ? '保存中…' : '未保存'"
             ></span>
+            <button v-if="currentPage" class="topbar-text-btn" title="分享" @click="openShare">分享</button>
+            <button v-if="currentPage" class="icon-btn" :title="isFav ? '取消收藏' : '收藏'" @click="toggleFav">{{ isFav ? '★' : '☆' }}</button>
+            <button class="icon-btn" :class="{ 'is-on': commentsOpen }" title="评论" @click="toggleComments">💬<span v-if="comments.length" class="badge">{{ comments.length }}</span></button>
+            <button class="icon-btn" :class="{ 'is-on': outlineOpen }" title="大纲" @click="outlineOpen = !outlineOpen; if (outlineOpen) commentsOpen = false">☰</button>
             <el-dropdown v-if="currentPage" trigger="click" @command="onPageMenu">
               <button class="icon-btn" title="页面设置">⋯</button>
               <template #dropdown>
@@ -1914,10 +1914,6 @@ const handleKeydown = (e: KeyboardEvent) => {
     e.preventDefault()
     sidebarCollapsed.value = !sidebarCollapsed.value
   }
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
-    e.preventDefault()
-    openQuick()
-  }
   if (e.key === 'Escape') {
     if (quickOpen.value) { quickOpen.value = false; return }
     if (iconPickerVisible.value || coverPickerVisible.value) {
@@ -2470,18 +2466,43 @@ html, body, #app { height: 100%; }
   align-items: center;
   gap: 10px;
   padding: 0 16px;
-  border-bottom: 1px solid #f0f0ef;
-  background: rgba(255, 255, 255, 0.9);
-  backdrop-filter: blur(6px);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
   position: relative;
   z-index: 5;
 }
+.doc-tab {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  max-width: 360px;
+  padding: 4px 10px;
+  border-radius: 7px;
+  background: var(--surface-2);
+  font-size: 13px;
+  color: var(--text);
+  flex: 0 1 auto;
+}
+.doc-tab-empty { color: var(--text-3); }
+.doc-tab-icon { flex: 0 0 auto; font-size: 14px; }
+.doc-tab-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
 .crumb { display: flex; align-items: center; gap: 7px; font-size: 13px; min-width: 0; flex: 1; }
 .crumb-nb { color: #37352f; font-weight: 500; white-space: nowrap; }
 .crumb-sep { color: #d3d3d0; }
 .crumb-page { color: #9b9a97; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.topbar-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+.topbar-actions { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; margin-left: auto; }
 .topbar-actions :deep(.el-button) { height: 30px; }
+.topbar-text-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 13px;
+  padding: 5px 9px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.topbar-text-btn:hover { background: var(--surface-2); color: var(--text); }
 .save-badge { font-size: 12px; color: #9b9a97; }
 .save-badge.saving { color: #f59e0b; }
 .save-badge.unsaved { color: #ef4444; }

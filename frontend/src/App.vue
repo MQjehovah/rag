@@ -14,6 +14,13 @@
         </div>
 
         <div class="rail-scroll">
+          <button class="rail-item as-btn rail-search" :title="collapsed ? '搜索' : ''" @click="openSearch">
+            <span class="rail-item-icon">
+              <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7" /><path d="M21 21l-4.3-4.3" /></svg>
+            </span>
+            <span class="rail-item-label">搜索</span>
+            <span class="rail-kbd">Ctrl K</span>
+          </button>
           <div v-for="grp in navGroups" :key="grp.label" class="rail-section">
             <div class="rail-section-label">{{ grp.label }}</div>
             <router-link
@@ -68,13 +75,40 @@
     <main class="content">
       <router-view />
     </main>
+
+    <!-- 全局搜索 (Ctrl+K) -->
+    <Teleport to="body">
+      <div v-if="searchOpen" class="qs-overlay" @click.self="searchOpen = false">
+        <div class="qs-box">
+          <input
+            ref="searchInput"
+            v-model="searchQuery"
+            class="qs-input"
+            placeholder="搜索页面…（↑↓ 选择，回车打开，Esc 关闭）"
+            @keydown="onSearchKey"
+          />
+          <div class="qs-list">
+            <div
+              v-for="(p, i) in searchResults"
+              :key="p.id"
+              class="qs-item"
+              :class="{ active: i === searchIndex }"
+              @mouseenter="searchIndex = i"
+              @click="pickSearch(p)"
+            >{{ p.title }}</div>
+            <div v-if="!searchResults.length" class="qs-empty">无匹配页面</div>
+          </div>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from './stores/auth'
+import http from './api/http'
 
 const route = useRoute()
 const router = useRouter()
@@ -125,6 +159,53 @@ const handleLogout = () => {
   authStore.logout()
   router.push('/login')
 }
+
+// ---- 全局搜索 ----
+const searchOpen = ref(false)
+const searchQuery = ref('')
+const searchIndex = ref(0)
+const searchInput = ref<HTMLInputElement | null>(null)
+const searchAll = ref<{ id: string; title: string }[]>([])
+let searchLoaded = false
+
+const searchResults = computed(() => {
+  const q = searchQuery.value.trim().toLowerCase()
+  if (!q) return searchAll.value.slice(0, 40)
+  return searchAll.value.filter(p => p.title.toLowerCase().includes(q)).slice(0, 40)
+})
+
+const openSearch = async () => {
+  searchOpen.value = true
+  searchQuery.value = ''
+  searchIndex.value = 0
+  nextTick(() => searchInput.value?.focus())
+  if (!searchLoaded) {
+    try {
+      const res = await http.get('/api/pages', { params: { page: 1, page_size: 500 } })
+      searchAll.value = (res.data.items || []).map((p: any) => ({ id: p.id, title: p.title || '无标题' }))
+      searchLoaded = true
+    } catch { /* ignore */ }
+  }
+}
+const pickSearch = (p: { id: string }) => {
+  searchOpen.value = false
+  router.push({ path: '/notes', query: { page: p.id } })
+}
+const onSearchKey = (e: KeyboardEvent) => {
+  const list = searchResults.value
+  if (e.key === 'ArrowDown') { e.preventDefault(); searchIndex.value = Math.min(searchIndex.value + 1, list.length - 1) }
+  else if (e.key === 'ArrowUp') { e.preventDefault(); searchIndex.value = Math.max(searchIndex.value - 1, 0) }
+  else if (e.key === 'Enter') { e.preventDefault(); if (list[searchIndex.value]) pickSearch(list[searchIndex.value]) }
+  else if (e.key === 'Escape') { searchOpen.value = false }
+}
+const onGlobalKey = (e: KeyboardEvent) => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+    e.preventDefault()
+    openSearch()
+  }
+}
+onMounted(() => window.addEventListener('keydown', onGlobalKey))
+onBeforeUnmount(() => window.removeEventListener('keydown', onGlobalKey))
 </script>
 
 <style>
@@ -261,4 +342,60 @@ body {
 .app-layout.rail-collapsed .rail-user { justify-content: center; padding: 5px 0; }
 
 .content { flex: 1; min-width: 0; height: 100vh; overflow: hidden; }
+
+/* 搜索入口 + 全局搜索面板 */
+.rail-search { margin-bottom: 4px; }
+.rail-kbd {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--text-3);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+.app-layout.rail-collapsed .rail-kbd { display: none; }
+
+.qs-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 15, 15, 0.24);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  z-index: 3000;
+  padding-top: 12vh;
+}
+.qs-box {
+  width: 560px;
+  max-width: 92vw;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+}
+.qs-input {
+  width: 100%;
+  border: none;
+  outline: none;
+  background: transparent;
+  padding: 16px 18px;
+  font-size: 16px;
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+}
+.qs-list { max-height: 52vh; overflow-y: auto; padding: 6px; }
+.qs-item {
+  padding: 9px 12px;
+  border-radius: 6px;
+  font-size: 14px;
+  color: var(--text);
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.qs-item.active { background: var(--surface-2); }
+.qs-empty { padding: 12px 14px; color: var(--text-3); font-size: 13px; }
 </style>
