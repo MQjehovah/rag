@@ -305,10 +305,8 @@ def _persist(engine, changed: List[Dict[str, Any]], space_id: str, pipeline_id: 
 
 def _build_prompt(kind: str, template: str, space_name: str, index: str,
                   title: str, notebook: str, content: str) -> str:
-    if kind == "custom":
-        style = (template or "").strip() or KIND_STYLES["wiki"]
-    else:
-        style = KIND_STYLES.get(kind, KIND_STYLES["wiki"])
+    # 自定义模板对任意编译方式都生效(用于约束 LLM 的编译行为); 留空则用内置文体风格
+    style = (template or "").strip() or KIND_STYLES.get(kind, KIND_STYLES["wiki"])
     return INGEST_PROMPT.format(
         space=space_name, index=index, title=title or "无标题",
         notebook=notebook or "未分类", content=_clean_content(content or ""), style=style,

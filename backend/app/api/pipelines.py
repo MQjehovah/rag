@@ -106,6 +106,13 @@ def create_pipeline(data: PipelineCreate, db: Session = Depends(get_db), current
     return _to_response(pipeline, db)
 
 
+@router.get("/compile-templates")
+def compile_templates(current_user=Depends(get_current_user)):
+    """内置编译体（文体风格）+ 固定骨架，供前端预填/编辑模板。"""
+    from app.core.wiki import INGEST_PROMPT, KIND_STYLES
+    return {"kinds": KIND_STYLES, "skeleton": INGEST_PROMPT}
+
+
 def _get_or_404(pipeline_id: str, db: Session, current_user) -> Pipeline:
     pipeline = db.query(Pipeline).filter(Pipeline.id == pipeline_id).first()
     if not pipeline or not _visible(pipeline, current_user):

@@ -90,8 +90,21 @@
             <el-option v-for="n in notebooks" :key="n.id" :label="n.name" :value="n.id" />
           </el-select>
         </el-form-item>
-        <el-form-item v-if="form.compiler_kind === 'custom'" label="自定义指令">
-          <el-input v-model="form.prompt_template" type="textarea" :rows="5" placeholder="给 LLM 的编译指令（Markdown 输出）" />
+        <el-form-item label="编译模板">
+          <div style="width: 100%">
+            <el-input
+              v-model="form.prompt_template"
+              type="textarea"
+              :rows="6"
+              :placeholder="defaultTemplate(form.compiler_kind) || '留空=使用内置模板'"
+            />
+            <div class="muted" style="font-size: 12px; margin-top: 4px; line-height: 1.6">
+              用于约束大模型的编译行为（文体、结构、取舍规则）。留空=使用内置模板；
+              系统会固定追加「JSON 输出协议 + 父级(parent)规则」，此处只填文体/结构要求。
+              <el-button link type="primary" size="small" @click="fillDefaultTemplate">填入内置模板</el-button>
+              <el-button link size="small" @click="form.prompt_template = ''">清空</el-button>
+            </div>
+          </div>
         </el-form-item>
         <el-form-item label="目标空间">
           <el-select v-model="form.target_space_id" clearable placeholder="默认空间" style="width: 100%">
@@ -194,6 +207,7 @@ const KIND_LABELS: Record<string, string> = {
 const pipelines = ref<Pipeline[]>([])
 const notebooks = ref<{ id: string; name: string }[]>([])
 const spaces = ref<WikiSpaceItem[]>([])
+const compileTemplates = ref<Record<string, string>>({})
 const loading = ref(false)
 const dialog = ref(false)
 const saving = ref(false)
@@ -259,6 +273,22 @@ async function loadSpaces() {
 function spaceName(id?: string | null) {
   if (!id) return '默认空间'
   return spaces.value.find(s => s.id === id)?.name || '默认空间'
+}
+
+async function loadCompileTemplates() {
+  try {
+    compileTemplates.value = (await http.get('/api/pipelines/compile-templates')).data.kinds || {}
+  } catch {
+    compileTemplates.value = {}
+  }
+}
+
+function defaultTemplate(kind: string) {
+  return compileTemplates.value[kind] || ''
+}
+
+function fillDefaultTemplate() {
+  form.prompt_template = defaultTemplate(form.compiler_kind)
 }
 
 function openCreate() {
@@ -410,6 +440,7 @@ onMounted(() => {
   load()
   loadNotebooks()
   loadSpaces()
+  loadCompileTemplates()
   timer = setInterval(refreshRunning, 2500)
 })
 onUnmounted(() => {
