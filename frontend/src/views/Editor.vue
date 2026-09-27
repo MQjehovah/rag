@@ -1236,4 +1236,87 @@ html, body, #app { height: 100%; }
   color: #2563eb;
   padding: 6px 12px;
 }
+
+/* ---------- 视觉打磨 ---------- */
+.app-header {
+  height: 58px;
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: saturate(180%) blur(10px);
+  border-bottom: 1px solid var(--border, #e6e8f0);
+  padding: 0 20px;
+  position: relative;
+  z-index: 10;
+}
+.search-box { width: 100%; max-width: 440px; }
+.search-box :deep(.el-input__wrapper) {
+  border-radius: 10px;
+  background: var(--surface-2, #f2f4f9);
+  box-shadow: none;
+  border: 1px solid transparent;
+  transition: border-color 0.15s, background 0.15s;
+}
+.search-box :deep(.el-input__wrapper.is-focus) {
+  background: #fff;
+  border-color: var(--primary, #4f46e5);
+}
+.search-box :deep(.el-input-group__append) {
+  background: transparent;
+  box-shadow: none;
+}
+.header-actions { gap: 8px; }
+.header-actions :deep(.el-button) { height: 34px; }
+.header-actions :deep(.el-tag) { height: 24px; }
+.sidebar {
+  width: 288px;
+  background: var(--surface, #fff);
+  border-right: 1px solid var(--border, #e6e8f0);
+}
+.sidebar-header {
+  padding: 16px 18px 10px;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-3, #8b93a4);
+  border-bottom: none;
+}
+.tag-filter { padding: 0 14px 10px; border-bottom: 1px solid var(--border, #e6e8f0); }
+.notebook-list { padding: 10px; }
+.notebook-info {
+  padding: 8px 10px;
+  border-radius: 9px;
+  transition: background 0.15s, color 0.15s;
+}
+.notebook-info:hover { background: var(--surface-2, #f2f4f9); }
+.notebook-item.active > .notebook-info {
+  background: var(--primary-weak, #eef0ff);
+  color: var(--primary, #4f46e5);
+}
+.notebook-name { font-weight: 600; font-size: 13.5px; }
+.page-list { padding-left: 14px; margin-left: 6px; border-left: 1px solid var(--border, #e6e8f0); }
+.page-item {
+  padding: 6px 10px;
+  border-radius: 8px;
+  margin: 1px 0;
+}
+.page-item:hover { background: var(--surface-2, #f2f4f9); }
+.page-item.active { background: var(--primary-weak, #eef0ff); }
+.page-item.active .page-title { color: var(--primary, #4f46e5); font-weight: 600; }
+.page-title { font-size: 13px; color: var(--text-2, #59616f); }
+.add-page {
+  margin-top: 2px;
+  color: var(--primary, #4f46e5);
+  font-weight: 500;
+}
+.add-page:hover { background: var(--primary-weak, #eef0ff); }
+.main-content {
+  padding: 24px 32px 40px;
+  background: var(--bg, #f6f7fb);
+}
+.editor-wrapper {
+  max-width: 880px;
+  border-radius: var(--radius-lg, 14px);
+  border: 1px solid var(--border, #e6e8f0);
+  box-shadow: var(--shadow, 0 4px 16px rgba(16, 24, 40, 0.07));
+}
 </style>
