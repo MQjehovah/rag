@@ -181,6 +181,29 @@
       </div>
     </Teleport>
 
+    <!-- [[ 页面提及 -->
+    <Teleport to="body">
+      <div
+        v-if="mention.open && mention.items.length"
+        class="slash-menu"
+        :style="{ top: mention.y + 'px', left: mention.x + 'px' }"
+        @mousedown.prevent
+      >
+        <div class="slash-header">链接到页面</div>
+        <div
+          v-for="(item, i) in mention.items"
+          :key="item.id"
+          class="slash-item"
+          :class="{ active: i === mention.index }"
+          @mouseenter="mention.index = i"
+          @click="pickMention(i)"
+        >
+          <span class="slash-icon">📄</span>
+          <span class="slash-text"><span class="slash-title">{{ item.title }}</span></span>
+        </div>
+      </div>
+    </Teleport>
+
     <!-- 拖拽落点指示线 -->
     <div v-if="drag.active && drag.toIndex >= 0" class="drop-indicator" :style="dragIndicatorStyle"></div>
 
@@ -406,6 +429,77 @@ const SlashCommand = Extension.create({
   },
 })
 
+// ---------------- [[ 页面提及 ----------------
+const mention = reactive({ open: false, items: [] as { id: string; title: string }[], index: 0, x: 0, y: 0 })
+let mentionCommand: ((item: { id: string; title: string }) => void) | null = null
+let mentionPages: { id: string; title: string }[] = []
+let mentionLoaded = false
+
+async function ensureMentionPages() {
+  if (mentionLoaded) return
+  try {
+    const res = await http.get('/api/pages', { params: { page: 1, page_size: 500 } })
+    mentionPages = (res.data.items || []).map((p: any) => ({ id: p.id, title: p.title || '无标题' }))
+    mentionLoaded = true
+  } catch { /* ignore */ }
+}
+
+function pickMention(i: number) {
+  const item = mention.items[i]
+  if (item && mentionCommand) mentionCommand(item)
+  mention.open = false
+}
+
+const PageMention = Extension.create({
+  name: 'pageMention',
+  addProseMirrorPlugins() {
+    return [
+      Suggestion({
+        editor: this.editor,
+        char: '[[',
+        startOfLine: false,
+        allowSpaces: false,
+        items: async ({ query }: { query: string }) => {
+          await ensureMentionPages()
+          const q = (query || '').trim().toLowerCase()
+          if (!q) return mentionPages.slice(0, 20)
+          return mentionPages.filter(p => p.title.toLowerCase().includes(q)).slice(0, 20)
+        },
+        command: ({ editor, range, props: item }: any) => {
+          editor.chain().focus().deleteRange(range).insertContent({ type: 'text', text: `[[${item.title}]]` }).run()
+        },
+        render: () => ({
+          onStart: (p: any) => {
+            mention.items = p.items || []
+            mention.index = 0
+            mention.open = mention.items.length > 0
+            mentionCommand = (it: any) => p.command(it)
+            const rect = p.clientRect?.()
+            if (rect) { mention.x = rect.left; mention.y = rect.bottom + 6 }
+          },
+          onUpdate: (p: any) => {
+            mention.items = p.items || []
+            mention.index = 0
+            mention.open = mention.items.length > 0
+            mentionCommand = (it: any) => p.command(it)
+            const rect = p.clientRect?.()
+            if (rect) { mention.x = rect.left; mention.y = rect.bottom + 6 }
+          },
+          onKeyDown: (p: any) => {
+            if (!mention.open || !mention.items.length) return false
+            if (p.event.key === 'ArrowDown') { mention.index = (mention.index + 1) % mention.items.length; return true }
+            if (p.event.key === 'ArrowUp') { mention.index = (mention.index - 1 + mention.items.length) % mention.items.length; return true }
+            if (p.event.key === 'Enter') { pickMention(mention.index); return true }
+            if (p.event.key === 'Escape') { mention.open = false; return true }
+            return false
+          },
+          onExit: () => { mention.open = false },
+        }),
+      }),
+    ]
+  },
+})
+
 const editor = useEditor({
   extensions: [
     StarterKit.configure({ codeBlock: false, history: props.collab ? false : undefined }),
@@ -503,6 +597,7 @@ const editor = useEditor({
     Toggle.extend({ addNodeView() { return VueNodeViewRenderer(ToggleNodeView) } }),
     ...collabExtensions,
     SlashCommand,
+    PageMention,
     Markdown.configure({ html: true, breaks: true, linkify: true }),
   ],
   content: props.modelValue,

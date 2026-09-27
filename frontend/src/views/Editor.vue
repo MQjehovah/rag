@@ -289,6 +289,14 @@
             @click="scrollToHeading(h.text)"
           >{{ h.text }}</div>
         </div>
+        <div class="link-panel-head">
+          <span>反向链接</span>
+          <span v-if="backlinks.length" class="count">{{ backlinks.length }}</span>
+        </div>
+        <div class="link-list">
+          <div v-if="!backlinks.length" class="muted-hint" style="padding: 4px 12px">暂无</div>
+          <div v-for="b in backlinks" :key="b.id" class="outline-item" @click="openPageById(b.id)">{{ b.title }}</div>
+        </div>
       </aside>
     </div>
 
@@ -1052,10 +1060,19 @@ const toggleFav = () => {
   saveFavs()
 }
 
+const backlinks = ref<{ id: string; title: string }[]>([])
+const loadBacklinks = async (id?: string) => {
+  if (!id) { backlinks.value = []; return }
+  try {
+    backlinks.value = (await http.get(`/api/pages/${id}/backlinks`)).data.items || []
+  } catch { backlinks.value = [] }
+}
+
 watch(() => currentPage.value?.id, (id) => {
-  if (!id) { pageWide.value = false; pageSmall.value = false; return }
+  if (!id) { pageWide.value = false; pageSmall.value = false; backlinks.value = []; return }
   pageWide.value = localStorage.getItem('rag-page-wide-' + id) === '1'
   pageSmall.value = localStorage.getItem('rag-page-small-' + id) === '1'
+  loadBacklinks(id)
 })
 
 const toggleWide = () => {
@@ -2252,4 +2269,20 @@ html, body, #app { height: 100%; }
   white-space: nowrap;
 }
 .quick-item.active { background: #eef0ff; color: #4f46e5; }
+
+/* 反向链接 */
+.link-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #9b9a97;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-top: 1px solid #f0f0ef;
+}
+.link-panel-head .count { background: #e3e3e0; color: #6b6b68; border-radius: 8px; padding: 0 7px; font-size: 11px; }
+.link-list { max-height: 220px; overflow-y: auto; padding-bottom: 14px; }
 </style>

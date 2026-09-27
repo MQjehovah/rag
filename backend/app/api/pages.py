@@ -299,6 +299,30 @@ def get_page(page_id: str, db: Session = Depends(get_db), current_user=Depends(g
         created_at=row[8], updated_at=row[9],
     )
 
+@router.get("/{page_id}/backlinks")
+def page_backlinks(page_id: str, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    """反向链接: 内容中出现 [[本页标题]] 的其它页面。"""
+    page = db.query(Page).filter(Page.id == page_id).first()
+    if not page or page.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="笔记不存在")
+    _check_page_access(page, current_user, db)
+    title = (page.title or "").strip()
+    if not title:
+        return {"items": []}
+    pattern = f"%[[{title}]]%"
+    q = db.query(Page.id, Page.title).filter(
+        Page.deleted_at.is_(None),
+        Page.id != page.id,
+        Page.content.like(pattern),
+    )
+    if "__local_admin__" not in current_user["groups"]:
+        visible_nb_ids = db.query(Notebook.id).filter(
+            or_(Notebook.group_id.in_(current_user["groups"]), Notebook.group_id.is_(None))
+        ).subquery()
+        q = q.filter(or_(Page.notebook_id.is_(None), Page.notebook_id.in_(visible_nb_ids)))
+    rows = q.limit(50).all()
+    return {"items": [{"id": r[0], "title": r[1] or "无标题"} for r in rows]}
+
 @router.put("/{page_id}", response_model=PageResponse)
 def update_page(page_id: str, data: PageUpdate, background_tasks: BackgroundTasks, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     page = db.query(Page).filter(Page.id == page_id).first()
