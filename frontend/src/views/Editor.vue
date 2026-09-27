@@ -76,30 +76,40 @@
 
             <div v-if="currentNotebook?.id === nb.id" class="page-list">
               <div
-                v-for="page in notebookPages"
-                :key="page.id"
+                v-for="row in treeRows"
+                :key="row.page.id"
                 class="page-item"
-                :class="{ active: currentPage?.id === page.id }"
+                :class="{
+                  active: currentPage?.id === row.page.id,
+                  dragging: dragPageId === row.page.id,
+                  'drop-before': dropTarget?.id === row.page.id && dropTarget.zone === 'before',
+                  'drop-after': dropTarget?.id === row.page.id && dropTarget.zone === 'after',
+                  'drop-inside': dropTarget?.id === row.page.id && dropTarget.zone === 'inside',
+                }"
+                :style="{ paddingLeft: (8 + row.depth * 16) + 'px' }"
+                draggable="true"
+                @dragstart="onPageDragStart(row.page, $event)"
+                @dragover="onPageDragOver(row.page, $event)"
+                @drop.stop="onPageDrop(row.page, $event)"
+                @dragend="onPageDragEnd"
               >
-                <div class="page-info" @click="selectPage(page)">
+                <div class="page-info" @click="selectPage(row.page)">
                   <span class="page-dot"></span>
-                  <span class="page-title">{{ page.title || '无标题' }}</span>
+                  <span class="page-title">{{ row.page.title || '无标题' }}</span>
                 </div>
-                <el-dropdown trigger="click" @command="(cmd: string) => handlePageCmd(cmd, page)">
+                <el-dropdown trigger="click" @command="(cmd: string) => handlePageCmd(cmd, row.page)">
                   <el-button size="small" text class="page-menu-btn">⋮</el-button>
                   <template #dropdown>
                     <el-dropdown-menu>
+                      <el-dropdown-item command="child">新建子页面</el-dropdown-item>
                       <el-dropdown-item command="index">重新索引</el-dropdown-item>
                       <el-dropdown-item command="delete" divided>删除</el-dropdown-item>
                     </el-dropdown-menu>
                   </template>
                 </el-dropdown>
               </div>
-              <div v-if="hasMorePages" class="add-page" @click="loadMorePages">
-                <span>加载更多...</span>
-              </div>
-              <div class="add-page" @click="createPage">
-                <span>+ 添加笔记</span>
+              <div class="add-page" @click="createPage()">
+                <span>＋ 添加笔记</span>
               </div>
             </div>
           </div>
@@ -130,10 +140,15 @@
         </div>
         <div class="doc-scroll">
         <div v-if="currentPage" class="editor-wrapper">
-          <div v-if="currentPage.cover" class="page-cover">
-            <img :src="currentPage.cover" alt="封面" />
+          <div
+            v-if="currentPage.cover"
+            class="page-cover"
+            :class="{ 'is-gradient': coverIsGradient }"
+            :style="coverIsGradient ? { background: coverGradientStyle } : {}"
+          >
+            <img v-if="!coverIsGradient" :src="currentPage.cover" alt="封面" />
             <div class="cover-actions">
-              <el-button size="small" @click="pickCover">更换封面</el-button>
+              <el-button size="small" @click="coverPickerVisible = !coverPickerVisible">更换封面</el-button>
               <el-button size="small" @click="removeCover">移除</el-button>
             </div>
           </div>
@@ -141,7 +156,7 @@
             <button
               class="page-icon-btn"
               :title="currentPage.icon ? '更换图标' : '添加图标'"
-              @click="iconPickerVisible = !iconPickerVisible"
+              @click="iconPickerVisible = !iconPickerVisible; coverPickerVisible = false"
             >
               <span v-if="currentPage.icon" class="page-icon">{{ currentPage.icon }}</span>
               <span v-else class="page-icon-add">＋</span>
@@ -152,11 +167,38 @@
               placeholder="无标题"
               @input="scheduleSave"
             />
-            <el-button v-if="!currentPage.cover" link size="small" class="cover-add" @click="pickCover">＋ 封面</el-button>
+            <el-button v-if="!currentPage.cover" link size="small" class="cover-add" @click="coverPickerVisible = !coverPickerVisible">＋ 封面</el-button>
           </div>
+
+          <div v-if="coverPickerVisible" class="cover-picker">
+            <button class="cover-upload" @click="pickCoverFromPicker">上传图片</button>
+            <button
+              v-for="g in GRADIENTS"
+              :key="g.key"
+              class="cover-swatch"
+              :style="{ background: g.css }"
+              :title="g.key"
+              @click="setGradientCover(g.key)"
+            ></button>
+          </div>
+
           <div v-if="iconPickerVisible" class="icon-picker">
-            <span v-for="emo in EMOJIS" :key="emo" class="emoji-opt" @click="setIcon(emo)">{{ emo }}</span>
-            <span class="emoji-opt emoji-clear" @click="setIcon('')">移除</span>
+            <div v-for="grp in EMOJI_GROUPS" :key="grp.label" class="emoji-group">
+              <div class="emoji-group-label">{{ grp.label }}</div>
+              <div class="emoji-grid">
+                <button
+                  v-for="emo in grp.items"
+                  :key="emo"
+                  class="emoji-opt"
+                  :class="{ active: currentPage.icon === emo }"
+                  @click="setIcon(emo)"
+                >{{ emo }}</button>
+              </div>
+            </div>
+            <div class="emoji-foot">
+              <button class="emoji-foot-btn" @click="randomIcon">🎲 随机</button>
+              <button class="emoji-foot-btn" @click="setIcon('')">移除图标</button>
+            </div>
           </div>
           <div v-loading="pageLoading" class="editor-body">
             <TipTapEditor
@@ -352,6 +394,8 @@ interface PageListItem {
   id: string
   title: string
   notebook_id: string | null
+  parent_id?: string | null
+  position?: number
   updated_at: string
 }
 
@@ -362,11 +406,13 @@ interface Page {
   content: string
   icon?: string
   cover?: string
+  parent_id?: string | null
+  position?: number
   updated_at: string
 }
 
 const notebooks = ref<Notebook[]>([])
-const notebookPages = ref<PageListItem[]>([])
+const treePages = ref<PageListItem[]>([])
 const currentNotebook = ref<Notebook | null>(null)
 const currentPage = ref<Page | null>(null)
 const saveStatus = ref<'saved' | 'saving' | 'unsaved'>('saved')
@@ -400,11 +446,6 @@ const pageLoading = ref(false)
 let pageLoadSeq = 0
 let loadAbort: AbortController | null = null
 const indexing = ref(false)
-const currentPageNum = ref(1)
-const totalPages = ref(0)
-const pageSize = 50
-
-const hasMorePages = ref(false)
 const tagOptions = ref<{ tag: string; count: number }[]>([])
 const activeTag = ref('')
 const tagPages = ref<PageListItem[]>([])
@@ -480,44 +521,107 @@ const saveNotebookSettings = async () => {
   }
 }
 
-const loadPages = async (reset = true) => {
-  if (!currentNotebook.value) return
-  try {
-    const page = reset ? 1 : currentPageNum.value + 1
-    const res = await http.get('/api/pages', {
-      params: { notebook_id: currentNotebook.value.id, page, page_size: pageSize }
-    })
-    const data = res.data
-    if (reset) {
-      notebookPages.value = data.items
-      currentPageNum.value = 1
-    } else {
-      notebookPages.value.push(...data.items)
-      currentPageNum.value = page
+// 扁平化页面树: 生成 { page, depth } 列表供渲染与拖拽
+const treeRows = computed(() => {
+  const items = treePages.value
+  const byId = new Map<string, PageListItem>()
+  items.forEach(p => byId.set(p.id, p))
+  const childrenOf = new Map<string | null, PageListItem[]>()
+  for (const p of items) {
+    const pid = p.parent_id && byId.has(p.parent_id) ? p.parent_id : null
+    if (!childrenOf.has(pid)) childrenOf.set(pid, [])
+    childrenOf.get(pid)!.push(p)
+  }
+  const rows: { page: PageListItem; depth: number }[] = []
+  const walk = (pid: string | null, depth: number) => {
+    const kids = (childrenOf.get(pid) || []).slice().sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
+    for (const k of kids) {
+      rows.push({ page: k, depth })
+      walk(k.id, depth + 1)
     }
-    totalPages.value = Math.ceil(data.total / pageSize)
-    hasMorePages.value = currentPageNum.value < totalPages.value
-  } catch (e) {
+  }
+  walk(null, 0)
+  return rows
+})
+
+const loadTree = async () => {
+  if (!currentNotebook.value) { treePages.value = []; return }
+  try {
+    const res = await http.get('/api/pages/tree', { params: { notebook_id: currentNotebook.value.id } })
+    treePages.value = res.data.items || []
+  } catch {
     ElMessage.error('加载笔记失败')
   }
-}
-
-const loadMorePages = () => {
-  loadPages(false)
 }
 
 const selectNotebook = async (nb: Notebook) => {
   if (currentNotebook.value?.id === nb.id) {
     currentNotebook.value = null
-    notebookPages.value = []
+    treePages.value = []
     return
   }
   currentNotebook.value = nb
-  await loadPages(true)
-
-  if (notebookPages.value.length === 0) {
+  await loadTree()
+  if (treePages.value.length === 0) {
     await createPage()
   }
+}
+
+// ---- 页面树拖拽排序/层级嵌套 ----
+const dragPageId = ref<string | null>(null)
+const dropTarget = ref<{ id: string; zone: 'before' | 'after' | 'inside' } | null>(null)
+
+const onPageDragStart = (page: PageListItem, ev: DragEvent) => {
+  dragPageId.value = page.id
+  if (ev.dataTransfer) {
+    ev.dataTransfer.effectAllowed = 'move'
+    ev.dataTransfer.setData('text/plain', page.id)
+  }
+}
+
+const onPageDragOver = (page: PageListItem, ev: DragEvent) => {
+  if (!dragPageId.value || dragPageId.value === page.id) return
+  ev.preventDefault()
+  const el = ev.currentTarget as HTMLElement
+  const rect = el.getBoundingClientRect()
+  const y = ev.clientY - rect.top
+  const zone: 'before' | 'after' | 'inside' =
+    y < rect.height * 0.3 ? 'before' : y > rect.height * 0.7 ? 'after' : 'inside'
+  dropTarget.value = { id: page.id, zone }
+}
+
+const onPageDrop = async (page: PageListItem, ev: DragEvent) => {
+  ev.preventDefault()
+  const dragId = dragPageId.value
+  const target = dropTarget.value
+  dragPageId.value = null
+  dropTarget.value = null
+  if (!dragId || !target || dragId === page.id) return
+
+  let parentId: string | null = null
+  let position = 0
+  if (target.zone === 'inside') {
+    parentId = page.id
+    position = treePages.value.filter(p => p.parent_id === page.id).length
+  } else {
+    parentId = page.parent_id ?? null
+    const siblings = treePages.value
+      .filter(p => (p.parent_id ?? null) === parentId)
+      .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
+    const idx = siblings.findIndex(p => p.id === page.id)
+    position = target.zone === 'before' ? Math.max(0, idx) : idx + 1
+  }
+  try {
+    await http.post(`/api/pages/${dragId}/move`, { parent_id: parentId, position })
+    await loadTree()
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail || '移动失败')
+  }
+}
+
+const onPageDragEnd = () => {
+  dragPageId.value = null
+  dropTarget.value = null
 }
 
 const selectPage = async (page: PageListItem) => {
@@ -579,7 +683,7 @@ const openPageById = async (pageId: string) => {
       const nb = notebooks.value.find(n => n.id === page.notebook_id)
       if (nb) {
         currentNotebook.value = nb
-        loadPages(true)
+        loadTree()
       }
     }
   } catch (e: any) {
@@ -622,7 +726,7 @@ const handleNotebookCmd = async (cmd: string, nb: Notebook) => {
       ElMessage.success('删除成功')
       if (currentNotebook.value?.id === nb.id) {
         currentNotebook.value = null
-        notebookPages.value = []
+        treePages.value = []
         currentPage.value = null
       }
       loadNotebooks()
@@ -637,10 +741,11 @@ const handlePageCmd = async (cmd: string, page: PageListItem) => {
     try {
       await http.delete(`/api/pages/${page.id}`)
       ElMessage.success('删除成功')
-      notebookPages.value = notebookPages.value.filter(p => p.id !== page.id)
+      treePages.value = treePages.value.filter(p => p.id !== page.id)
       if (currentPage.value?.id === page.id) {
         currentPage.value = null
       }
+      await loadTree()
     } catch {
       ElMessage.error('删除失败')
     }
@@ -652,10 +757,12 @@ const handlePageCmd = async (cmd: string, page: PageListItem) => {
     } catch {
       ElMessage.error('索引失败')
     }
+  } else if (cmd === 'child') {
+    await createPage(page.id)
   }
 }
 
-const createPage = async () => {
+const createPage = async (parentId: string | null = null) => {
   if (!currentNotebook.value) {
     ElMessage.warning('请先选择笔记本')
     return
@@ -664,14 +771,15 @@ const createPage = async () => {
     const res = await http.post('/api/pages', {
       title: '无标题',
       content: '',
-      notebook_id: currentNotebook.value.id
+      notebook_id: currentNotebook.value.id,
+      parent_id: parentId
     })
-    notebookPages.value.unshift({ id: res.data.id, title: res.data.title, notebook_id: res.data.notebook_id, updated_at: res.data.updated_at })
     pageLoadSeq++
     loadAbort?.abort()
     loadAbort = null
     currentPage.value = res.data
     pageLoading.value = false
+    await loadTree()
     ElMessage.success('创建成功')
   } catch (e) {
     ElMessage.error('创建失败')
@@ -702,9 +810,9 @@ const savePage = async (target?: Page) => {
     if (currentPage.value?.id === page.id) {
       saveStatus.value = 'saved'
     }
-    const idx = notebookPages.value.findIndex(p => p.id === page.id)
+    const idx = treePages.value.findIndex(p => p.id === page.id)
     if (idx >= 0) {
-      notebookPages.value[idx] = { ...notebookPages.value[idx], title: page.title }
+      treePages.value[idx] = { ...treePages.value[idx], title: page.title }
     }
   } catch (e) {
     ElMessage.error('保存失败')
@@ -715,12 +823,48 @@ const savePage = async (target?: Page) => {
 }
 
 const iconPickerVisible = ref(false)
-const EMOJIS = [
-  '📄', '📝', '📌', '📎', '📁', '📚', '📖', '🧠', '💡', '🔥',
-  '✅', '⚠️', '⛔', '❓', '❗', '⭐', '🎯', '🚀', '🛠️', '⚙️',
-  '🔧', '🔍', '🧪', '🧩', '📊', '📈', '🗂️', '🗓️', '💬', '🔗',
-  '🤖', '🐛', '🌐', '🏷️', '🧭', '🗺️', '🔒', '🔑', '📦', '🌱',
+const coverPickerVisible = ref(false)
+const EMOJI_GROUPS: { label: string; items: string[] }[] = [
+  { label: '常用', items: ['📄', '📝', '📌', '📎', '📁', '📚', '📖', '✅', '⭐', '🔥', '💡', '📊'] },
+  { label: '工作', items: ['🎯', '🚀', '📈', '🗂️', '🗓️', '📦', '🔧', '⚙️', '🧩', '🛠️', '🏷️', '📋'] },
+  { label: '符号', items: ['❗', '❓', '⚠️', '⛔', '🔒', '🔑', '🧭', '🔗', '📐', '🧮', '🔔', '📣'] },
+  { label: '其他', items: ['🧠', '🤖', '🐛', '🌱', '🌐', '🗺️', '💬', '🔍', '🧪', '🎨', '🏆', '🌈'] },
 ]
+const GRADIENTS: { key: string; css: string }[] = [
+  { key: 'sunset', css: 'linear-gradient(135deg, #f97316, #ec4899)' },
+  { key: 'ocean', css: 'linear-gradient(135deg, #0ea5e9, #6366f1)' },
+  { key: 'forest', css: 'linear-gradient(135deg, #10b981, #0ea5e9)' },
+  { key: 'violet', css: 'linear-gradient(135deg, #8b5cf6, #6366f1)' },
+  { key: 'rose', css: 'linear-gradient(135deg, #fb7185, #f59e0b)' },
+  { key: 'mint', css: 'linear-gradient(135deg, #2dd4bf, #10b981)' },
+  { key: 'peach', css: 'linear-gradient(135deg, #fdba74, #f472b6)' },
+  { key: 'slate', css: 'linear-gradient(135deg, #334155, #0f172a)' },
+]
+
+const coverIsGradient = computed(() => !!currentPage.value?.cover?.startsWith('grad:'))
+const coverGradientStyle = computed(() => {
+  const c = currentPage.value?.cover || ''
+  if (!c.startsWith('grad:')) return ''
+  const key = c.slice(5)
+  return GRADIENTS.find(g => g.key === key)?.css || GRADIENTS[0].css
+})
+
+const randomIcon = () => {
+  const all = EMOJI_GROUPS.flatMap(g => g.items)
+  setIcon(all[Math.floor(Math.random() * all.length)])
+}
+
+const setGradientCover = (key: string) => {
+  if (!currentPage.value) return
+  currentPage.value.cover = 'grad:' + key
+  coverPickerVisible.value = false
+  scheduleSave()
+}
+
+const pickCoverFromPicker = () => {
+  coverPickerVisible.value = false
+  pickCover()
+}
 
 const pickCover = () => {
   const input = document.createElement('input')
@@ -803,7 +947,7 @@ const openFromSearch = async (result: any) => {
     const nb = notebooks.value.find(n => n.id === page.notebook_id)
     if (nb && currentNotebook.value?.id !== nb.id) {
       currentNotebook.value = nb
-      loadPages(true)
+      loadTree()
     }
   } catch (e: any) {
     if (seq !== pageLoadSeq) return
@@ -1532,4 +1676,93 @@ html, body, #app { height: 100%; }
 .empty-emoji { font-size: 52px; margin-bottom: 14px; opacity: 0.85; }
 .empty-state h2 { font-size: 20px; font-weight: 600; color: #37352f; margin-bottom: 6px; }
 .empty-state p { font-size: 14px; color: #9b9a97; }
+
+/* 页面树拖拽反馈 */
+.page-item { position: relative; cursor: pointer; }
+.page-item .page-info { cursor: pointer; }
+.page-item.dragging { opacity: 0.45; }
+.page-item.drop-before { box-shadow: inset 0 2px 0 var(--primary, #4f46e5); }
+.page-item.drop-after { box-shadow: inset 0 -2px 0 var(--primary, #4f46e5); }
+.page-item.drop-inside {
+  background: var(--primary-weak, #eef0ff);
+  outline: 1px dashed var(--primary, #4f46e5);
+  outline-offset: -2px;
+}
+
+/* 封面渐变预设 */
+.page-cover.is-gradient img { display: none; }
+.cover-picker {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 12px;
+  margin: 4px 0 14px;
+  background: #fff;
+  border: 1px solid #ececea;
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
+}
+.cover-upload {
+  border: 1px solid #e6e6e3;
+  background: #f7f7f5;
+  color: #37352f;
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.cover-upload:hover { background: #efefed; }
+.cover-swatch {
+  width: 44px;
+  height: 30px;
+  border-radius: 7px;
+  border: 2px solid transparent;
+  cursor: pointer;
+  padding: 0;
+  transition: transform 0.12s, border-color 0.12s;
+}
+.cover-swatch:hover { transform: translateY(-1px); border-color: #d3d3d0; }
+
+/* emoji 选择器 */
+.icon-picker {
+  display: block;
+  padding: 12px;
+  margin: 4px 0 14px;
+  background: #fff;
+  border: 1px solid #ececea;
+  border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.1);
+}
+.emoji-group { margin-bottom: 8px; }
+.emoji-group:last-of-type { margin-bottom: 4px; }
+.emoji-group-label { font-size: 11px; color: #9b9a97; margin: 2px 2px 6px; font-weight: 600; }
+.emoji-grid { display: flex; flex-wrap: wrap; gap: 4px; }
+.emoji-opt {
+  width: 34px;
+  height: 34px;
+  font-size: 20px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.12s, transform 0.12s, border-color 0.12s;
+}
+.emoji-opt:hover { background: #f1f1ef; transform: translateY(-1px); }
+.emoji-opt.active { background: #eef0ff; border-color: #cdcbf8; }
+.emoji-foot { display: flex; gap: 8px; margin-top: 8px; padding-top: 8px; border-top: 1px solid #f2f2f0; }
+.emoji-foot-btn {
+  flex: 1;
+  border: 1px solid #ececea;
+  background: #f7f7f5;
+  color: #37352f;
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.emoji-foot-btn:hover { background: #efefed; }
 </style>

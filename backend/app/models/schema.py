@@ -125,6 +125,7 @@ class PageBase(BaseModel):
     notebook_id: Optional[str] = None
     icon: str = ''
     cover: str = ''
+    parent_id: Optional[str] = None
 
 class PageCreate(PageBase):
     pass
@@ -136,8 +137,13 @@ class PageUpdate(BaseModel):
     icon: Optional[str] = None
     cover: Optional[str] = None
 
+class PageMove(BaseModel):
+    parent_id: Optional[str] = None
+    position: int = 0
+
 class PageResponse(PageBase):
     id: str
+    position: int = 0
     created_at: datetime
     updated_at: datetime
 
@@ -153,6 +159,8 @@ class PageListItem(BaseModel):
     id: str
     title: str = '无标题'
     notebook_id: Optional[str] = None
+    parent_id: Optional[str] = None
+    position: int = 0
     created_at: datetime
     updated_at: datetime
 

@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
 from sqlalchemy.orm import Session
-from sqlalchemy import or_, text
+from sqlalchemy import or_, text, func
 from typing import List, Optional
 import uuid
 import time
@@ -11,7 +11,7 @@ from collections import Counter
 logger = logging.getLogger(__name__)
 
 from app.models.database import Page, Notebook, PageChunk, get_engine
-from app.models.schema import PageCreate, PageUpdate, PageResponse, PageListItem, PageListResponse
+from app.models.schema import PageCreate, PageUpdate, PageMove, PageResponse, PageListItem, PageListResponse
 from app.core.rag import EmbeddingService, VectorStore
 from app.core.hybrid import HybridIndex
 from app.core.entity_graph import EntityGraphStore
@@ -145,9 +145,18 @@ def create_page(data: PageCreate, background_tasks: BackgroundTasks, db: Session
         if nb and "__local_admin__" not in current_user["groups"]:
             if nb.group_id and nb.group_id not in current_user["groups"]:
                 raise HTTPException(status_code=403, detail="无权在该笔记本创建笔记")
+    parent_id = data.parent_id
+    if parent_id:
+        parent = db.query(Page).filter(Page.id == parent_id).first()
+        if not parent or parent.notebook_id != data.notebook_id:
+            parent_id = None
+    max_pos = db.query(func.max(Page.position)).filter(
+        Page.notebook_id == data.notebook_id
+    ).scalar()
     page = Page(
         id=str(uuid.uuid4()), title=data.title, content=data.content,
         notebook_id=data.notebook_id, icon=data.icon or '', cover=data.cover or '',
+        parent_id=parent_id, position=(max_pos or 0) + 1,
     )
     db.add(page)
     db.commit()
@@ -166,7 +175,7 @@ def list_pages(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    cols = (Page.id, Page.title, Page.notebook_id, Page.created_at, Page.updated_at)
+    cols = (Page.id, Page.title, Page.notebook_id, Page.parent_id, Page.position, Page.created_at, Page.updated_at)
     query = db.query(*cols)
     if unassigned:
         query = query.filter(Page.notebook_id.is_(None))
@@ -183,13 +192,15 @@ def list_pages(
         )
 
     total = query.count()
-    rows = query.order_by(Page.updated_at.desc()).offset((page - 1) * page_size).limit(page_size).all()
+    rows = query.order_by(Page.position.asc(), Page.created_at.asc()).offset((page - 1) * page_size).limit(page_size).all()
 
     return PageListResponse(
         items=[PageListItem(
             id=r.id,
             title=r.title,
             notebook_id=r.notebook_id,
+            parent_id=r.parent_id,
+            position=r.position or 0,
             created_at=r.created_at,
             updated_at=r.updated_at,
         ) for r in rows],
@@ -222,11 +233,35 @@ def get_tags(db: Session = Depends(get_db), current_user=Depends(get_current_use
     tags = [{"tag": k, "count": v} for k, v in counter.most_common(100)]
     return {"tags": tags}
 
+@router.get("/tree")
+def page_tree(notebook_id: str, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    """返回某笔记本下的全部页面(含父子关系与排序),用于页面树。"""
+    nb = db.query(Notebook).filter(Notebook.id == notebook_id).first()
+    if not nb:
+        raise HTTPException(status_code=404, detail="笔记本不存在")
+    if "__local_admin__" not in current_user["groups"] and nb.group_id and nb.group_id not in current_user["groups"]:
+        raise HTTPException(status_code=403, detail="无权访问该笔记本")
+    rows = db.query(Page.id, Page.title, Page.parent_id, Page.position, Page.updated_at).filter(
+        Page.notebook_id == notebook_id
+    ).order_by(Page.position.asc(), Page.created_at.asc()).all()
+    return {
+        "items": [
+            {
+                "id": r[0],
+                "title": r[1] or "无标题",
+                "parent_id": r[2],
+                "position": r[3] or 0,
+                "updated_at": r[4],
+            }
+            for r in rows
+        ]
+    }
+
 @router.get("/{page_id}", response_model=PageResponse)
 def get_page(page_id: str, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     row = db.execute(
         text(
-            "SELECT id, title, content, notebook_id, icon, cover, created_at, updated_at "
+            "SELECT id, title, content, notebook_id, icon, cover, parent_id, position, created_at, updated_at "
             "FROM pages WHERE id = :pid"
         ),
         {"pid": page_id},
@@ -236,8 +271,8 @@ def get_page(page_id: str, db: Session = Depends(get_db), current_user=Depends(g
     _check_page_access_by_nb(row[3], current_user, db)
     return PageResponse(
         id=row[0], title=row[1], content=row[2], notebook_id=row[3],
-        icon=row[4] or '', cover=row[5] or '',
-        created_at=row[6], updated_at=row[7],
+        icon=row[4] or '', cover=row[5] or '', parent_id=row[6], position=row[7] or 0,
+        created_at=row[8], updated_at=row[9],
     )
 
 @router.put("/{page_id}", response_model=PageResponse)
@@ -270,6 +305,43 @@ def update_page(page_id: str, data: PageUpdate, background_tasks: BackgroundTask
     if _should_index(page.id):
         background_tasks.add_task(background_index_page, page.id)
     return page
+
+@router.post("/{page_id}/move")
+def move_page(page_id: str, data: PageMove, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    """移动/重排页面: 设置父页面并在同级中插入到指定位置(含防环校验)。"""
+    page = db.query(Page).filter(Page.id == page_id).first()
+    if not page:
+        raise HTTPException(status_code=404, detail="笔记不存在")
+    _check_page_access(page, current_user, db)
+
+    parent_id = data.parent_id
+    if parent_id:
+        if parent_id == page.id:
+            raise HTTPException(status_code=400, detail="不能移动到自身")
+        parent = db.query(Page).filter(Page.id == parent_id).first()
+        if not parent or parent.notebook_id != page.notebook_id:
+            raise HTTPException(status_code=400, detail="目标父页面无效")
+        cur = parent
+        guard = 0
+        while cur is not None and guard < 1000:
+            if cur.id == page.id:
+                raise HTTPException(status_code=400, detail="不能移动到自己的子页面下")
+            cur = db.query(Page).filter(Page.id == cur.parent_id).first() if cur.parent_id else None
+            guard += 1
+
+    page.parent_id = parent_id
+    db.flush()
+
+    q = db.query(Page).filter(Page.notebook_id == page.notebook_id, Page.id != page.id)
+    q = q.filter(Page.parent_id == parent_id) if parent_id else q.filter(Page.parent_id.is_(None))
+    siblings = q.order_by(Page.position.asc(), Page.created_at.asc()).all()
+    pos = max(0, min(int(data.position), len(siblings)))
+    siblings.insert(pos, page)
+    for i, p in enumerate(siblings):
+        p.position = i
+    page.updated_at = datetime.now()
+    db.commit()
+    return {"message": "ok"}
 
 @router.delete("/{page_id}")
 def delete_page(page_id: str, db: Session = Depends(get_db), current_user=Depends(get_current_user)):

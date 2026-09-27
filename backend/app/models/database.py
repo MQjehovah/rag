@@ -33,9 +33,12 @@ class Page(Base):
     notebook_id = Column(String(36), ForeignKey('notebooks.id', ondelete='SET NULL'), nullable=True, index=True)
     title = Column(String(255), nullable=False, default='无标题')
     content = Column(Text, default='')
-    # 页面图标(emoji)与封面图 URL(Notion 风格)
+    # 页面图标(emoji)与封面图 URL/渐变(Notion 风格)
     icon = Column(String(32), default='')
     cover = Column(Text, default='')
+    # 页面树: 父页面 + 同级排序位次
+    parent_id = Column(String(36), ForeignKey('pages.id', ondelete='SET NULL'), nullable=True, index=True)
+    position = Column(Integer, default=0)
     keywords = Column(Text, default='')
     term_count = Column(Integer, nullable=True, default=0)
     created_at = Column(DateTime, default=datetime.now)
@@ -368,6 +371,9 @@ def _backfill_text_defaults(engine):
             ))
             conn.execute(sqlalchemy_text(
                 "UPDATE pages SET cover = '' WHERE cover IS NULL"
+            ))
+            conn.execute(sqlalchemy_text(
+                "UPDATE pages SET position = 0 WHERE position IS NULL"
             ))
     except Exception:
         logger.warning("回填文本列默认值失败", exc_info=True)
