@@ -415,12 +415,12 @@ onBeforeUnmount(() => {
 .wiki-page {
   height: 100%;
   display: flex;
-  background: #f0f2f5;
+  background: var(--bg);
 }
 .wiki-sidebar {
   width: 300px;
-  background: #fff;
-  border-right: 1px solid #e2e8f0;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -523,10 +523,10 @@ onBeforeUnmount(() => {
 .wiki-content-card {
   max-width: 860px;
   margin: 0 auto;
-  background: #fff;
-  border-radius: 12px;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.06);
-  border: 1px solid #e2e8f0;
+  background: var(--surface);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  border: 1px solid var(--border);
   padding: 36px 48px;
   min-height: 70vh;
 }
@@ -561,15 +561,15 @@ onBeforeUnmount(() => {
 .wiki-title {
   font-size: 28px;
   font-weight: 700;
-  color: #0f172a;
+  color: var(--text);
   margin-bottom: 10px;
 }
 .wiki-summary {
-  background: #f8fafc;
-  border-left: 3px solid #3b82f6;
+  background: var(--surface-2);
+  border-left: 3px solid var(--primary);
   padding: 10px 14px;
   border-radius: 0 8px 8px 0;
-  color: #475569;
+  color: var(--text-2);
   font-size: 13px;
   margin-bottom: 20px;
   line-height: 1.6;

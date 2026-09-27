@@ -270,8 +270,8 @@ onUnmounted(() => {
 .page { padding: 20px 24px; height: 100%; overflow: auto; }
 .page-head { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px; }
 .page-head h2 { margin: 0 0 4px; }
-.muted { color: #909399; }
-.reindex { margin-top: 18px; padding: 16px; border: 1px solid #e4e7ed; border-radius: 10px; background: #fff; }
+.muted { color: var(--text-3); }
+.reindex { margin-top: 18px; padding: 16px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
 .reindex-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 .panel { }
 </style>

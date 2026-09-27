@@ -371,7 +371,7 @@ onUnmounted(() => {
 .page { padding: 20px 24px; height: 100%; overflow: auto; }
 .page-head { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px; }
 .page-head h2 { margin: 0 0 4px; }
-.muted { color: #909399; }
+.muted { color: var(--text-3); }
 .link { color: #409eff; text-decoration: none; }
 .md-preview {
   max-height: 60vh; overflow: auto; background: #f7f8fa; padding: 12px;

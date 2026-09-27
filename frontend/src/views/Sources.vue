@@ -150,17 +150,20 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .sources-page {
-  padding: 28px 40px;
-  max-width: 960px;
+  padding: 28px 40px 60px;
+  max-width: 1000px;
   margin: 0 auto;
+  height: 100%;
+  overflow-y: auto;
 }
 .sources-header h2 {
   font-size: 22px;
-  color: #0f172a;
+  font-weight: 700;
+  color: var(--text);
   margin-bottom: 6px;
 }
 .sources-header p {
-  color: #64748b;
+  color: var(--text-3);
   font-size: 13px;
   margin-bottom: 20px;
 }
@@ -170,12 +173,14 @@ onBeforeUnmount(() => {
   gap: 14px;
 }
 .source-card {
-  background: #fff;
-  border: 1px solid #e2e8f0;
-  border-radius: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
   padding: 18px 22px;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+  box-shadow: var(--shadow-sm);
+  transition: box-shadow 0.15s, border-color 0.15s;
 }
+.source-card:hover { border-color: var(--border-strong); box-shadow: var(--shadow); }
 .source-card-head {
   display: flex;
   justify-content: space-between;
@@ -185,11 +190,11 @@ onBeforeUnmount(() => {
 .source-name {
   font-size: 16px;
   font-weight: 600;
-  color: #1e293b;
+  color: var(--text);
 }
 .source-desc {
   font-size: 12px;
-  color: #94a3b8;
+  color: var(--text-3);
   margin-top: 3px;
 }
 .source-config {
