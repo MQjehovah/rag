@@ -157,7 +157,7 @@ onBeforeUnmount(() => {
   overflow-y: auto;
 }
 .sources-header h2 {
-  font-size: 22px;
+  font-size: 24px;
   font-weight: 700;
   color: var(--text);
   margin-bottom: 6px;

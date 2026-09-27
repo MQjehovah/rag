@@ -368,9 +368,9 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-.page { padding: 20px 24px; height: 100%; overflow: auto; }
-.page-head { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px; }
-.page-head h2 { margin: 0 0 4px; }
+.page { padding: 28px 40px 60px; height: 100%; overflow: auto; max-width: 1100px; margin: 0 auto; }
+.page-head { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 18px; gap: 12px; }
+.page-head h2 { margin: 0 0 4px; font-size: 24px; font-weight: 700; color: var(--text); }
 .muted { color: var(--text-3); }
 .link { color: #409eff; text-decoration: none; }
 .md-preview {
