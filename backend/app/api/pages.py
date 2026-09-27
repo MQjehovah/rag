@@ -176,7 +176,7 @@ def list_pages(
     current_user=Depends(get_current_user),
 ):
     cols = (Page.id, Page.title, Page.notebook_id, Page.parent_id, Page.position, Page.created_at, Page.updated_at)
-    query = db.query(*cols)
+    query = db.query(*cols).filter(Page.deleted_at.is_(None))
     if unassigned:
         query = query.filter(Page.notebook_id.is_(None))
     elif notebook_id:
@@ -214,12 +214,13 @@ def list_pages(
 def get_tags(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     """Aggregate note keywords into a tag cloud (visible to the user)."""
     if "__local_admin__" in current_user["groups"]:
-        rows = db.query(Page.keywords).all()
+        rows = db.query(Page.keywords).filter(Page.deleted_at.is_(None)).all()
     else:
         visible_nb_ids = db.query(Notebook.id).filter(
             or_(Notebook.group_id.in_(current_user["groups"]), Notebook.group_id.is_(None))
         ).subquery()
         rows = db.query(Page.keywords).filter(
+            Page.deleted_at.is_(None),
             or_(Page.notebook_id.is_(None), Page.notebook_id.in_(visible_nb_ids))
         ).all()
     counter = Counter()
@@ -242,7 +243,8 @@ def page_tree(notebook_id: str, db: Session = Depends(get_db), current_user=Depe
     if "__local_admin__" not in current_user["groups"] and nb.group_id and nb.group_id not in current_user["groups"]:
         raise HTTPException(status_code=403, detail="无权访问该笔记本")
     rows = db.query(Page.id, Page.title, Page.parent_id, Page.position, Page.updated_at).filter(
-        Page.notebook_id == notebook_id
+        Page.notebook_id == notebook_id,
+        Page.deleted_at.is_(None),
     ).order_by(Page.position.asc(), Page.created_at.asc()).all()
     return {
         "items": [
@@ -257,12 +259,34 @@ def page_tree(notebook_id: str, db: Session = Depends(get_db), current_user=Depe
         ]
     }
 
+@router.get("/trash")
+def list_trash(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    """回收站: 已软删除的页面(按用户可见范围)。"""
+    q = db.query(Page.id, Page.title, Page.notebook_id, Page.deleted_at).filter(Page.deleted_at.isnot(None))
+    if "__local_admin__" not in current_user["groups"]:
+        visible_nb_ids = db.query(Notebook.id).filter(
+            or_(Notebook.group_id.in_(current_user["groups"]), Notebook.group_id.is_(None))
+        ).subquery()
+        q = q.filter(or_(Page.notebook_id.is_(None), Page.notebook_id.in_(visible_nb_ids)))
+    rows = q.order_by(Page.deleted_at.desc()).all()
+    return {
+        "items": [
+            {
+                "id": r[0],
+                "title": r[1] or "无标题",
+                "notebook_id": r[2],
+                "deleted_at": r[3],
+            }
+            for r in rows
+        ]
+    }
+
 @router.get("/{page_id}", response_model=PageResponse)
 def get_page(page_id: str, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     row = db.execute(
         text(
             "SELECT id, title, content, notebook_id, icon, cover, parent_id, position, created_at, updated_at "
-            "FROM pages WHERE id = :pid"
+            "FROM pages WHERE id = :pid AND deleted_at IS NULL"
         ),
         {"pid": page_id},
     ).fetchone()
@@ -278,7 +302,7 @@ def get_page(page_id: str, db: Session = Depends(get_db), current_user=Depends(g
 @router.put("/{page_id}", response_model=PageResponse)
 def update_page(page_id: str, data: PageUpdate, background_tasks: BackgroundTasks, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     page = db.query(Page).filter(Page.id == page_id).first()
-    if not page:
+    if not page or page.deleted_at is not None:
         raise HTTPException(status_code=404, detail="笔记不存在")
     _check_page_access(page, current_user, db)
 
@@ -310,7 +334,7 @@ def update_page(page_id: str, data: PageUpdate, background_tasks: BackgroundTask
 def move_page(page_id: str, data: PageMove, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     """移动/重排页面: 设置父页面并在同级中插入到指定位置(含防环校验)。"""
     page = db.query(Page).filter(Page.id == page_id).first()
-    if not page:
+    if not page or page.deleted_at is not None:
         raise HTTPException(status_code=404, detail="笔记不存在")
     _check_page_access(page, current_user, db)
 
@@ -345,18 +369,43 @@ def move_page(page_id: str, data: PageMove, db: Session = Depends(get_db), curre
 
 @router.delete("/{page_id}")
 def delete_page(page_id: str, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    """软删除: 移到回收站(可在回收站恢复或彻底删除)。"""
+    page = db.query(Page).filter(Page.id == page_id).first()
+    if not page or page.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="笔记不存在")
+    _check_page_access(page, current_user, db)
+    page.deleted_at = datetime.now()
+    db.commit()
+    return {"message": "已移到回收站"}
+
+@router.post("/{page_id}/restore")
+def restore_page(page_id: str, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     page = db.query(Page).filter(Page.id == page_id).first()
     if not page:
         raise HTTPException(status_code=404, detail="笔记不存在")
     _check_page_access(page, current_user, db)
+    page.deleted_at = None
+    # 父页面若仍在回收站, 恢复到根级避免不可见
+    if page.parent_id:
+        parent = db.query(Page).filter(Page.id == page.parent_id).first()
+        if parent and parent.deleted_at is not None:
+            page.parent_id = None
+    db.commit()
+    return {"message": "已恢复"}
 
+@router.delete("/{page_id}/purge")
+def purge_page(page_id: str, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    """彻底删除(含向量/词项/图谱)。"""
+    page = db.query(Page).filter(Page.id == page_id).first()
+    if not page:
+        raise HTTPException(status_code=404, detail="笔记不存在")
+    _check_page_access(page, current_user, db)
     HybridIndex(db).delete_page(page_id)
     EntityGraphStore(db).delete_page(page_id)
     db.query(PageChunk).filter(PageChunk.page_id == page_id).delete()
     db.delete(page)
     db.commit()
-
-    return {"message": "删除成功"}
+    return {"message": "已彻底删除"}
 
 @router.post("/{page_id}/index")
 async def index_page(page_id: str, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
@@ -402,7 +451,9 @@ async def reindex_all(db: Session = Depends(get_db), current_user=Depends(get_cu
     if "__local_admin__" not in current_user["groups"]:
         raise HTTPException(status_code=403, detail="仅管理员可执行")
 
-    pages = db.query(Page).filter(Page.content.isnot(None), Page.content != "").all()
+    pages = db.query(Page).filter(
+        Page.content.isnot(None), Page.content != "", Page.deleted_at.is_(None)
+    ).all()
 
     if not pages:
         return {"message": "没有需要索引的笔记", "indexed": 0, "total": 0}

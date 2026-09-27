@@ -20,15 +20,16 @@ def visible_wiki_filter(current_user):
 
 
 def get_visible_page_ids(db: Session, current_user) -> Set[str]:
-    """Page ids the user may see (unassigned pages are public)."""
+    """Page ids the user may see (unassigned pages are public). Excludes trash."""
+    base = db.query(Page.id).filter(Page.deleted_at.is_(None))
     if "__local_admin__" in current_user["groups"]:
-        return set(p[0] for p in db.query(Page.id).all())
+        return set(p[0] for p in base.all())
     visible_nb_ids = db.query(Notebook.id).filter(
         or_(Notebook.group_id.in_(current_user["groups"]), Notebook.group_id.is_(None))
     ).subquery()
     return set(
         p[0]
-        for p in db.query(Page.id).filter(
+        for p in base.filter(
             or_(Page.notebook_id.is_(None), Page.notebook_id.in_(visible_nb_ids))
         ).all()
     )
@@ -54,12 +55,12 @@ def keyword_search(
     if not kw_like_conditions:
         return kw_scores, content_snippets
 
-    where_clause = " OR ".join(kw_like_conditions)
+    where_clause = f"({(' OR '.join(kw_like_conditions))}) AND deleted_at IS NULL"
     if visible_ids:
         placeholders = ",".join([f":vid{i}" for i in range(len(visible_ids))])
         for i, vid in enumerate(visible_ids):
             params[f"vid{i}"] = vid
-        where_clause = f"({where_clause}) AND id IN ({placeholders})"
+        where_clause = f"{where_clause} AND id IN ({placeholders})"
 
     result = db.execute(
         sql_text(f"SELECT id, title, content, keywords FROM pages WHERE {where_clause}"),

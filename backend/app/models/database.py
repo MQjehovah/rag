@@ -39,6 +39,8 @@ class Page(Base):
     # 页面树: 父页面 + 同级排序位次
     parent_id = Column(String(36), ForeignKey('pages.id', ondelete='SET NULL'), nullable=True, index=True)
     position = Column(Integer, default=0)
+    # 软删除(回收站); NULL 表示正常
+    deleted_at = Column(DateTime, nullable=True, index=True)
     keywords = Column(Text, default='')
     term_count = Column(Integer, nullable=True, default=0)
     created_at = Column(DateTime, default=datetime.now)

@@ -12,6 +12,21 @@
         <div class="side-search">
           <el-input v-model="searchQuery" placeholder="搜索笔记..." clearable @keyup.enter="doSearch" />
         </div>
+        <button class="side-quick" @click="openQuick">
+          <span>快速查找</span><kbd>Ctrl K</kbd>
+        </button>
+
+        <template v-if="favPages.length">
+          <div class="side-section">
+            <span class="side-section-label">收藏</span>
+          </div>
+          <div class="fav-list">
+            <div v-for="f in favPages" :key="f.id" class="page-item fav" @click="openPageById(f.id)">
+              <span class="fav-star">★</span>
+              <span class="page-title">{{ f.title }}</span>
+            </div>
+          </div>
+        </template>
 
         <div class="side-section">
           <span class="side-section-label">笔记本</span>
@@ -125,6 +140,20 @@
             暂无笔记本
           </div>
         </div>
+        <div class="side-foot">
+          <button class="side-foot-btn" @click="toggleTrash">
+            <span>🗑 回收站</span>
+            <span v-if="trashPages.length" class="count">{{ trashPages.length }}</span>
+          </button>
+        </div>
+        <div v-if="trashOpen" class="trash-list">
+          <div v-if="!trashPages.length" class="muted-hint" style="padding: 6px 12px">回收站为空</div>
+          <div v-for="t in trashPages" :key="t.id" class="trash-item">
+            <span class="page-title">{{ t.title }}</span>
+            <button class="icon-btn" title="恢复" @click="restoreTrash(t.id)">↩</button>
+            <button class="icon-btn" title="彻底删除" @click="purgeTrash(t.id, t.title)">✕</button>
+          </div>
+        </div>
         <div v-if="!sidebarCollapsed" class="sidebar-resizer" @mousedown.prevent="startSidebarResize"></div>
       </aside>
 
@@ -140,14 +169,29 @@
             </template>
           </div>
           <div class="topbar-actions">
+            <button class="icon-btn" :class="{ 'is-on': outlineOpen }" title="大纲" @click="outlineOpen = !outlineOpen">☰</button>
             <span class="save-badge" :class="saveStatus">{{ saveStatus === 'saved' ? '已保存' : saveStatus === 'saving' ? '保存中…' : '未保存' }}</span>
             <el-button size="small" @click="importDialogVisible = true">导入</el-button>
             <el-button size="small" :loading="organizing" @click="handleOrganize">{{ organizing ? '整理中…' : '自动整理' }}</el-button>
+            <el-dropdown v-if="currentPage" trigger="click" @command="onPageMenu">
+              <button class="icon-btn" title="页面设置">⋯</button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item command="fav">{{ isFav ? '★ 取消收藏' : '☆ 收藏' }}</el-dropdown-item>
+                  <el-dropdown-item command="link">复制链接</el-dropdown-item>
+                  <el-dropdown-item command="dup">创建副本</el-dropdown-item>
+                  <el-dropdown-item command="export">导出 Markdown</el-dropdown-item>
+                  <el-dropdown-item command="wide" divided>{{ pageWide ? '关闭全宽' : '全宽显示' }}</el-dropdown-item>
+                  <el-dropdown-item command="small">{{ pageSmall ? '取消小字号' : '小字号' }}</el-dropdown-item>
+                  <el-dropdown-item command="delete" divided>移到回收站</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
             <el-button size="small" type="primary" @click="showNewNotebook = true">新建</el-button>
           </div>
         </div>
         <div class="doc-scroll">
-        <div v-if="currentPage" class="editor-wrapper">
+        <div v-if="currentPage" class="editor-wrapper" :class="{ wide: pageWide, small: pageSmall }">
           <div
             v-if="currentPage.cover"
             class="page-cover"
@@ -228,6 +272,24 @@
         </div>
         </div>
       </main>
+
+      <!-- 大纲 -->
+      <aside v-if="outlineOpen" class="outline-panel">
+        <div class="outline-head">
+          <span>大纲</span>
+          <button class="icon-btn" title="关闭" @click="outlineOpen = false">✕</button>
+        </div>
+        <div class="outline-body">
+          <div v-if="!outlineItems.length" class="muted-hint" style="padding: 8px 12px">暂无标题</div>
+          <div
+            v-for="(h, i) in outlineItems"
+            :key="i"
+            class="outline-item"
+            :style="{ paddingLeft: (10 + (h.level - 1) * 12) + 'px' }"
+            @click="scrollToHeading(h.text)"
+          >{{ h.text }}</div>
+        </div>
+      </aside>
     </div>
 
     <!-- 新建笔记本对话框 -->
@@ -351,13 +413,37 @@
         <el-button v-if="confirmForm.should_save" type="primary" :loading="confirmLoading" @click="confirmImport">确认保存</el-button>
       </template>
     </el-dialog>
+
+    <!-- 快速切换 (Ctrl+K) -->
+    <div v-if="quickOpen" class="quick-overlay" @click.self="quickOpen = false">
+      <div class="quick-box">
+        <input
+          ref="quickInput"
+          v-model="quickQuery"
+          class="quick-input"
+          placeholder="搜索页面…（↑↓ 选择，回车打开，Esc 关闭）"
+          @keydown="onQuickKey"
+        />
+        <div class="quick-list">
+          <div
+            v-for="(p, i) in quickResults"
+            :key="p.id"
+            class="quick-item"
+            :class="{ active: i === quickIndex }"
+            @mouseenter="quickIndex = i"
+            @click="quickPick(p)"
+          >{{ p.title }}</div>
+          <div v-if="!quickResults.length" class="muted-hint" style="padding: 10px 14px">无匹配页面</div>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from 'vue'
+import { ref, reactive, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
-import { ElMessage, ElNotification } from 'element-plus'
+import { ElMessage, ElNotification, ElMessageBox } from 'element-plus'
 import type { UploadFile as ElUploadFile } from 'element-plus'
 import http from '../api/http'
 import TipTapEditor from '../components/TipTapEditor.vue'
@@ -940,6 +1026,189 @@ const setIcon = (emoji: string) => {
   scheduleSave()
 }
 
+// ---------------- Notion 风格增强: 收藏 / 快速切换 / 大纲 / 页面菜单 / 回收站 ----------------
+const favPages = ref<{ id: string; title: string }[]>(JSON.parse(localStorage.getItem('rag-fav-pages') || '[]'))
+const trashPages = ref<{ id: string; title: string; notebook_id: string | null; deleted_at: string }[]>([])
+const trashOpen = ref(false)
+const quickOpen = ref(false)
+const quickQuery = ref('')
+const quickIndex = ref(0)
+const quickPages = ref<{ id: string; title: string }[]>([])
+const quickInput = ref<HTMLInputElement | null>(null)
+const outlineOpen = ref(false)
+const pageWide = ref(false)
+const pageSmall = ref(false)
+
+const saveFavs = () => localStorage.setItem('rag-fav-pages', JSON.stringify(favPages.value))
+const isFav = computed(() => !!currentPage.value && favPages.value.some(p => p.id === currentPage.value!.id))
+const toggleFav = () => {
+  if (!currentPage.value) return
+  const id = currentPage.value.id
+  if (favPages.value.some(p => p.id === id)) {
+    favPages.value = favPages.value.filter(p => p.id !== id)
+  } else {
+    favPages.value = [{ id, title: currentPage.value.title || '无标题' }, ...favPages.value]
+  }
+  saveFavs()
+}
+
+watch(() => currentPage.value?.id, (id) => {
+  if (!id) { pageWide.value = false; pageSmall.value = false; return }
+  pageWide.value = localStorage.getItem('rag-page-wide-' + id) === '1'
+  pageSmall.value = localStorage.getItem('rag-page-small-' + id) === '1'
+})
+
+const toggleWide = () => {
+  if (!currentPage.value) return
+  pageWide.value = !pageWide.value
+  localStorage.setItem('rag-page-wide-' + currentPage.value.id, pageWide.value ? '1' : '0')
+}
+const toggleSmall = () => {
+  if (!currentPage.value) return
+  pageSmall.value = !pageSmall.value
+  localStorage.setItem('rag-page-small-' + currentPage.value.id, pageSmall.value ? '1' : '0')
+}
+
+const copyText = async (text: string) => {
+  try {
+    await navigator.clipboard.writeText(text)
+  } catch {
+    const ta = document.createElement('textarea')
+    ta.value = text
+    document.body.appendChild(ta)
+    ta.select()
+    document.execCommand('copy')
+    document.body.removeChild(ta)
+  }
+}
+const copyLink = async () => {
+  if (!currentPage.value) return
+  await copyText(`${window.location.origin}${API_BASE}/notes?page=${currentPage.value.id}`)
+  ElMessage.success('链接已复制')
+}
+const duplicatePage = async () => {
+  if (!currentPage.value || !currentNotebook.value) return
+  try {
+    const res = await http.post('/api/pages', {
+      title: (currentPage.value.title || '无标题') + ' 副本',
+      content: currentPage.value.content,
+      notebook_id: currentNotebook.value.id,
+      parent_id: currentPage.value.parent_id ?? null,
+    })
+    await loadTree()
+    currentPage.value = res.data
+    ElMessage.success('已创建副本')
+  } catch {
+    ElMessage.error('复制失败')
+  }
+}
+const exportMarkdown = () => {
+  if (!currentPage.value) return
+  const blob = new Blob([currentPage.value.content || ''], { type: 'text/markdown;charset=utf-8' })
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(blob)
+  a.download = (currentPage.value.title || 'note').replace(/[\\/:*?"<>|]/g, '_') + '.md'
+  a.click()
+  URL.revokeObjectURL(a.href)
+}
+const deleteCurrent = async () => {
+  if (!currentPage.value) return
+  try {
+    await ElMessageBox.confirm(`将「${currentPage.value.title || '无标题'}」移到回收站？`, '移到回收站', { type: 'warning' })
+  } catch { return }
+  await handlePageCmd('delete', currentPage.value as any)
+}
+
+// 回收站
+const loadTrash = async () => {
+  try {
+    trashPages.value = (await http.get('/api/pages/trash')).data.items || []
+  } catch { trashPages.value = [] }
+}
+const toggleTrash = async () => {
+  trashOpen.value = !trashOpen.value
+  if (trashOpen.value) await loadTrash()
+}
+const restoreTrash = async (id: string) => {
+  try {
+    await http.post(`/api/pages/${id}/restore`)
+    ElMessage.success('已恢复')
+    await loadTrash()
+    if (currentNotebook.value) await loadTree()
+  } catch { ElMessage.error('恢复失败') }
+}
+const purgeTrash = async (id: string, title: string) => {
+  try {
+    await ElMessageBox.confirm(`彻底删除「${title}」？此操作不可恢复。`, '彻底删除', { type: 'warning' })
+  } catch { return }
+  try {
+    await http.delete(`/api/pages/${id}/purge`)
+    ElMessage.success('已彻底删除')
+    await loadTrash()
+  } catch { ElMessage.error('删除失败') }
+}
+
+// 快速切换(Ctrl+K)
+const quickResults = computed(() => {
+  const q = quickQuery.value.trim().toLowerCase()
+  const arr = quickPages.value
+  if (!q) return arr.slice(0, 40)
+  return arr.filter(p => (p.title || '').toLowerCase().includes(q)).slice(0, 40)
+})
+const onPageMenu = (cmd: string) => {
+  if (cmd === 'fav') toggleFav()
+  else if (cmd === 'link') copyLink()
+  else if (cmd === 'dup') duplicatePage()
+  else if (cmd === 'export') exportMarkdown()
+  else if (cmd === 'wide') toggleWide()
+  else if (cmd === 'small') toggleSmall()
+  else if (cmd === 'delete') deleteCurrent()
+}
+
+const openQuick = async () => {
+  quickOpen.value = true
+  quickQuery.value = ''
+  quickIndex.value = 0
+  nextTick(() => quickInput.value?.focus())
+  if (!quickPages.value.length) {
+    try {
+      const res = await http.get('/api/pages', { params: { page: 1, page_size: 500 } })
+      quickPages.value = (res.data.items || []).map((p: any) => ({ id: p.id, title: p.title || '无标题' }))
+    } catch { /* ignore */ }
+  }
+}
+const quickPick = async (p: { id: string }) => {
+  quickOpen.value = false
+  await openPageById(p.id)
+}
+const onQuickKey = (e: KeyboardEvent) => {
+  const list = quickResults.value
+  if (e.key === 'ArrowDown') { e.preventDefault(); quickIndex.value = Math.min(quickIndex.value + 1, list.length - 1) }
+  else if (e.key === 'ArrowUp') { e.preventDefault(); quickIndex.value = Math.max(quickIndex.value - 1, 0) }
+  else if (e.key === 'Enter') { e.preventDefault(); if (list[quickIndex.value]) quickPick(list[quickIndex.value]) }
+  else if (e.key === 'Escape') { quickOpen.value = false }
+}
+
+// 大纲(从正文标题提取)
+const outlineItems = computed(() => {
+  const c = currentPage.value?.content || ''
+  const items: { level: number; text: string }[] = []
+  for (const line of c.split('\n')) {
+    const m = /^(#{1,6})\s+(.+?)\s*$/.exec(line)
+    if (m) items.push({ level: m[1].length, text: m[2].replace(/[*_`]/g, '') })
+  }
+  return items
+})
+const scrollToHeading = (text: string) => {
+  const els = document.querySelectorAll('.ProseMirror h1, .ProseMirror h2, .ProseMirror h3, .ProseMirror h4, .ProseMirror h5, .ProseMirror h6')
+  for (const el of Array.from(els)) {
+    if ((el.textContent || '').trim() === text) {
+      (el as HTMLElement).scrollIntoView({ behavior: 'smooth', block: 'start' })
+      return
+    }
+  }
+}
+
 const reindexCurrentPage = async () => {
   if (!currentPage.value) return
   indexing.value = true
@@ -1112,6 +1381,10 @@ const handleKeydown = (e: KeyboardEvent) => {
   if ((e.ctrlKey || e.metaKey) && e.key === '\\') {
     e.preventDefault()
     sidebarCollapsed.value = !sidebarCollapsed.value
+  }
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+    e.preventDefault()
+    openQuick()
   }
 }
 
@@ -1849,4 +2122,134 @@ html, body, #app { height: 100%; }
 .page-chevron.open { transform: rotate(90deg); }
 .page-chevron:not(.placeholder):hover { background: #e3e3e0; color: #37352f; }
 .page-chevron.placeholder { visibility: hidden; }
+
+/* 快速查找 / 收藏 / 回收站 */
+.side-quick {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0 10px 6px;
+  padding: 6px 10px;
+  border: 1px solid #ececea;
+  background: #fff;
+  color: #9b9a97;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.side-quick:hover { background: #f1f1ef; color: #37352f; }
+.side-quick kbd {
+  font-size: 10px;
+  background: #f1f1ef;
+  border: 1px solid #e3e3e0;
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  padding: 1px 5px;
+  color: #9b9a97;
+}
+.fav-list { padding: 0 8px 6px; }
+.page-item.fav { padding: 5px 8px; }
+.fav-star { color: #f59e0b; margin-right: 7px; font-size: 12px; }
+.side-foot { border-top: 1px solid #ececea; padding: 6px 8px; }
+.side-foot-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: #9b9a97;
+  font-size: 13px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.side-foot-btn:hover { background: #ebebe9; color: #37352f; }
+.side-foot-btn .count { background: #e3e3e0; color: #6b6b68; border-radius: 8px; padding: 0 7px; font-size: 11px; }
+.trash-list { max-height: 200px; overflow-y: auto; padding: 0 8px 8px; }
+.trash-item { display: flex; align-items: center; gap: 2px; padding: 4px 6px; border-radius: 6px; }
+.trash-item:hover { background: #ebebe9; }
+.trash-item .page-title { flex: 1; font-size: 13px; color: #6b6b68; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* 大纲 */
+.outline-panel {
+  width: 224px;
+  flex: 0 0 auto;
+  border-left: 1px solid #f0f0ef;
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.outline-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 12px 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #9b9a97;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.outline-body { flex: 1; overflow-y: auto; padding-bottom: 16px; }
+.outline-item {
+  font-size: 13px;
+  color: #59616f;
+  padding: 4px 12px;
+  cursor: pointer;
+  border-radius: 6px;
+  margin: 0 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.outline-item:hover { background: #f1f1ef; color: #37352f; }
+.icon-btn.is-on { background: #eef0ff; color: #4f46e5; }
+
+/* 全宽 / 小字号(按页面) */
+.editor-wrapper.wide { max-width: 100%; padding-left: 64px; padding-right: 64px; }
+.editor-wrapper.wide .page-cover { margin-left: -64px; margin-right: -64px; }
+.editor-wrapper.small .editor-content .ProseMirror { font-size: 15px; }
+
+/* 快速切换面板 */
+.quick-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.28);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  z-index: 2000;
+  padding-top: 12vh;
+}
+.quick-box {
+  width: 560px;
+  max-width: 92vw;
+  background: #fff;
+  border-radius: 14px;
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.25);
+  overflow: hidden;
+}
+.quick-input {
+  width: 100%;
+  border: none;
+  outline: none;
+  padding: 16px 18px;
+  font-size: 16px;
+  color: #1f2430;
+  border-bottom: 1px solid #f0f0ef;
+}
+.quick-list { max-height: 52vh; overflow-y: auto; padding: 6px; }
+.quick-item {
+  padding: 9px 12px;
+  border-radius: 8px;
+  font-size: 14px;
+  color: #37352f;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.quick-item.active { background: #eef0ff; color: #4f46e5; }
 </style>
