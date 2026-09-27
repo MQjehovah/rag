@@ -447,9 +447,15 @@ function insertBlock(title: string) {
 const handle = reactive({ visible: false, x: 0, y: 0, pos: 0 })
 const blockMenu = reactive({ open: false })
 
+let leaveTimer: number | null = null
+
 function onEditorMouseMove(ev: MouseEvent) {
   const target = ev.target as HTMLElement
-  if (target.closest('.block-handle') || target.closest('.block-menu')) return
+  if (target.closest('.block-handle') || target.closest('.block-menu')) {
+    if (leaveTimer) { clearTimeout(leaveTimer); leaveTimer = null }
+    return
+  }
+  if (leaveTimer) { clearTimeout(leaveTimer); leaveTimer = null }
   const e = editor.value
   if (!e) return
   const el = target.closest('.ProseMirror > *') as HTMLElement | null
@@ -471,9 +477,11 @@ function onEditorMouseMove(ev: MouseEvent) {
 }
 
 function onEditorMouseLeave() {
-  window.setTimeout(() => {
+  if (leaveTimer) { clearTimeout(leaveTimer); leaveTimer = null }
+  leaveTimer = window.setTimeout(() => {
+    leaveTimer = null
     if (!blockMenu.open) handle.visible = false
-  }, 150)
+  }, 200)
 }
 
 function toggleBlockMenu() {
