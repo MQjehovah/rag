@@ -49,15 +49,23 @@ def _get_or_create_notebook(engine, name: str) -> str:
 async def _index_imported(engine, page_id: str, title: str, content: str, keywords: str) -> None:
     """Vector + BM25 indexing (no LLM enrichment) + wiki refresh."""
     from app.core.hybrid import HybridIndex
-    from app.core.rag import EmbeddingService, VectorStore
+    from app.core.rag import EmbeddingService, VectorStore, embedding_spec_for_notebook
 
-    emb = EmbeddingService()
+    spec = {}
+    db = get_session(engine)
+    try:
+        page = db.query(Page).filter(Page.id == page_id).first()
+        spec = embedding_spec_for_notebook(db, page.notebook_id if page else None)
+    finally:
+        db.close()
+
+    emb = EmbeddingService(spec)
     try:
         chunks = await emb.encode_chunks(content, title, enrich_context=False)
         db = get_session(engine)
         try:
             if chunks:
-                await VectorStore(db).add_page_chunks(page_id, chunks)
+                await VectorStore(db).add_page_chunks(page_id, chunks, profile_id=spec.get("id"))
             if not keywords:
                 keywords = ",".join(EmbeddingService.extract_keywords(
                     (title or "") + " " + (content or ""), 20

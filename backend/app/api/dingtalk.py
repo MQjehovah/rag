@@ -48,10 +48,12 @@ async def _do_sync_selected(notebook_id: str, selected_docs: List[dict]):
 
     try:
         client = DingTalkClient()
-        emb_svc = EmbeddingService()
 
         engine = get_engine(settings.database_url)
         db = get_session(engine)
+        from app.core.rag import embedding_spec_for_notebook
+        _spec = embedding_spec_for_notebook(db, notebook_id)
+        emb_svc = EmbeddingService(_spec)
         vec_store = VectorStore(db)
 
         SYNC_STATUS["progress"] = f"正在下载 0/{SYNC_STATUS['total']}..."
@@ -97,7 +99,7 @@ async def _do_sync_selected(notebook_id: str, selected_docs: List[dict]):
                     try:
                         chunks = await emb_svc.encode_chunks(content, title, enrich_context=False)
                         if chunks:
-                            await vec_store.add_page_chunks(page_id, chunks)
+                            await vec_store.add_page_chunks(page_id, chunks, profile_id=_spec.get("id"))
                         HybridIndex(db).index_page(page_id, title, content)
                         db.commit()
                     except Exception as e:
@@ -133,10 +135,12 @@ async def _do_sync(notebook_id: str, space_id: str = None):
 
     try:
         client = DingTalkClient()
-        emb_svc = EmbeddingService()
 
         engine = get_engine(settings.database_url)
         db = get_session(engine)
+        from app.core.rag import embedding_spec_for_notebook
+        _spec = embedding_spec_for_notebook(db, notebook_id)
+        emb_svc = EmbeddingService(_spec)
 
         SYNC_STATUS["progress"] = "正在获取文档列表..."
 
@@ -188,7 +192,7 @@ async def _do_sync(notebook_id: str, space_id: str = None):
                     try:
                         chunks = await emb_svc.encode_chunks(content, title, enrich_context=False)
                         if chunks:
-                            await vec_store.add_page_chunks(page_id, chunks)
+                            await vec_store.add_page_chunks(page_id, chunks, profile_id=_spec.get("id"))
                         HybridIndex(db).index_page(page_id, title, content)
                         db.commit()
                     except Exception as e:

@@ -67,6 +67,7 @@ def list_wiki(db: Session = Depends(get_db), current_user=Depends(get_current_us
             "title": p.title,
             "summary": p.summary or "",
             "group_id": p.group_id,
+            "pipeline_id": p.pipeline_id,
             "updated_at": p.updated_at,
         })
     return {
@@ -142,6 +143,7 @@ def get_wiki_page(
         "content": page.content or "",
         "summary": page.summary or "",
         "group_id": page.group_id,
+        "pipeline_id": page.pipeline_id,
         "sources": sources,
         "updated_at": page.updated_at,
     }

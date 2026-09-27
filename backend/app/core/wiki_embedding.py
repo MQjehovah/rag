@@ -18,7 +18,7 @@ def _embedding_text(title: str, summary: str) -> str:
     return (title or "") + "\n" + (summary or "")
 
 
-def _write_embeddings(engine, updates: List[tuple]) -> int:
+def _write_embeddings(engine, updates: List[tuple], profile_id=None) -> int:
     """把 (page_id, embedding_json) 批量写回,返回写入行数。"""
     if not updates:
         return 0
@@ -26,7 +26,7 @@ def _write_embeddings(engine, updates: List[tuple]) -> int:
     try:
         for page_id, payload in updates:
             db.query(WikiPage).filter(WikiPage.id == page_id).update(
-                {WikiPage.embedding: payload}
+                {WikiPage.embedding: payload, WikiPage.embedding_profile: profile_id}
             )
         db.commit()
         return len(updates)
@@ -76,8 +76,21 @@ async def embed_wiki_pages(
     if not rows:
         return stats
 
-    svc = embedding_svc or EmbeddingService()
-    owns_svc = embedding_svc is None
+    svc = embedding_svc
+    owns_svc = False
+    profile_id = None
+    if svc is None:
+        from app.core.rag import resolve_embedding_spec
+        _cfg_db = get_session(engine)
+        try:
+            spec = resolve_embedding_spec(_cfg_db, None)
+        finally:
+            _cfg_db.close()
+        svc = EmbeddingService(spec)
+        profile_id = spec.get("id")
+        owns_svc = True
+    else:
+        profile_id = getattr(svc, "profile_id", None)
     try:
         for i in range(0, len(rows), batch_size):
             chunk = rows[i:i + batch_size]
@@ -98,7 +111,7 @@ async def embed_wiki_pages(
                     stats["errors"] += 1
                     continue
                 updates.append((page_id, json.dumps(emb)))
-            stats["embedded"] += _write_embeddings(engine, updates)
+            stats["embedded"] += _write_embeddings(engine, updates, profile_id=profile_id)
     finally:
         if owns_svc:
             await svc.close()

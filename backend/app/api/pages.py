@@ -51,7 +51,7 @@ async def background_index_page(page_id: str):
     """
     engine = get_engine(settings.database_url)
     from app.models.database import get_session as _get_session
-    emb_svc = EmbeddingService()
+    from app.core.rag import embedding_spec_for_notebook
     try:
         # 1) Read the latest content in a short read transaction.
         db = _get_session(engine)
@@ -61,10 +61,14 @@ async def background_index_page(page_id: str):
                 return
             title = page.title or ""
             content = page.content or ""
+            spec = embedding_spec_for_notebook(db, page.notebook_id)
         finally:
             db.close()
 
+        profile_id = spec.get("id")
+        emb_svc = EmbeddingService(spec)
         if not (title or content).strip():
+            await emb_svc.close()
             return
 
         # 2) Embedding call - no DB lock held while waiting on Ollama.
@@ -74,7 +78,7 @@ async def background_index_page(page_id: str):
         db = _get_session(engine)
         try:
             if chunks:
-                await VectorStore(db).add_page_chunks(page_id, chunks)
+                await VectorStore(db).add_page_chunks(page_id, chunks, profile_id=profile_id)
             db.commit()
         finally:
             db.close()
@@ -280,14 +284,17 @@ async def index_page(page_id: str, db: Session = Depends(get_db), current_user=D
 
     title = page.title or ""
     content = page.content or ""
+    from app.core.rag import embedding_spec_for_notebook
+    spec = embedding_spec_for_notebook(db, page.notebook_id)
+    profile_id = spec.get("id")
     db.commit()  # close the read transaction before the slow calls
 
     try:
-        emb_svc = EmbeddingService()
+        emb_svc = EmbeddingService(spec)
         try:
             chunks = await emb_svc.encode_chunks(content, title)
             if chunks:
-                await VectorStore(db).add_page_chunks(page.id, chunks)
+                await VectorStore(db).add_page_chunks(page.id, chunks, profile_id=profile_id)
             db.commit()
 
             keywords = EmbeddingService.extract_keywords(title + " " + content, 20)
@@ -317,18 +324,25 @@ async def reindex_all(db: Session = Depends(get_db), current_user=Depends(get_cu
     if not pages:
         return {"message": "没有需要索引的笔记", "indexed": 0, "total": 0}
 
-    emb_svc = EmbeddingService()
+    from app.core.rag import embedding_spec_for_notebook
     vec_store = VectorStore(db)
+    svc_cache = {}
     success = 0
     errors = 0
 
     for page in pages:
         try:
+            spec = embedding_spec_for_notebook(db, page.notebook_id)
+            key = spec.get("id")
+            emb_svc = svc_cache.get(key)
+            if emb_svc is None:
+                emb_svc = EmbeddingService(spec)
+                svc_cache[key] = emb_svc
             vec_store.delete_page_chunks(page.id)
             db.commit()
             chunks = await emb_svc.encode_chunks(page.content, page.title, enrich_context=False)
             if chunks:
-                await vec_store.add_page_chunks(page.id, chunks)
+                await vec_store.add_page_chunks(page.id, chunks, profile_id=key)
             keywords = EmbeddingService.extract_keywords(
                 (page.title or "") + " " + (page.content or ""), 20
             )
@@ -340,5 +354,6 @@ async def reindex_all(db: Session = Depends(get_db), current_user=Depends(get_cu
             logger.error(f"Reindex failed for {page.id}: {e}")
             errors += 1
 
-    await emb_svc.close()
+    for svc in svc_cache.values():
+        await svc.close()
     return {"message": f"索引完成: {success} 成功, {errors} 失败", "indexed": success, "errors": errors, "total": len(pages)}

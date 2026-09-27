@@ -10,6 +10,8 @@ import Login from './views/Login.vue'
 import Chat from './views/Chat.vue'
 import Wiki from './views/Wiki.vue'
 import Sources from './views/Sources.vue'
+import Pipelines from './views/Pipelines.vue'
+import Embeddings from './views/Embeddings.vue'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -21,6 +23,8 @@ const router = createRouter({
     { path: '/wiki', component: Wiki },
     { path: '/wiki/:id', component: Wiki },
     { path: '/sources', component: Sources },
+    { path: '/pipelines', component: Pipelines },
+    { path: '/embeddings', component: Embeddings },
   ]
 })
 

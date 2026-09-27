@@ -108,6 +108,8 @@ def _mmr_rank(
                     if s not in embs:
                         continue
                     v1, v2 = embs[pid], embs[s]
+                    if len(v1) != len(v2):  # 不同嵌入档案维度不同,不可比
+                        continue
                     n1 = float(np.linalg.norm(v1))
                     n2 = float(np.linalg.norm(v2))
                     if n1 > 0 and n2 > 0:
@@ -144,6 +146,25 @@ async def _rewrite_query(query: str) -> List[str]:
         return []
 
 
+def _visible_profiles(db, visible_ids) -> List[Optional[str]]:
+    """可见笔记里出现过的嵌入档案集合(含 None=旧/环境默认档)。"""
+    if not visible_ids:
+        return []
+    ids = list(visible_ids)
+    found: List[Optional[str]] = []
+    seen = set()
+    for chunk in _chunk_placeholders(ids):
+        ph = ",".join(f":v{i}" for i in range(len(chunk)))
+        rows = db.execute(sql_text(
+            f"SELECT DISTINCT embedding_profile FROM page_chunks WHERE page_id IN ({ph})"
+        ), {f"v{i}": pid for i, pid in enumerate(chunk)}).fetchall()
+        for (prof,) in rows:
+            if prof not in seen:
+                seen.add(prof)
+                found.append(prof)
+    return found
+
+
 class RetrievalPipeline:
     """Unified retrieval: rewrite -> multi-path recall -> RRF -> rerank ->
     entity expansion -> graph expansion -> ranked results with chunk citations.
@@ -156,7 +177,7 @@ class RetrievalPipeline:
         reranker_svc: Optional[RerankerService] = None,
     ):
         self.db = db
-        self.embedding_svc = embedding_svc or EmbeddingService()
+        self.embedding_svc = embedding_svc
         self.reranker_svc = reranker_svc
         self.vector = VectorStore(db)
         self.hybrid = HybridIndex(db)
@@ -176,43 +197,32 @@ class RetrievalPipeline:
         queries = [query]
         queries += await _rewrite_query(query)
 
-        try:
-            embeddings = await self.embedding_svc.encode_batch(queries)
-        except Exception as e:
-            logger.error(f"Embedding failed: {e}")
-            return {"results": [], "queries": queries, "graph_expanded": 0}
+        from app.core.rag import resolve_embedding_spec, settings_spec
+
+        # 默认档案服务(用于 wiki 召回与图谱等"单档案"场景)
+        if self.embedding_svc is not None:
+            default_svc = self.embedding_svc
+            owns_default = False
+        else:
+            default_svc = EmbeddingService(resolve_embedding_spec(self.db, None))
+            owns_default = True
 
         recall_k = settings.vector_recall_k
         vector_rank: List[str] = []
         bm25_rank: List[str] = []
         best_chunks: Dict[str, Dict[str, Any]] = {}
+        wiki_hits: List[Dict[str, Any]] = []
 
-        # 笔记召回依赖 visible_ids;无可见笔记时整段跳过,但保留 embeddings 供 wiki 召回使用。
-        if has_notes:
-            for q, emb in zip(queries, embeddings):
-                try:
-                    vec_results = await self.vector.search(emb, recall_k, visible_ids)
-                except Exception as e:
-                    logger.warning(f"Vector search error: {e}")
-                    vec_results = []
+        try:
+            try:
+                default_embeddings = await default_svc.encode_batch(queries)
+            except Exception as e:
+                logger.error(f"Embedding failed: {e}")
+                return {"results": [], "queries": queries, "graph_expanded": 0}
 
-                per_page: Dict[str, Dict[str, Any]] = {}
-                for item in vec_results:
-                    pid = item["page_id"]
-                    if pid not in per_page:
-                        per_page[pid] = item
-                for pid, item in per_page.items():
-                    best = best_chunks.get(pid)
-                    if best is None or item["distance"] < best["distance"]:
-                        best_chunks[pid] = {
-                            "distance": item["distance"],
-                            "content": item.get("content", ""),
-                            "context": item.get("context", "") or "",
-                            "chunk_index": item.get("chunk_index", 0),
-                        }
-                vector_rank = _merge_rank(vector_rank, [i["page_id"] for i in vec_results])
-
-                if settings.hybrid_bm25_enabled:
+            # BM25 与嵌入档案无关:每个查询跑一次
+            if has_notes and settings.hybrid_bm25_enabled:
+                for q in queries:
                     try:
                         bm = await asyncio.to_thread(
                             self.hybrid.search, q, visible_ids, recall_k
@@ -221,16 +231,78 @@ class RetrievalPipeline:
                     except Exception as e:
                         logger.warning(f"BM25 search error: {e}")
 
-        # wiki 召回:与页面召回并列参与 RRF。id 加 wiki: 前缀,避免与 pages.id 撞车。
-        wiki_hits: List[Dict[str, Any]] = []
-        if embeddings:
-            try:
-                wiki_hits = await asyncio.to_thread(
-                    search_wiki, self.db, embeddings[0], recall_k, current_user
-                )
-            except Exception as e:
-                logger.warning(f"Wiki search error: {e}")
-                wiki_hits = []
+            # 向量召回:按可见分块的嵌入档案分组,分别编码查询、只检索同档案向量后合并
+            if has_notes:
+                profiles = await asyncio.to_thread(_visible_profiles, self.db, visible_ids)
+                for pid in profiles:
+                    if pid is None:
+                        # 旧/环境默认档:未注入服务时用 .env 档案编码(与入库时一致);
+                        # 显式注入(测试/调用方)则沿用注入的服务。
+                        if self.embedding_svc is not None:
+                            svc = default_svc
+                            owns = False
+                            embs = default_embeddings
+                        else:
+                            svc = EmbeddingService(settings_spec())
+                            owns = True
+                            try:
+                                embs = await svc.encode_batch(queries)
+                            except Exception as e:
+                                logger.warning(f"Env-profile embedding failed: {e}")
+                                embs = []
+                    else:
+                        svc = EmbeddingService(resolve_embedding_spec(self.db, pid))
+                        owns = True
+                        try:
+                            embs = await svc.encode_batch(queries)
+                        except Exception as e:
+                            logger.warning(f"Profile embedding failed [{pid}]: {e}")
+                            embs = []
+                    try:
+                        for emb in embs:
+                            if not emb:
+                                continue
+                            try:
+                                vec_results = await self.vector.search(
+                                    emb, recall_k, visible_ids, profile_id=pid
+                                )
+                            except Exception as e:
+                                logger.warning(f"Vector search error: {e}")
+                                vec_results = []
+                            per_page: Dict[str, Dict[str, Any]] = {}
+                            for item in vec_results:
+                                ppid = item["page_id"]
+                                if ppid not in per_page:
+                                    per_page[ppid] = item
+                            for ppid, item in per_page.items():
+                                best = best_chunks.get(ppid)
+                                if best is None or item["distance"] < best["distance"]:
+                                    best_chunks[ppid] = {
+                                        "distance": item["distance"],
+                                        "content": item.get("content", ""),
+                                        "context": item.get("context", "") or "",
+                                        "chunk_index": item.get("chunk_index", 0),
+                                    }
+                            vector_rank = _merge_rank(
+                                vector_rank, [i["page_id"] for i in vec_results]
+                            )
+                    finally:
+                        if owns and svc is not None:
+                            await svc.close()
+
+            # wiki 召回:与页面召回并列参与 RRF。id 加 wiki: 前缀,避免与 pages.id 撞车。
+            if default_embeddings:
+                try:
+                    wiki_hits = await asyncio.to_thread(
+                        search_wiki, self.db, default_embeddings[0], recall_k, current_user
+                    )
+                except Exception as e:
+                    logger.warning(f"Wiki search error: {e}")
+                    wiki_hits = []
+        finally:
+            if owns_default:
+                await default_svc.close()
+
         wiki_map: Dict[str, Dict[str, Any]] = {
             f"wiki:{w['id']}": w for w in wiki_hits
         }

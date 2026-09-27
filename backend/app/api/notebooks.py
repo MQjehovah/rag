@@ -5,7 +5,7 @@ import uuid
 from app.models.database import Page, PageChunk, Notebook
 from app.core.hybrid import HybridIndex
 from app.core.entity_graph import EntityGraphStore
-from app.models.schema import NotebookCreate, NotebookResponse, NotebookListResponse
+from app.models.schema import NotebookCreate, NotebookUpdate, NotebookResponse, NotebookListResponse
 from app.core.rag import VectorStore
 from app.api.deps import get_db
 from app.core.jwt_utils import get_current_user
@@ -20,7 +20,13 @@ def create_notebook(data: NotebookCreate, db: Session = Depends(get_db), current
         group_id = current_user["groups"][0] if current_user["groups"] else None
     if not group_id and current_user["groups"]:
         group_id = current_user["groups"][0]
-    notebook = Notebook(id=str(uuid.uuid4()), name=data.name, group_id=group_id)
+    notebook = Notebook(
+        id=str(uuid.uuid4()),
+        name=data.name,
+        group_id=group_id,
+        description=data.description or '',
+        embedding_profile_id=(data.embedding_profile_id or None),
+    )
     db.add(notebook)
     db.commit()
     db.refresh(notebook)
@@ -51,14 +57,20 @@ def get_notebook(notebook_id: str, db: Session = Depends(get_db), current_user=D
     return notebook
 
 @router.put("/{notebook_id}", response_model=NotebookResponse)
-def update_notebook(notebook_id: str, data: NotebookCreate, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+def update_notebook(notebook_id: str, data: NotebookUpdate, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     notebook = db.query(Notebook).filter(Notebook.id == notebook_id).first()
     if not notebook:
         raise HTTPException(status_code=404, detail="笔记本不存在")
     if "__local_admin__" not in current_user["groups"]:
         if notebook.group_id and notebook.group_id not in current_user["groups"]:
             raise HTTPException(status_code=403, detail="无权访问该笔记本")
-    notebook.name = data.name
+    if data.name is not None:
+        notebook.name = data.name
+    if data.description is not None:
+        notebook.description = data.description
+    if data.embedding_profile_id is not None:
+        # 允许传空串/null 表示"使用默认档案"
+        notebook.embedding_profile_id = data.embedding_profile_id or None
     if data.group_id and data.group_id in current_user["groups"]:
         notebook.group_id = data.group_id
     db.commit()

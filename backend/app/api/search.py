@@ -38,7 +38,7 @@ class SearchRequest(BaseModel):
 async def search(request: SearchRequest, db: Session = Depends(get_db), reranker_svc=Depends(get_reranker), current_user=Depends(get_current_user)):
     pipeline = RetrievalPipeline(
         db,
-        embedding_svc=get_embedding_service(),
+        embedding_svc=EmbeddingService.from_db(db),
         reranker_svc=reranker_svc,
     )
     outcome = await pipeline.retrieve(request.query, current_user, top_k=request.top_k)

@@ -73,7 +73,8 @@
                 <el-button size="small" text>⋮</el-button>
                 <template #dropdown>
                   <el-dropdown-menu>
-                    <el-dropdown-item command="delete">删除</el-dropdown-item>
+                    <el-dropdown-item command="settings">设置</el-dropdown-item>
+                    <el-dropdown-item command="delete" divided>删除</el-dropdown-item>
                   </el-dropdown-menu>
                 </template>
               </el-dropdown>
@@ -178,6 +179,33 @@
       </template>
     </el-dialog>
 
+    <!-- 笔记本设置对话框 -->
+    <el-dialog v-model="showNotebookSettings" title="笔记本设置" width="520px">
+      <el-form label-width="90px">
+        <el-form-item label="名称">
+          <el-input v-model="notebookForm.name" @keyup.enter="saveNotebookSettings" />
+        </el-form-item>
+        <el-form-item label="说明">
+          <el-input v-model="notebookForm.description" type="textarea" :rows="2" placeholder="可选" />
+        </el-form-item>
+        <el-form-item label="嵌入模型">
+          <el-select v-model="notebookForm.embedding_profile_id" clearable placeholder="默认档案" style="width: 100%">
+            <el-option
+              v-for="p in profiles"
+              :key="p.id"
+              :label="p.is_default ? `${p.name}（默认）` : p.name"
+              :value="p.id"
+            />
+          </el-select>
+          <div class="muted-hint">指定该笔记本使用的嵌入模型；更换后需对该笔记本的笔记重新索引。</div>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="showNotebookSettings = false">取消</el-button>
+        <el-button type="primary" :loading="notebookSaving" @click="saveNotebookSettings">保存</el-button>
+      </template>
+    </el-dialog>
+
     <!-- 搜索结果对话框 -->
     <el-dialog v-model="showSearch" title="搜索结果" width="700px">
       <div v-if="searchResults.length > 0">
@@ -267,7 +295,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount, watch } from 'vue'
+import { ref, reactive, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElNotification } from 'element-plus'
 import type { UploadFile as ElUploadFile } from 'element-plus'
@@ -281,6 +309,14 @@ const API_BASE = (import.meta.env.BASE_URL || '/').replace(/\/$/, '')
 interface Notebook {
   id: string
   name: string
+  description?: string
+  embedding_profile_id?: string | null
+}
+
+interface EmbeddingProfile {
+  id: string
+  name: string
+  is_default: boolean
 }
 
 interface PageListItem {
@@ -307,6 +343,10 @@ const saveStatus = ref<'saved' | 'saving' | 'unsaved'>('saved')
 const searchQuery = ref('')
 const showNewNotebook = ref(false)
 const newNotebookName = ref('')
+const profiles = ref<EmbeddingProfile[]>([])
+const showNotebookSettings = ref(false)
+const notebookSaving = ref(false)
+const notebookForm = reactive({ id: '', name: '', description: '', embedding_profile_id: '' as string | null })
 const showSearch = ref(false)
 const searchResults = ref<any[]>([])
 
@@ -381,6 +421,50 @@ const loadNotebooks = async () => {
     unassignedCount.value = res.data.unassigned_count
   } catch (e) {
     ElMessage.error('加载笔记本失败')
+  }
+}
+
+const loadProfiles = async () => {
+  try {
+    const res = await http.get('/api/embeddings/profiles')
+    profiles.value = res.data
+  } catch {
+    profiles.value = []
+  }
+}
+
+const openNotebookSettings = (nb: Notebook) => {
+  notebookForm.id = nb.id
+  notebookForm.name = nb.name
+  notebookForm.description = nb.description || ''
+  notebookForm.embedding_profile_id = nb.embedding_profile_id || ''
+  showNotebookSettings.value = true
+}
+
+const saveNotebookSettings = async () => {
+  if (!notebookForm.name.trim()) {
+    ElMessage.warning('请输入笔记本名称')
+    return
+  }
+  notebookSaving.value = true
+  try {
+    const res = await http.put(`/api/notebooks/${notebookForm.id}`, {
+      name: notebookForm.name,
+      description: notebookForm.description,
+      embedding_profile_id: notebookForm.embedding_profile_id || '',
+    })
+    const updated = res.data
+    const idx = notebooks.value.findIndex(n => n.id === notebookForm.id)
+    if (idx >= 0) notebooks.value[idx] = { ...notebooks.value[idx], ...updated }
+    if (currentNotebook.value?.id === notebookForm.id) {
+      currentNotebook.value = { ...currentNotebook.value, ...updated }
+    }
+    showNotebookSettings.value = false
+    ElMessage.success('已保存')
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail || '保存失败')
+  } finally {
+    notebookSaving.value = false
   }
 }
 
@@ -520,6 +604,10 @@ const handleCreateNotebook = async () => {
 }
 
 const handleNotebookCmd = async (cmd: string, nb: Notebook) => {
+  if (cmd === 'settings') {
+    openNotebookSettings(nb)
+    return
+  }
   if (cmd === 'delete') {
     try {
       await http.delete(`/api/notebooks/${nb.id}`)
@@ -843,6 +931,7 @@ const highlightCitation = () => {
 
 onMounted(async () => {
   await loadNotebooks()
+  await loadProfiles()
   await loadTags()
   window.addEventListener('keydown', handleKeydown)
   const targetId = route.query.page as string | undefined
@@ -950,6 +1039,7 @@ html, body, #app { height: 100%; }
 }
 .add-page:hover { background: #eff6ff; }
 .empty-tip { text-align: center; color: #94a3b8; padding: 30px 20px; font-size: 13px; }
+.muted-hint { color: #909399; font-size: 12px; margin-top: 4px; line-height: 1.5; }
 .main-content { flex: 1; padding: 24px 40px; overflow-y: auto; }
 .editor-wrapper {
   max-width: 900px;

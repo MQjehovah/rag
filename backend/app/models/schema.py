@@ -8,10 +8,20 @@ class NotebookBase(BaseModel):
 
 class NotebookCreate(NotebookBase):
     group_id: Optional[str] = None
+    description: str = ''
+    embedding_profile_id: Optional[str] = None
+
+class NotebookUpdate(BaseModel):
+    name: Optional[str] = None
+    group_id: Optional[str] = None
+    description: Optional[str] = None
+    embedding_profile_id: Optional[str] = None
 
 class NotebookResponse(NotebookBase):
     id: str
     group_id: Optional[str] = None
+    description: str = ''
+    embedding_profile_id: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 
@@ -22,6 +32,86 @@ class NotebookResponse(NotebookBase):
 class NotebookListResponse(BaseModel):
     notebooks: List[NotebookResponse]
     unassigned_count: int
+
+
+class EmbeddingProfileBase(BaseModel):
+    name: str
+    kind: str = 'openai'
+    api_url: str
+    model: str
+    api_key: str = ''
+    dimensions: int = 1024
+
+
+class EmbeddingProfileCreate(EmbeddingProfileBase):
+    is_default: bool = False
+
+
+class EmbeddingProfileUpdate(BaseModel):
+    name: Optional[str] = None
+    kind: Optional[str] = None
+    api_url: Optional[str] = None
+    model: Optional[str] = None
+    api_key: Optional[str] = None
+    dimensions: Optional[int] = None
+
+
+class EmbeddingProfileResponse(EmbeddingProfileBase):
+    id: str
+    is_default: bool = False
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class PipelineCreate(BaseModel):
+    name: str
+    description: str = ''
+    scope_type: str = 'notebooks'           # notebooks | group | all
+    notebook_ids: List[str] = []
+    compiler_kind: str = 'wiki'             # wiki | api_doc | markdown | changelog | custom
+    prompt_template: str = ''
+    model: str = ''
+    target_category: str = ''
+    incremental: bool = True
+    group_id: Optional[str] = None
+    enabled: bool = True
+
+
+class PipelineUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    scope_type: Optional[str] = None
+    notebook_ids: Optional[List[str]] = None
+    compiler_kind: Optional[str] = None
+    prompt_template: Optional[str] = None
+    model: Optional[str] = None
+    target_category: Optional[str] = None
+    incremental: Optional[bool] = None
+    group_id: Optional[str] = None
+    enabled: Optional[bool] = None
+
+
+class PipelineResponse(BaseModel):
+    id: str
+    name: str
+    description: str = ''
+    scope_type: str = 'notebooks'
+    notebook_ids: List[str] = []
+    compiler_kind: str = 'wiki'
+    prompt_template: str = ''
+    model: str = ''
+    target_category: str = ''
+    incremental: bool = True
+    group_id: Optional[str] = None
+    enabled: bool = True
+    created_at: datetime
+    updated_at: datetime
+    running: bool = False
+    last_status: str = ''
+    last_run_at: Optional[datetime] = None
 
 class PageBase(BaseModel):
     title: str = '无标题'

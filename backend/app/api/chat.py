@@ -156,7 +156,7 @@ async def _agentic_search_notes(
     """Multi-hop retrieval: search, judge sufficiency, re-search if needed."""
     pipeline = RetrievalPipeline(
         db,
-        embedding_svc=get_embedding_service(),
+        embedding_svc=EmbeddingService.from_db(db),
         reranker_svc=get_reranker_service(),
     )
     max_hops = max(settings.agentic_max_hops, 1)

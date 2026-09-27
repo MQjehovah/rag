@@ -18,7 +18,10 @@ class Notebook(Base):
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     name = Column(String(255), nullable=False)
+    description = Column(Text, default='')
     group_id = Column(String(255), nullable=True, index=True)
+    # 该笔记本使用的嵌入模型档案;NULL 表示使用系统默认档案
+    embedding_profile_id = Column(String(36), nullable=True, index=True)
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 
@@ -45,6 +48,8 @@ class PageChunk(Base):
     content = Column(Text, nullable=False)
     embedding = Column(Text, nullable=True)
     context = Column(Text, nullable=True)
+    # 该向量由哪个嵌入档案生成(检索时按档案分组比对,避免不同模型的向量互比)
+    embedding_profile = Column(String(36), nullable=True, index=True)
 
     __table_args__ = (
         Index('ix_page_chunks_page_idx', 'page_id', 'chunk_index'),
@@ -119,6 +124,11 @@ class WikiPage(Base):
     summary = Column(Text, default='')
     embedding = Column(Text, nullable=True)
     source_note_ids = Column(Text, default='[]')
+    # 由哪个编译管道产出(NULL=经典 wiki 蒸馏管道)
+    pipeline_id = Column(String(36), nullable=True, index=True)
+    # 编译单元键(pipeline_id + 来源单元),用于增量 upsert
+    source_key = Column(String(255), nullable=True, index=True)
+    embedding_profile = Column(String(36), nullable=True)
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 
@@ -200,6 +210,64 @@ class UserGroup(Base):
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     user_id = Column(String(36), ForeignKey('users.id'), nullable=False, index=True)
     group_name = Column(String(255), nullable=False, index=True)
+
+
+class EmbeddingProfile(Base):
+    """可配置的嵌入模型档案：api_url + model + dimensions + 鉴权。
+
+    ``kind``: openai(OpenAI 兼容 /v1/embeddings) | ollama(/api/embed)。
+    ``is_default``: 全局默认档案(也作为新建笔记本的缺省)。
+    """
+    __tablename__ = 'embedding_profiles'
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    name = Column(String(128), nullable=False)
+    kind = Column(String(16), default='openai')  # openai | ollama
+    api_url = Column(String(512), nullable=False)
+    api_key = Column(String(512), default='')
+    model = Column(String(255), nullable=False)
+    dimensions = Column(Integer, default=1024)
+    is_default = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class Pipeline(Base):
+    """编译管道：把某范围笔记本里的笔记编译成 wiki 页（或其它格式并入 wiki 浏览）。"""
+    __tablename__ = 'pipelines'
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    name = Column(String(255), nullable=False)
+    description = Column(Text, default='')
+    # 来源范围: notebooks(指定笔记本) | group(本组全部) | all(全部可见)
+    scope_type = Column(String(16), default='notebooks')
+    notebook_ids = Column(Text, default='[]')  # JSON list[str]
+    # 编译方式: wiki(蒸馏) | api_doc(接口文档) | markdown(合集) | changelog(变更记录) | custom
+    compiler_kind = Column(String(16), default='wiki')
+    prompt_template = Column(Text, default='')  # custom 时的自定义指令
+    model = Column(String(255), default='')     # 留空用全局 LLM
+    target_category = Column(String(128), default='')  # 编译产物在 wiki 的分类
+    incremental = Column(Boolean, default=True)  # 仅编译自上次运行后有更新的笔记
+    group_id = Column(String(255), nullable=True, index=True)
+    enabled = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class PipelineRun(Base):
+    """编译管道的一次运行记录(状态/进度/变更数)。"""
+    __tablename__ = 'pipeline_runs'
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    pipeline_id = Column(String(36), nullable=False, index=True)
+    status = Column(String(16), default='running')  # running | success | failed
+    processed = Column(Integer, default=0)
+    total = Column(Integer, default=0)
+    changed = Column(Integer, default=0)
+    message = Column(Text, default='')
+    error = Column(Text, default='')
+    started_at = Column(DateTime, default=datetime.now)
+    finished_at = Column(DateTime, nullable=True)
 
 
 def get_engine(database_url: str):

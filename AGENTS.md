@@ -42,15 +42,17 @@ docker compose --profile pg up -d --build backend frontend
 
 ## Architecture
 
-- **Backend entry**: `app.main:app` — FastAPI app, routers from `app.api.{pages,notebooks,search,upload,graph,auth,dingtalk,chat,organize,wiki}`.
+- **Backend entry**: `app.main:app` — FastAPI app, routers from `app.api.{pages,notebooks,search,upload,graph,auth,dingtalk,chat,organize,wiki,jira,sources,pipelines,embeddings}`.
+- **Embedding profiles** (`app/api/embeddings.py`, `app/core/rag.py`): admin-configurable `embedding_profiles` (api_url/model/dimensions/api_key/kind) with one global default; each notebook may set its own `embedding_profile_id` (NULL = default). Chunks store `page_chunks.embedding_profile`; retrieval (`retrieval.py#_visible_profiles`) groups recall per profile so vectors from different models are never compared. `POST /api/embeddings/reindex` rebuilds the whole corpus per-notebook profile.
+- **Compile pipelines** (`app/api/pipelines.py`, `app/core/pipeline.py`): **manual-only** (never auto/unattended). A pipeline compiles notes from a notebook scope (`notebooks`/`group`/`all`) into `wiki_pages`, tagged with `pipeline_id`/`source_key`; built-in kinds `wiki|api_doc|markdown|changelog|custom`, optional `incremental` (only notes updated since last successful run). All output surfaces in the Wiki browser (no separate docs page).
 - **Config**: `app/config.py` (`pydantic_settings.BaseSettings`, loads `.env`). Env vars are lowercase snake_case in code. LLM accepts either `LLM_API_URL` (full chat completions endpoint) or `LLM_BASE_URL` (OpenAI-style base; `/chat/completions` appended automatically).
-- **Database**: PostgreSQL 16 + pgvector via SQLAlchemy. Tables: `notebooks`, `pages`, `page_chunks` (vector(1024) + HNSW), `page_terms` (BM25), `graph_edges`, `graph_entities`, `graph_entity_edges`, `users`, `user_groups`, `wiki_pages`, `graph_communities`, `image_assets`.
+- **Database**: PostgreSQL 16 + pgvector via SQLAlchemy. Tables: `notebooks` (has `description` + `embedding_profile_id`), `pages`, `page_chunks` (vector(1024) + HNSW + `embedding_profile`), `page_terms` (BM25), `graph_edges`, `graph_entities`, `graph_entity_edges`, `users`, `user_groups`, `wiki_pages` (has `pipeline_id`/`source_key`/`embedding_profile`), `graph_communities`, `image_assets`, `embedding_profiles`, `pipelines`, `pipeline_runs`.
 - **Vector store** (`app/core/rag.py`): pgvector HNSW cosine (`<=>` with `CAST(:q AS vector)`); numpy fallback for SQLite dev.
 - **Hybrid retrieval** (`app/core/retrieval.py`): query rewrite → vector + BM25 multi-path recall → RRF fusion → rerank → entity/graph expansion → **MMR diversity re-rank** (`MMR_ENABLED`/`MMR_LAMBDA`).
 - **Agentic chat** (`app/api/chat.py`): history-aware query rewrite, multi-hop sufficiency judging, and a **GraphRAG global fallback** that searches `graph_communities` when local results are insufficient.
 - **LLM Wiki** (`app/core/wiki.py`): per-note incremental ingest (concurrent, merge-aware so human edits survive), `wiki_pages` table, admin rebuild endpoint. Note saves auto-refresh linked wiki pages (60s throttle) via `pages.py`.
 - **GraphRAG** (`app/core/graphrag.py`): Louvain community detection over `graph_entity_edges`, LLM community summaries with embeddings, `search_communities()` for global Q&A.
-- **Frontend**: routes `/` (Chat), `/notes` (Editor), `/graph` (KnowledgeGraph), `/wiki` (Wiki). Routes defined inline in `main.ts` — `router/index.ts` is dead code.
+- **Frontend**: routes `/` (Chat), `/notes` (Editor), `/graph` (KnowledgeGraph), `/wiki` (Wiki), `/pipelines` (Pipelines), `/embeddings` (Embeddings). Routes defined inline in `main.ts` — `router/index.ts` is dead code. Notebook embedding model is chosen in Editor's notebook "设置" dialog; profile list is visible to all users but only admins can edit (api_key is masked for non-admins).
 
 ## Key Gotchas
 

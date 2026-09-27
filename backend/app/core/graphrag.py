@@ -152,7 +152,13 @@ async def rebuild_communities(status: Dict[str, Any]) -> None:
     finally:
         db.close()
 
-    emb_svc = EmbeddingService()
+    from app.core.rag import resolve_embedding_spec
+    _cfg_db = get_session(engine)
+    try:
+        _spec = resolve_embedding_spec(_cfg_db, None)
+    finally:
+        _cfg_db.close()
+    emb_svc = EmbeddingService(_spec)
     sem = asyncio.Semaphore(3)
     started = time.time()
     total = len(communities)

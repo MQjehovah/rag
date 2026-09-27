@@ -72,10 +72,12 @@ async def call_llm_json(messages: list, context: str = "", timeout: float = 120.
     return {}
 
 
-async def call_llm_text(messages: list, context: str = "", timeout: float = 180.0) -> str:
+async def call_llm_text(
+    messages: list, context: str = "", timeout: float = 180.0, model: str = ""
+) -> str:
     """Call the configured LLM and return the plain text content (no JSON
     parsing).  Used for tasks like wiki page merging where the output is
-    arbitrary Markdown."""
+    arbitrary Markdown.  ``model`` overrides the globally configured model."""
     if not settings.llm_api_url:
         return ""
     try:
@@ -87,7 +89,7 @@ async def call_llm_text(messages: list, context: str = "", timeout: float = 180.
                     "Content-Type": "application/json",
                 },
                 json={
-                    "model": settings.llm_model,
+                    "model": model or settings.llm_model,
                     "messages": messages,
                     "stream": False,
                 },

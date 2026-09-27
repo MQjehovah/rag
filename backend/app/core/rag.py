@@ -21,19 +21,92 @@ except ImportError:
     JIEBA_AVAILABLE = False
 
 
+def settings_spec() -> Dict[str, Any]:
+    """来自 .env 的兜底嵌入档案(id=None, 代表"旧/环境默认"这一档)。"""
+    kind = "ollama" if "/api/embed" in (settings.embedding_api_url or "") else "openai"
+    return {
+        "id": None,
+        "name": "环境默认",
+        "kind": kind,
+        "api_url": settings.embedding_api_url,
+        "api_key": settings.llm_api_key or "",
+        "model": settings.embedding_model,
+        "dimensions": int(settings.embedding_dimensions or 1024),
+    }
+
+
+def _profile_spec(row) -> Dict[str, Any]:
+    return {
+        "id": row.id,
+        "name": row.name,
+        "kind": row.kind or "openai",
+        "api_url": row.api_url,
+        "api_key": row.api_key or "",
+        "model": row.model,
+        "dimensions": int(row.dimensions or 1024),
+    }
+
+
+def resolve_embedding_spec(db, profile_id: Optional[str] = None) -> Dict[str, Any]:
+    """解析嵌入档案：指定 id 优先，否则库内默认档案，最后回退 .env。"""
+    if db is not None:
+        try:
+            from app.models.database import EmbeddingProfile
+            row = None
+            if profile_id:
+                row = db.query(EmbeddingProfile).filter(EmbeddingProfile.id == profile_id).first()
+            if row is None:
+                row = db.query(EmbeddingProfile).filter(EmbeddingProfile.is_default.is_(True)).first()
+            if row is not None:
+                return _profile_spec(row)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("解析嵌入档案失败,回退环境默认: %s", e)
+    return settings_spec()
+
+
+def profile_id_of(spec: Optional[Dict[str, Any]]) -> Optional[str]:
+    return (spec or {}).get("id")
+
+
+def notebook_profile_id(db, notebook_id: Optional[str]) -> Optional[str]:
+    """笔记本指定的嵌入档案 id(未指定返回 None=用默认)。"""
+    if not notebook_id or db is None:
+        return None
+    try:
+        from app.models.database import Notebook
+        nb = db.query(Notebook).filter(Notebook.id == notebook_id).first()
+        return nb.embedding_profile_id if nb else None
+    except Exception as e:  # noqa: BLE001
+        logger.warning("解析笔记本嵌入档案失败: %s", e)
+        return None
+
+
+def embedding_spec_for_notebook(db, notebook_id: Optional[str]) -> Dict[str, Any]:
+    return resolve_embedding_spec(db, notebook_profile_id(db, notebook_id))
+
+
 class EmbeddingService:
-    def __init__(self):
+    def __init__(self, spec: Optional[Dict[str, Any]] = None):
+        self.spec = spec or settings_spec()
         self.client = httpx.AsyncClient(timeout=60.0)
-        self.model = settings.embedding_model
-        self.api_url = settings.embedding_api_url
+        self.model = self.spec.get("model") or settings.embedding_model
+        self.api_url = self.spec.get("api_url") or settings.embedding_api_url
+        self.api_key = self.spec.get("api_key") or ""
+        self.profile_id = self.spec.get("id")
+        self.dimensions = int(self.spec.get("dimensions") or 1024)
         self.splitter = RecursiveCharacterTextSplitter(
             chunk_size=settings.chunk_size,
             chunk_overlap=settings.chunk_overlap,
             separators=["##", "#", "\n\n", "\n", " ", ""]
         )
 
+    @classmethod
+    def from_db(cls, db, profile_id: Optional[str] = None) -> "EmbeddingService":
+        return cls(resolve_embedding_spec(db, profile_id))
+
     @property
     def _is_ollama(self) -> bool:
+        # 以实际 api_url 为准(spec.kind 仅作档案元数据)
         return "/api/embed" in self.api_url
 
     @property
@@ -44,7 +117,7 @@ class EmbeddingService:
         检索查询向量为空、答案无参考来源);Ollama 等本地服务无需鉴权,
         LLM_API_KEY 为空时不加头。
         """
-        key = (settings.llm_api_key or "").strip()
+        key = (self.api_key or "").strip()
         return {"Authorization": f"Bearer {key}"} if key else {}
 
     async def encode(self, text: str) -> List[float]:
@@ -293,11 +366,11 @@ class VectorStore:
         self,
         page_id: str,
         chunks: List[Tuple[str, List[float], Optional[str]]],
+        profile_id: Optional[str] = None,
     ):
         self.delete_page_chunks(page_id)
 
         dialect = self.db.bind.dialect.name
-        has_vector_col = dialect == "postgresql"
 
         for i, item in enumerate(chunks):
             if len(item) == 2:
@@ -307,13 +380,16 @@ class VectorStore:
             import uuid
             chunk_id = str(uuid.uuid4())
             emb_json = json.dumps(embedding)
-            emb_str = "[" + ",".join(str(v) for v in embedding) + "]"
+            # pgvector 列固定 vector(1024)：仅当该档案维度为 1024 时才写向量列，
+            # 其它维度只存 JSON(检索走 numpy 精确比对)。
+            use_vec = dialect == "postgresql" and len(embedding) == 1024
 
-            if has_vector_col:
+            if use_vec:
+                emb_str = "[" + ",".join(str(v) for v in embedding) + "]"
                 self.db.execute(
                     text(
-                        "INSERT INTO page_chunks (id, page_id, chunk_index, content, embedding, context, embedding_vec) "
-                        "VALUES (:id, :page_id, :chunk_index, :content, :embedding, :context, CAST(:embedding_vec AS vector))"
+                        "INSERT INTO page_chunks (id, page_id, chunk_index, content, embedding, context, embedding_profile, embedding_vec) "
+                        "VALUES (:id, :page_id, :chunk_index, :content, :embedding, :context, :profile, CAST(:embedding_vec AS vector))"
                     ),
                     {
                         "id": chunk_id,
@@ -322,14 +398,15 @@ class VectorStore:
                         "content": chunk_text,
                         "embedding": emb_json,
                         "context": context,
+                        "profile": profile_id,
                         "embedding_vec": emb_str,
                     }
                 )
             else:
                 self.db.execute(
                     text(
-                        "INSERT INTO page_chunks (id, page_id, chunk_index, content, embedding, context) "
-                        "VALUES (:id, :page_id, :chunk_index, :content, :embedding, :context)"
+                        "INSERT INTO page_chunks (id, page_id, chunk_index, content, embedding, context, embedding_profile) "
+                        "VALUES (:id, :page_id, :chunk_index, :content, :embedding, :context, :profile)"
                     ),
                     {
                         "id": chunk_id,
@@ -338,6 +415,7 @@ class VectorStore:
                         "content": chunk_text,
                         "embedding": emb_json,
                         "context": context,
+                        "profile": profile_id,
                     }
                 )
         self.db.flush()
@@ -354,6 +432,7 @@ class VectorStore:
         query_embedding: List[float],
         top_k: int = 50,
         visible_page_ids=None,
+        profile_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         # 查询向量为空(embedding 服务不可用/鉴权失败)时直接跳过向量路:
         # 既避免 CAST('[]' AS vector) 报错,也避免该报错污染事务导致
@@ -362,19 +441,24 @@ class VectorStore:
             logger.warning("查询向量为空(embedding 不可用?),跳过向量检索,仅用 BM25")
             return []
 
-        emb_str = "[" + ",".join(str(v) for v in query_embedding) + "]"
-
         dialect = self.db.bind.dialect.name
+        # 档案过滤：不同嵌入模型的向量互不可比,只比对同一档案(旧数据 profile 为 NULL)
+        profile_cond = "pc.embedding_profile = :profile" if profile_id else "pc.embedding_profile IS NULL"
+        plain_cond = "embedding_profile = :profile" if profile_id else "embedding_profile IS NULL"
 
-        if dialect == "postgresql":
+        if dialect == "postgresql" and len(query_embedding) == 1024:
             try:
+                emb_str = "[" + ",".join(str(v) for v in query_embedding) + "]"
                 params: Dict[str, Any] = {"query_emb": emb_str, "limit": top_k}
-                where_sql = ""
+                conds = ["pc.embedding_vec IS NOT NULL", profile_cond]
+                if profile_id:
+                    params["profile"] = profile_id
                 if visible_page_ids:
                     ids = list(visible_page_ids)
                     placeholders = ",".join(f":vid{i}" for i in range(len(ids)))
                     params.update({f"vid{i}": pid for i, pid in enumerate(ids)})
-                    where_sql = f"WHERE pc.page_id IN ({placeholders})"
+                    conds.append(f"pc.page_id IN ({placeholders})")
+                where_sql = "WHERE " + " AND ".join(conds)
                 result = self.db.execute(text(
                     f"SELECT pc.page_id, pc.content, pc.context, pc.chunk_index, "
                     f"pc.embedding_vec <=> CAST(:query_emb AS vector) AS distance "
@@ -403,6 +487,9 @@ class VectorStore:
                 except Exception:
                     logger.exception("回滚失败后仍继续降级")
 
+        profile_params: Dict[str, Any] = {}
+        if profile_id:
+            profile_params["profile"] = profile_id
         if visible_page_ids:
             ids = list(visible_page_ids)
             rows_all = []
@@ -412,15 +499,16 @@ class VectorStore:
                 result = self.db.execute(
                     text(
                         f"SELECT id, page_id, content, context, chunk_index, embedding "
-                        f"FROM page_chunks WHERE page_id IN ({placeholders})"
+                        f"FROM page_chunks WHERE page_id IN ({placeholders}) AND {plain_cond}"
                     ),
-                    {f"vid{j}": pid for j, pid in enumerate(chunk)},
+                    {**{f"vid{j}": pid for j, pid in enumerate(chunk)}, **profile_params},
                 )
                 rows_all.extend(result.fetchall())
             rows = rows_all
         else:
             result = self.db.execute(
-                text("SELECT id, page_id, content, context, chunk_index, embedding FROM page_chunks")
+                text("SELECT id, page_id, content, context, chunk_index, embedding FROM page_chunks WHERE " + plain_cond),
+                profile_params,
             )
             rows = result.fetchall()
 
@@ -457,12 +545,13 @@ class VectorStore:
         query_embedding: List[float],
         top_k: int = 50,
         visible_page_ids=None,
+        profile_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         # The SQLite fallback scans every chunk and runs numpy similarity,
         # which can take seconds on a large corpus.  Run it in a thread so the
         # event loop is not blocked while note pages are being loaded.
         import asyncio
-        return await asyncio.to_thread(self._search_sync, query_embedding, top_k, visible_page_ids)
+        return await asyncio.to_thread(self._search_sync, query_embedding, top_k, visible_page_ids, profile_id)
 
     async def get_chunk_count(self, page_id: str = None) -> int:
         if page_id:
