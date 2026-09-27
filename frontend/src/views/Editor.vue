@@ -235,13 +235,18 @@
         </div>
         <div class="doc-scroll">
         <div v-if="currentPage && isDatabase" class="db-view">
-          <div class="db-head">
-            <span class="db-title">{{ currentPage.icon }} {{ currentPage.title || '无标题' }}</span>
-            <div class="db-head-actions">
-              <button class="icon-btn" :class="{ 'is-on': currentPage.view_type === 'table' }" title="表格视图" @click="setViewType('table')">▦</button>
-              <button class="icon-btn" :class="{ 'is-on': currentPage.view_type === 'board' }" title="看板视图" @click="setViewType('board')">▤</button>
-              <button class="icon-btn" :class="{ 'is-on': currentPage.view_type === 'calendar' }" title="日历视图" @click="setViewType('calendar')">🗓</button>
-              <button class="icon-btn" title="文档视图" @click="setViewType('doc')">📄</button>
+          <div class="db-hero">
+            <span class="db-hero-icon">{{ currentPage.icon || '🗂' }}</span>
+            <h1 class="db-hero-title">{{ currentPage.title || '无标题' }}</h1>
+          </div>
+          <div class="db-toolbar">
+            <div class="db-tabs">
+              <button class="db-tab" :class="{ active: currentPage.view_type === 'table' }" @click="setViewType('table')">▦ 表格</button>
+              <button class="db-tab" :class="{ active: currentPage.view_type === 'board' }" @click="setViewType('board')">▤ 看板</button>
+              <button class="db-tab" :class="{ active: currentPage.view_type === 'calendar' }" @click="setViewType('calendar')">🗓 日历</button>
+              <button class="db-tab" :class="{ active: currentPage.view_type === 'doc' }" @click="setViewType('doc')">📄 文档</button>
+            </div>
+            <div class="db-toolbar-right">
               <el-button size="small" type="primary" @click="addRow">＋ 新建</el-button>
             </div>
           </div>
@@ -2363,8 +2368,8 @@ html, body, #app { height: 100%; }
   width: 24px;
   height: 24px;
   border-radius: 6px;
-  background: linear-gradient(135deg, #6366f1, #4f46e5);
-  color: #fff;
+  background: var(--text);
+  color: var(--bg);
   font-size: 12px;
   font-weight: 700;
   display: flex;
@@ -2620,7 +2625,7 @@ html, body, #app { height: 100%; }
   transition: background 0.12s, transform 0.12s, border-color 0.12s;
 }
 .emoji-opt:hover { background: #f1f1ef; transform: translateY(-1px); }
-.emoji-opt.active { background: #eef0ff; border-color: #cdcbf8; }
+.emoji-opt.active { background: var(--primary-weak); border-color: var(--primary-weak-2); }
 .emoji-foot { display: flex; gap: 8px; margin-top: 8px; padding-top: 8px; border-top: 1px solid #f2f2f0; }
 .emoji-foot-btn {
   flex: 1;
@@ -2755,7 +2760,7 @@ html, body, #app { height: 100%; }
   white-space: nowrap;
 }
 .outline-item:hover { background: #f1f1ef; color: #37352f; }
-.icon-btn.is-on { background: #eef0ff; color: #4f46e5; }
+.icon-btn.is-on { background: var(--primary-weak); color: var(--primary); }
 
 /* 全宽 / 小字号(按页面) */
 .editor-wrapper.wide { max-width: 100%; padding-left: 64px; padding-right: 64px; }
@@ -2801,7 +2806,7 @@ html, body, #app { height: 100%; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.quick-item.active { background: #eef0ff; color: #4f46e5; }
+.quick-item.active { background: var(--primary-weak); color: var(--primary); }
 
 /* 反向链接 */
 .link-panel-head {
@@ -2825,7 +2830,7 @@ html, body, #app { height: 100%; }
   position: absolute;
   top: -5px;
   right: -5px;
-  background: #4f46e5;
+  background: var(--primary);
   color: #fff;
   border-radius: 8px;
   font-size: 10px;
@@ -2864,7 +2869,7 @@ html, body, #app { height: 100%; }
 .history-list { width: 220px; flex: 0 0 auto; overflow-y: auto; border-right: 1px solid #f0f0ef; padding-right: 8px; }
 .history-item { padding: 8px 10px; border-radius: 8px; cursor: pointer; margin-bottom: 2px; }
 .history-item:hover { background: #f1f1ef; }
-.history-item.active { background: #eef0ff; }
+.history-item.active { background: var(--primary-weak); }
 .history-time { font-size: 13px; color: #37352f; font-weight: 500; }
 .history-meta { font-size: 11px; color: #9b9a97; margin-top: 2px; }
 .history-preview { flex: 1; min-width: 0; display: flex; flex-direction: column; }
@@ -2903,10 +2908,26 @@ html, body, #app { height: 100%; }
 .notebook-item.nb-drop-after > .notebook-info { box-shadow: inset 0 -2px 0 var(--primary, #4f46e5); }
 
 /* 数据库视图 */
-.db-view { max-width: 1180px; margin: 0 auto; padding: 40px 48px 140px; }
-.db-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
-.db-title { font-size: 30px; font-weight: 700; color: var(--text); letter-spacing: -0.02em; }
-.db-head-actions { display: flex; align-items: center; gap: 6px; }
+.db-view { max-width: 1180px; margin: 0 auto; padding: 44px 56px 140px; }
+.db-hero { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+.db-hero-icon { font-size: 40px; line-height: 1; }
+.db-hero-title { font-size: 40px; font-weight: 700; color: var(--text); letter-spacing: -0.02em; margin: 0; }
+.db-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--border); margin-bottom: 16px; }
+.db-tabs { display: flex; gap: 2px; }
+.db-tab {
+  border: none;
+  background: transparent;
+  color: var(--text-3);
+  font-size: 14px;
+  font-weight: 500;
+  padding: 7px 10px;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  cursor: pointer;
+}
+.db-tab:hover { color: var(--text-2); }
+.db-tab.active { color: var(--text); border-bottom-color: var(--text); }
+.db-toolbar-right { display: flex; align-items: center; gap: 8px; }
 .db-table { border: 1px solid #eceef2; border-radius: 12px; overflow: hidden; }
 .db-row {
   display: grid;
@@ -2919,7 +2940,7 @@ html, body, #app { height: 100%; }
 .db-row:last-child { border-bottom: none; }
 .db-row-head { background: #f8f9fc; font-size: 12px; color: #9b9a97; font-weight: 600; }
 .db-link { color: #37352f; cursor: pointer; }
-.db-link:hover { color: #4f46e5; text-decoration: underline; }
+.db-link:hover { color: var(--primary); text-decoration: underline; }
 .db-c-time { font-size: 12px; color: #9b9a97; }
 .db-board { display: flex; gap: 12px; align-items: flex-start; overflow-x: auto; padding-bottom: 8px; }
 .db-col { flex: 1 1 0; min-width: 244px; border-radius: 10px; padding: 8px; }
@@ -2938,7 +2959,7 @@ html, body, #app { height: 100%; }
 .db-cal-cell { min-height: 78px; border: 1px solid #f0f0ef; border-radius: 8px; padding: 4px 6px; font-size: 11px; overflow: hidden; }
 .db-cal-cell.empty { border: none; }
 .db-cal-day { color: #b9b9b6; margin-bottom: 2px; }
-.db-cal-item { background: #eef0ff; color: #4f46e5; border-radius: 5px; padding: 1px 5px; margin-bottom: 2px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.db-cal-item { background: var(--primary-weak); color: var(--primary); border-radius: 5px; padding: 1px 5px; margin-bottom: 2px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ---- 交互细节打磨 ---- */
 .save-dot {
@@ -2963,7 +2984,7 @@ html, body, #app { height: 100%; }
 .db-row:not(.db-row-head):hover { background: #fafafe; }
 .db-card { transition: box-shadow 0.15s, border-color 0.15s, transform 0.15s; }
 .db-card:hover { box-shadow: 0 6px 16px rgba(16, 24, 40, 0.08); transform: translateY(-1px); }
-.db-col.drag-over { outline: 2px dashed #cdcbf8; }
+.db-col.drag-over { outline: 2px dashed var(--primary-weak-2); }
 
 /* 分区标题 hover 显示新建 */
 .side-section { border-radius: 6px; }

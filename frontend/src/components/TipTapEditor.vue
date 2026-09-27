@@ -1277,8 +1277,8 @@ onBeforeUnmount(() => {
 }
 
 .tb-btn.is-active {
-  background: #e0edff;
-  color: #1d4ed8;
+  background: var(--primary-weak);
+  color: var(--primary);
 }
 
 .tb-btn:disabled {
@@ -1315,7 +1315,7 @@ onBeforeUnmount(() => {
   position: fixed;
   z-index: 25;
   height: 2px;
-  background: #3b82f6;
+  background: var(--primary);
   border-radius: 2px;
   pointer-events: none;
   box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.18);
@@ -1387,6 +1387,7 @@ onBeforeUnmount(() => {
   color: #2563eb;
   font-weight: 600;
   margin-right: 6px;
+  color: var(--primary);
 }
 
 .editor-status {
@@ -1412,11 +1413,11 @@ onBeforeUnmount(() => {
   font-size: 16px;
   line-height: 1.78;
   color: #1f2937;
-  caret-color: #2563eb;
+  caret-color: var(--primary);
 }
 
 .editor-content :deep(.ProseMirror ::selection) {
-  background: #dbeafe;
+  background: var(--primary-weak-2);
 }
 
 .editor-content :deep(.ProseMirror > * + *) {
@@ -1463,7 +1464,7 @@ onBeforeUnmount(() => {
 }
 
 .editor-content :deep(.ProseMirror a) {
-  color: #2563eb;
+  color: var(--primary);
   text-decoration: underline;
   text-underline-offset: 2px;
   cursor: pointer;
@@ -1566,7 +1567,7 @@ onBeforeUnmount(() => {
   width: 16px;
   height: 16px;
   cursor: pointer;
-  accent-color: #2563eb;
+  accent-color: var(--primary);
 }
 
 .editor-content :deep(.ProseMirror blockquote) {
@@ -1582,8 +1583,8 @@ onBeforeUnmount(() => {
   border-radius: 10px;
   padding: 12px 16px;
   margin: 14px 0;
-  border-left: 4px solid #3b82f6;
-  background: #eff6ff;
+  border-left: 4px solid var(--primary);
+  background: var(--primary-weak);
 }
 .editor-content :deep(.ProseMirror .callout > *:first-child) { margin-top: 0; }
 .editor-content :deep(.ProseMirror .callout > *:last-child) { margin-bottom: 0; }
@@ -1634,7 +1635,7 @@ onBeforeUnmount(() => {
   top: 0;
   bottom: 0;
   width: 4px;
-  background: #3b82f6;
+  background: var(--primary);
   pointer-events: none;
 }
 
@@ -1689,7 +1690,7 @@ onBeforeUnmount(() => {
 }
 
 .bubble-bar button:hover { background: #374151; }
-.bubble-bar button.is-active { background: #3b82f6; color: #fff; }
+.bubble-bar button.is-active { background: var(--primary); color: #fff; }
 .bubble-bar .bubble-sep { width: 1px; height: 16px; background: #4b5563; margin: 0 3px; }
 
 .slash-menu {
@@ -1723,7 +1724,7 @@ onBeforeUnmount(() => {
   color: #374151;
 }
 
-.slash-item.active { background: #eff6ff; }
+.slash-item.active { background: var(--primary-weak); }
 
 .slash-item .slash-icon {
   width: 30px;
@@ -1739,7 +1740,7 @@ onBeforeUnmount(() => {
   color: #4b5563;
 }
 
-.slash-item.active .slash-icon { background: #dbeafe; color: #1d4ed8; }
+.slash-item.active .slash-icon { background: var(--primary-weak-2); color: var(--primary); }
 
 .slash-item .slash-text { display: flex; flex-direction: column; min-width: 0; }
 .slash-item .slash-title { font-size: 14px; line-height: 1.3; }
