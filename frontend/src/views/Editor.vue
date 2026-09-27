@@ -116,7 +116,7 @@
               @dragend="onNbDragEnd"
             >
               <span class="nb-chevron" :class="{ open: currentNotebook?.id === nb.id }">›</span>
-              <span class="notebook-icon">📁</span>
+              <span class="notebook-icon">{{ nb.icon || '📁' }}</span>
               <span class="notebook-name">{{ nb.name }}</span>
               <el-dropdown trigger="click" @command="(cmd: string) => handleNotebookCmd(cmd, nb)">
                 <el-button size="small" text>⋮</el-button>
@@ -483,6 +483,18 @@
     <!-- 笔记本设置对话框 -->
     <el-dialog v-model="showNotebookSettings" title="笔记本设置" width="520px">
       <el-form label-width="90px">
+        <el-form-item label="图标">
+          <div class="nb-icon-picker">
+            <span
+              v-for="e in NOTEBOOK_ICONS"
+              :key="e"
+              class="nb-icon-opt"
+              :class="{ active: notebookForm.icon === e }"
+              @click="notebookForm.icon = e"
+            >{{ e }}</span>
+            <el-input v-model="notebookForm.icon" placeholder="或输入 emoji" style="width: 120px" maxlength="4" />
+          </div>
+        </el-form-item>
         <el-form-item label="名称">
           <el-input v-model="notebookForm.name" @keyup.enter="saveNotebookSettings" />
         </el-form-item>
@@ -717,6 +729,7 @@ interface Notebook {
   id: string
   name: string
   description?: string
+  icon?: string
   embedding_profile_id?: string | null
   position?: number
   section?: string
@@ -772,7 +785,8 @@ const newNotebookName = ref('')
 const profiles = ref<EmbeddingProfile[]>([])
 const showNotebookSettings = ref(false)
 const notebookSaving = ref(false)
-const notebookForm = reactive({ id: '', name: '', description: '', embedding_profile_id: '' as string | null })
+const NOTEBOOK_ICONS = ['📁', '📘', '📗', '📙', '📕', '🗂️', '🧭', '🧩', '⚙️', '🚀', '💡', '🧪', '🛠️', '🌐', '📊', '🤖']
+const notebookForm = reactive({ id: '', name: '', description: '', icon: '', embedding_profile_id: '' as string | null })
 const showSearch = ref(false)
 const searchResults = ref<any[]>([])
 
@@ -838,6 +852,7 @@ const openNotebookSettings = (nb: Notebook) => {
   notebookForm.id = nb.id
   notebookForm.name = nb.name
   notebookForm.description = nb.description || ''
+  notebookForm.icon = nb.icon || ''
   notebookForm.embedding_profile_id = nb.embedding_profile_id || ''
   showNotebookSettings.value = true
 }
@@ -852,6 +867,7 @@ const saveNotebookSettings = async () => {
     const res = await http.put(`/api/notebooks/${notebookForm.id}`, {
       name: notebookForm.name,
       description: notebookForm.description,
+      icon: notebookForm.icon || '',
       embedding_profile_id: notebookForm.embedding_profile_id || '',
     })
     const updated = res.data
@@ -2699,6 +2715,22 @@ html, body, #app { height: 100%; }
   cursor: pointer;
 }
 .emoji-foot-btn:hover { background: #efefed; }
+
+/* 笔记本图标选择 */
+.nb-icon-picker { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
+.nb-icon-opt {
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 17px;
+  border-radius: 6px;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+.nb-icon-opt:hover { background: var(--surface-2); }
+.nb-icon-opt.active { background: var(--primary-weak); border-color: var(--primary-weak-2); }
 
 /* 侧边栏拖拽调宽 + 页面树折叠 */
 .sidebar { position: relative; }

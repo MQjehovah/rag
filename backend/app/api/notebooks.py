@@ -29,6 +29,7 @@ def create_notebook(data: NotebookCreate, db: Session = Depends(get_db), current
         name=data.name,
         group_id=group_id,
         description=data.description or '',
+        icon=data.icon or '',
         embedding_profile_id=(data.embedding_profile_id or None),
         section=data.section or '',
         position=(max_pos or 0) + 1,
@@ -74,6 +75,8 @@ def update_notebook(notebook_id: str, data: NotebookUpdate, db: Session = Depend
         notebook.name = data.name
     if data.description is not None:
         notebook.description = data.description
+    if data.icon is not None:
+        notebook.icon = data.icon
     if data.section is not None:
         notebook.section = data.section
     if data.embedding_profile_id is not None:

@@ -9,6 +9,7 @@ class NotebookBase(BaseModel):
 class NotebookCreate(NotebookBase):
     group_id: Optional[str] = None
     description: str = ''
+    icon: str = ''
     embedding_profile_id: Optional[str] = None
     section: str = ''
 
@@ -16,6 +17,7 @@ class NotebookUpdate(BaseModel):
     name: Optional[str] = None
     group_id: Optional[str] = None
     description: Optional[str] = None
+    icon: Optional[str] = None
     embedding_profile_id: Optional[str] = None
     section: Optional[str] = None
 
@@ -27,16 +29,17 @@ class NotebookResponse(NotebookBase):
     id: str
     group_id: Optional[str] = None
     description: str = ''
+    icon: str = ''
     embedding_profile_id: Optional[str] = None
     position: int = 0
     section: str = ''
     created_at: datetime
     updated_at: datetime
 
-    @field_validator('description', mode='before')
+    @field_validator('description', 'icon', mode='before')
     @classmethod
     def _coerce_description(cls, v):
-        # 历史行在迁移补列后 description 可能为 NULL,统一归一为空串
+        # 历史行在迁移补列后 description/icon 可能为 NULL,统一归一为空串
         return v or ''
 
     class Config:

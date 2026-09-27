@@ -19,6 +19,8 @@ class Notebook(Base):
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     name = Column(String(255), nullable=False)
     description = Column(Text, default='')
+    # 笔记本图标(emoji)
+    icon = Column(String(32), default='')
     group_id = Column(String(255), nullable=True, index=True)
     # 侧边栏排序位次与分组名(用户自定义)
     position = Column(Integer, default=0)
@@ -427,6 +429,9 @@ def _backfill_text_defaults(engine):
             ))
             conn.execute(sqlalchemy_text(
                 "UPDATE notebooks SET section = '' WHERE section IS NULL"
+            ))
+            conn.execute(sqlalchemy_text(
+                "UPDATE notebooks SET icon = '' WHERE icon IS NULL"
             ))
     except Exception:
         logger.warning("回填文本列默认值失败", exc_info=True)
