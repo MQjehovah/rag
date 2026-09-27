@@ -61,6 +61,19 @@ class PageRevision(Base):
     created_at = Column(DateTime, default=datetime.now)
 
 
+class PageComment(Base):
+    """页面级评论(作者/内容/是否已解决)。"""
+    __tablename__ = 'page_comments'
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    page_id = Column(String(36), ForeignKey('pages.id', ondelete='CASCADE'), nullable=False, index=True)
+    author_id = Column(String(36), default='')
+    author_name = Column(String(255), default='')
+    content = Column(Text, default='')
+    resolved = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.now)
+
+
 class PageChunk(Base):
     __tablename__ = 'page_chunks'
 

@@ -169,7 +169,8 @@
             </template>
           </div>
           <div class="topbar-actions">
-            <button class="icon-btn" :class="{ 'is-on': outlineOpen }" title="大纲" @click="outlineOpen = !outlineOpen">☰</button>
+            <button class="icon-btn" :class="{ 'is-on': commentsOpen }" title="评论" @click="toggleComments">💬<span v-if="comments.length" class="badge">{{ comments.length }}</span></button>
+            <button class="icon-btn" :class="{ 'is-on': outlineOpen }" title="大纲" @click="outlineOpen = !outlineOpen; if (outlineOpen) commentsOpen = false">☰</button>
             <span class="save-badge" :class="saveStatus">{{ saveStatus === 'saved' ? '已保存' : saveStatus === 'saving' ? '保存中…' : '未保存' }}</span>
             <el-button size="small" @click="importDialogVisible = true">导入</el-button>
             <el-button size="small" :loading="organizing" @click="handleOrganize">{{ organizing ? '整理中…' : '自动整理' }}</el-button>
@@ -298,6 +299,32 @@
         <div class="link-list">
           <div v-if="!backlinks.length" class="muted-hint" style="padding: 4px 12px">暂无</div>
           <div v-for="b in backlinks" :key="b.id" class="outline-item" @click="openPageById(b.id)">{{ b.title }}</div>
+        </div>
+      </aside>
+
+      <!-- 评论 -->
+      <aside v-if="commentsOpen" class="comments-panel">
+        <div class="outline-head">
+          <span>评论</span>
+          <button class="icon-btn" title="关闭" @click="commentsOpen = false">✕</button>
+        </div>
+        <div class="comments-body">
+          <div v-if="!comments.length" class="muted-hint" style="padding: 8px 12px">暂无评论</div>
+          <div v-for="c in comments" :key="c.id" class="comment-item" :class="{ resolved: c.resolved }">
+            <div class="comment-head">
+              <span class="comment-author">{{ c.author }}</span>
+              <span class="comment-time">{{ commentTime(c.created_at) }}</span>
+              <button class="icon-btn" :title="c.resolved ? '重新打开' : '标记已解决'" @click="toggleResolveComment(c.id)">{{ c.resolved ? '↺' : '✓' }}</button>
+              <button class="icon-btn" title="删除" @click="deleteComment(c.id)">✕</button>
+            </div>
+            <div class="comment-content">{{ c.content }}</div>
+          </div>
+        </div>
+        <div class="comment-input">
+          <el-input v-model="commentText" type="textarea" :rows="2" placeholder="写下评论…（Ctrl+Enter 发送）" @keydown.ctrl.enter="addComment" />
+          <div style="margin-top: 6px; text-align: right">
+            <el-button size="small" type="primary" :disabled="!commentText.trim()" @click="addComment">评论</el-button>
+          </div>
         </div>
       </aside>
     </div>
@@ -1123,6 +1150,7 @@ watch(() => currentPage.value?.id, (id) => {
   pageWide.value = localStorage.getItem('rag-page-wide-' + id) === '1'
   pageSmall.value = localStorage.getItem('rag-page-small-' + id) === '1'
   loadBacklinks(id)
+  loadComments(id)
 })
 
 const toggleWide = () => {
@@ -1340,6 +1368,47 @@ const scrollToHeading = (text: string) => {
     }
   }
 }
+
+// ---------------- 评论 ----------------
+const comments = ref<{ id: string; author: string; author_id: string; content: string; resolved: boolean; created_at: string }[]>([])
+const commentsOpen = ref(false)
+const commentText = ref('')
+const loadComments = async (id?: string) => {
+  if (!id) { comments.value = []; return }
+  try {
+    comments.value = (await http.get(`/api/pages/${id}/comments`)).data.items || []
+  } catch { comments.value = [] }
+}
+const toggleComments = () => {
+  commentsOpen.value = !commentsOpen.value
+  if (commentsOpen.value) {
+    outlineOpen.value = false
+    if (currentPage.value) loadComments(currentPage.value.id)
+  }
+}
+const addComment = async () => {
+  if (!currentPage.value || !commentText.value.trim()) return
+  try {
+    await http.post(`/api/pages/${currentPage.value.id}/comments`, { content: commentText.value.trim() })
+    commentText.value = ''
+    await loadComments(currentPage.value.id)
+  } catch { ElMessage.error('评论失败') }
+}
+const toggleResolveComment = async (cid: string) => {
+  if (!currentPage.value) return
+  try {
+    await http.post(`/api/pages/${currentPage.value.id}/comments/${cid}/resolve`)
+    await loadComments(currentPage.value.id)
+  } catch { ElMessage.error('操作失败') }
+}
+const deleteComment = async (cid: string) => {
+  if (!currentPage.value) return
+  try {
+    await http.delete(`/api/pages/${currentPage.value.id}/comments/${cid}`)
+    await loadComments(currentPage.value.id)
+  } catch { ElMessage.error('删除失败') }
+}
+const commentTime = (s: string) => (s ? new Date(s).toLocaleString('zh-CN', { hour12: false }) : '')
 
 const reindexCurrentPage = async () => {
   if (!currentPage.value) return
@@ -2400,6 +2469,43 @@ html, body, #app { height: 100%; }
 }
 .link-panel-head .count { background: #e3e3e0; color: #6b6b68; border-radius: 8px; padding: 0 7px; font-size: 11px; }
 .link-list { max-height: 220px; overflow-y: auto; padding-bottom: 14px; }
+
+/* 评论 */
+.icon-btn { position: relative; }
+.icon-btn .badge {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  background: #4f46e5;
+  color: #fff;
+  border-radius: 8px;
+  font-size: 10px;
+  line-height: 1;
+  padding: 1px 5px;
+}
+.comments-panel {
+  width: 304px;
+  flex: 0 0 auto;
+  border-left: 1px solid #f0f0ef;
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.comments-body { flex: 1; overflow-y: auto; padding: 4px 10px 12px; }
+.comment-item {
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid #f0f0ef;
+  margin-bottom: 8px;
+  background: #fff;
+}
+.comment-item.resolved { opacity: 0.55; }
+.comment-head { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+.comment-author { font-size: 13px; font-weight: 600; color: #37352f; }
+.comment-time { font-size: 11px; color: #b9b9b6; flex: 1; }
+.comment-content { font-size: 13px; color: #4b5563; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
+.comment-input { border-top: 1px solid #f0f0ef; padding: 10px; }
 
 /* 分享 */
 .share-row { display: flex; gap: 8px; }

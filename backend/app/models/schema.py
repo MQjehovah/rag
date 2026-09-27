@@ -141,6 +141,9 @@ class PageMove(BaseModel):
     parent_id: Optional[str] = None
     position: int = 0
 
+class CommentCreate(BaseModel):
+    content: str = ''
+
 class PageResponse(PageBase):
     id: str
     position: int = 0

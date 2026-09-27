@@ -11,8 +11,8 @@ from collections import Counter
 
 logger = logging.getLogger(__name__)
 
-from app.models.database import Page, Notebook, PageChunk, PageRevision, User, get_engine
-from app.models.schema import PageCreate, PageUpdate, PageMove, PageResponse, PageListItem, PageListResponse
+from app.models.database import Page, Notebook, PageChunk, PageRevision, PageComment, User, get_engine
+from app.models.schema import PageCreate, PageUpdate, PageMove, CommentCreate, PageResponse, PageListItem, PageListResponse
 from app.core.rag import EmbeddingService, VectorStore
 from app.core.hybrid import HybridIndex
 from app.core.entity_graph import EntityGraphStore
@@ -408,6 +408,84 @@ def unshare_page(page_id: str, db: Session = Depends(get_db), current_user=Depen
     db.commit()
     return {"message": "已取消分享"}
 
+def _comment_user(db: Session, current_user) -> tuple:
+    uid = current_user.get("id") if isinstance(current_user, dict) else None
+    name = ""
+    if isinstance(current_user, dict):
+        name = current_user.get("display_name") or current_user.get("username") or ""
+    return (uid or ""), name
+
+
+@router.get("/{page_id}/comments")
+def list_comments(page_id: str, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    page = db.query(Page).filter(Page.id == page_id).first()
+    if not page or page.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="笔记不存在")
+    _check_page_access(page, current_user, db)
+    rows = (
+        db.query(PageComment)
+        .filter(PageComment.page_id == page_id)
+        .order_by(PageComment.created_at.desc())
+        .all()
+    )
+    return {
+        "items": [
+            {
+                "id": c.id,
+                "author_id": c.author_id or "",
+                "author": c.author_name or "匿名",
+                "content": c.content or "",
+                "resolved": bool(c.resolved),
+                "created_at": c.created_at,
+            }
+            for c in rows
+        ]
+    }
+
+
+@router.post("/{page_id}/comments")
+def add_comment(page_id: str, data: CommentCreate, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    page = db.query(Page).filter(Page.id == page_id).first()
+    if not page or page.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="笔记不存在")
+    _check_page_access(page, current_user, db)
+    content = (data.content or "").strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="评论内容不能为空")
+    uid, name = _comment_user(db, current_user)
+    c = PageComment(
+        id=str(uuid.uuid4()), page_id=page_id, author_id=uid,
+        author_name=name, content=content,
+    )
+    db.add(c)
+    db.commit()
+    db.refresh(c)
+    return {"id": c.id, "author_id": c.author_id, "author": c.author_name or "匿名",
+            "content": c.content, "resolved": False, "created_at": c.created_at}
+
+
+@router.delete("/{page_id}/comments/{comment_id}")
+def delete_comment(page_id: str, comment_id: str, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    c = db.query(PageComment).filter(PageComment.id == comment_id, PageComment.page_id == page_id).first()
+    if not c:
+        raise HTTPException(status_code=404, detail="评论不存在")
+    if "__local_admin__" not in current_user["groups"] and c.author_id != (current_user.get("id") if isinstance(current_user, dict) else None):
+        raise HTTPException(status_code=403, detail="只能删除自己的评论")
+    db.delete(c)
+    db.commit()
+    return {"message": "已删除"}
+
+
+@router.post("/{page_id}/comments/{comment_id}/resolve")
+def resolve_comment(page_id: str, comment_id: str, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    c = db.query(PageComment).filter(PageComment.id == comment_id, PageComment.page_id == page_id).first()
+    if not c:
+        raise HTTPException(status_code=404, detail="评论不存在")
+    c.resolved = not bool(c.resolved)
+    db.commit()
+    return {"resolved": bool(c.resolved)}
+
+
 @router.put("/{page_id}", response_model=PageResponse)
 def update_page(page_id: str, data: PageUpdate, background_tasks: BackgroundTasks, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     page = db.query(Page).filter(Page.id == page_id).first()
@@ -447,11 +525,8 @@ def update_page(page_id: str, data: PageUpdate, background_tasks: BackgroundTask
             and (now - (last.created_at or now)).total_seconds() > 120
         ):
             editor_name = ""
-            uid = current_user.get("sub") if isinstance(current_user, dict) else None
-            if uid:
-                u = db.query(User).filter(User.id == uid).first()
-                if u:
-                    editor_name = u.display_name or u.username or ""
+            if isinstance(current_user, dict):
+                editor_name = current_user.get("display_name") or current_user.get("username") or ""
             db.add(PageRevision(
                 id=str(uuid.uuid4()),
                 page_id=page.id,
@@ -551,6 +626,7 @@ def purge_page(page_id: str, db: Session = Depends(get_db), current_user=Depends
     EntityGraphStore(db).delete_page(page_id)
     db.query(PageChunk).filter(PageChunk.page_id == page_id).delete()
     db.query(PageRevision).filter(PageRevision.page_id == page_id).delete()
+    db.query(PageComment).filter(PageComment.page_id == page_id).delete()
     db.delete(page)
     db.commit()
     return {"message": "已彻底删除"}
