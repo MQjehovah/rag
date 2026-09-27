@@ -40,6 +40,14 @@ npm run build                  # vue-tsc typecheck + vite build (this IS the typ
 docker compose --profile pg up -d --build backend frontend
 ```
 
+**Collaboration sidecar** (`collab/`): a `y-websocket` Node service (port 1234) providing Yjs WebSocket sync. Deploy/refresh:
+```bash
+docker build -t rag-collab ./collab
+docker rm -f rag-collab && docker run -d --name rag-collab --restart unless-stopped \
+  --network rag_default -p 1234:1234 rag-collab
+```
+The frontend nginx proxies `/api/collab` → `rag-collab:1234` with `Upgrade`; the external gateway (45 nginx, bind mount `/home/xzrobot/docker/nginx/conf.d`) must also upgrade `/rag/api/collab/` (see `ai-services.conf` / `ai.xzrobot.com.conf` + `00-collab-map.conf`).
+
 ## Architecture
 
 - **Backend entry**: `app.main:app` — FastAPI app, routers from `app.api.{pages,notebooks,search,upload,graph,auth,dingtalk,chat,organize,wiki,jira,sources,pipelines,embeddings}`.
@@ -57,6 +65,7 @@ docker compose --profile pg up -d --build backend frontend
 - **Callout & Toggle blocks** (`components/editorExt.ts`): `Callout` = `div[data-callout]` (info/tip/success/warn/danger); `Toggle` = `details[data-toggle]` with `open`/`title` attrs and `div.toggle-content` body. Both inserted via slash/insert menu, serialized to Markdown via the HTML fallback, and give editors `NodeView`s (`ToggleNodeView.vue`).
 - **Images** (`components/ImageNodeView.vue`): the `image` node gains a `width` attr + NodeView with drag-to-resize and a caption input (stored in `title`). Serialization: standard `![alt](src "title")` unless a width is set, then HTML `<img ... width>`.
 - **Page cover/icon**: `pages.icon` (emoji) + `pages.cover` (URL) columns; `PageCreate/Update/Response` carry them; Editor shows a cover image and emoji picker above the title (saved with the normal page PUT).
+- **Collaborative editing** (`collab/` sidecar + `TipTapEditor.vue`): when `GET /api/collab/health` succeeds, Editor mounts `TipTapEditor` keyed per page in collab mode — `Y.Doc` + `WebsocketProvider` per room `page-<id>`, `@tiptap/extension-collaboration` (+ cursor), StarterKit history off. Markdown is still the source of truth: an empty Yjs doc is seeded from the note's Markdown, and edits keep emitting Markdown for the normal autosave PUT (RAG unaffected). If the WS service is unreachable the probe fails and editing falls back to single-user (no breakage).
 - **Rendered Markdown** (Wiki `renderContent`): `markdown-it` (`html:true`) + `markdown-it-task-lists` + **DOMPurify** whitelist sanitize (note content may contain HTML like `<u>`/`<mark>`/callouts); internal `[[页面]]` links render as `<span class="wiki-link" data-id>` (not `javascript:` hrefs, which DOMPurify strips). Chat (`html:false`) renders assistant text only (task lists supported).
 
 ## Key Gotchas

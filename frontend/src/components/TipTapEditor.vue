@@ -238,6 +238,10 @@ import ImageNodeView from './ImageNodeView.vue'
 import ToggleNodeView from './ToggleNodeView.vue'
 import { Callout, Toggle } from './editorExt'
 import { Markdown } from 'tiptap-markdown'
+import * as Y from 'yjs'
+import { WebsocketProvider } from 'y-websocket'
+import Collaboration from '@tiptap/extension-collaboration'
+import CollaborationCursor from '@tiptap/extension-collaboration-cursor'
 import mermaid from 'mermaid'
 import http from '../api/http'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -283,6 +287,7 @@ lowlight.register('markdown', markdown)
 
 const props = defineProps<{
   modelValue: string
+  collab?: { url: string; room: string; user: { name: string; color: string } } | null
 }>()
 
 const emit = defineEmits<{
@@ -291,6 +296,20 @@ const emit = defineEmits<{
 
 let lastEmitted = props.modelValue
 let applyingExternal = false
+
+// 协同(Yjs): 每个页面一个房间; 未启用时为普通单机编辑
+let ydoc: Y.Doc | null = null
+let provider: WebsocketProvider | null = null
+const collabExtensions: any[] = []
+if (props.collab) {
+  ydoc = new Y.Doc()
+  provider = new WebsocketProvider(props.collab.url, props.collab.room, ydoc)
+  provider.awareness.setLocalStateField('user', props.collab.user)
+  collabExtensions.push(
+    Collaboration.configure({ document: ydoc }),
+    CollaborationCursor.configure({ provider, user: props.collab.user }),
+  )
+}
 
 mermaid.initialize({ startOnLoad: false, theme: 'default' })
 
@@ -389,7 +408,7 @@ const SlashCommand = Extension.create({
 
 const editor = useEditor({
   extensions: [
-    StarterKit.configure({ codeBlock: false }),
+    StarterKit.configure({ codeBlock: false, history: props.collab ? false : undefined }),
     CodeBlockLowlight
       .extend({ addNodeView() { return VueNodeViewRenderer(CodeBlockComponent) } })
       .configure({ lowlight, defaultLanguage: 'plaintext' }),
@@ -482,6 +501,7 @@ const editor = useEditor({
     CharacterCount,
     Callout,
     Toggle.extend({ addNodeView() { return VueNodeViewRenderer(ToggleNodeView) } }),
+    ...collabExtensions,
     SlashCommand,
     Markdown.configure({ html: true, breaks: true, linkify: true }),
   ],
@@ -493,7 +513,7 @@ const editor = useEditor({
     nextTick(() => { scheduleMermaid(); disableSpellcheck() })
   },
   onCreate: () => {
-    nextTick(() => { scheduleMermaid(); disableSpellcheck() })
+    nextTick(() => { scheduleMermaid(); disableSpellcheck(); seedCollabIfEmpty() })
   },
   onSelectionUpdate: () => {
     keepCaretCentered()
@@ -509,6 +529,19 @@ const editor = useEditor({
     },
   },
 })
+
+if (provider) {
+  provider.on('sync', () => { nextTick(() => seedCollabIfEmpty()) })
+}
+
+function seedCollabIfEmpty() {
+  if (!props.collab || !ydoc || !editor.value) return
+  try {
+    if (ydoc.getXmlFragment('default').length === 0 && props.modelValue) {
+      editor.value.commands.setContent(props.modelValue)
+    }
+  } catch { /* ignore */ }
+}
 
 const headingValue = computed(() => {
   const e = editor.value
@@ -859,6 +892,13 @@ async function setLink() {
 }
 
 watch(() => props.modelValue, (newValue) => {
+  if (props.collab) {
+    // 协同模式内容由 Yjs 驱动; 仅在文档仍为空时用最新 Markdown 播种
+    if (ydoc && newValue && ydoc.getXmlFragment('default').length === 0) {
+      editor.value?.commands.setContent(newValue)
+    }
+    return
+  }
   if (!editor.value || lastEmitted === newValue) return
   const apply = () => {
     if (!editor.value) return
@@ -977,6 +1017,8 @@ onBeforeUnmount(() => {
     mermaidTimer = null
   }
   editor.value?.destroy()
+  provider?.destroy()
+  ydoc?.destroy()
 })
 </script>
 
@@ -1567,4 +1609,30 @@ onBeforeUnmount(() => {
 .block-menu .bm-item.danger { color: #dc2626; }
 .block-menu .bm-item.danger:hover { background: #fef2f2; }
 .block-menu .bm-sep { height: 1px; background: #f0f1f4; margin: 4px 0; }
+
+/* Yjs 协同光标 */
+.collaboration-cursor__caret {
+  position: relative;
+  margin-left: -1px;
+  margin-right: -1px;
+  border-left: 1px solid #0d0d0d;
+  border-right: 1px solid #0d0d0d;
+  word-break: normal;
+  pointer-events: none;
+}
+
+.collaboration-cursor__label {
+  position: absolute;
+  top: -1.5em;
+  left: -1px;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 600;
+  line-height: normal;
+  color: #fff;
+  padding: 1px 5px;
+  border-radius: 4px 4px 4px 0;
+  white-space: nowrap;
+  user-select: none;
+}
 </style>

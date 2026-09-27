@@ -148,7 +148,12 @@
             <span class="emoji-opt emoji-clear" @click="setIcon('')">移除</span>
           </div>
           <div v-loading="pageLoading" class="editor-body">
-            <TipTapEditor v-model="currentPage.content" @update:modelValue="scheduleSave" />
+            <TipTapEditor
+              :key="(collab ? 'c:' : 's:') + (currentPage?.id || '')"
+              v-model="currentPage.content"
+              :collab="collab"
+              @update:modelValue="scheduleSave"
+            />
           </div>
           <div class="editor-footer">
             <span class="editor-hint">自动保存</span>
@@ -287,16 +292,35 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, onBeforeUnmount, watch } from 'vue'
+import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElNotification } from 'element-plus'
 import type { UploadFile as ElUploadFile } from 'element-plus'
 import http from '../api/http'
 import TipTapEditor from '../components/TipTapEditor.vue'
+import { useAuthStore } from '../stores/auth'
 
 const route = useRoute()
 
 const API_BASE = (import.meta.env.BASE_URL || '/').replace(/\/$/, '')
+
+// ---- 协同编辑(Yjs over WebSocket) ----
+const auth = useAuthStore()
+const collabEnabled = ref(false)
+const wsBase = computed(() => {
+  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+  return `${proto}//${window.location.host}${API_BASE}/api/collab`
+})
+function colorFor(name: string) {
+  let h = 0
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) % 360
+  return `hsl(${h}, 70%, 50%)`
+}
+const collab = computed(() => {
+  if (!collabEnabled.value || !currentPage.value) return null
+  const name = auth.user?.display_name || auth.user?.username || '匿名'
+  return { url: wsBase.value, room: `page-${currentPage.value.id}`, user: { name, color: colorFor(name) } }
+})
 
 interface Notebook {
   id: string
@@ -945,6 +969,9 @@ onMounted(async () => {
   await loadNotebooks()
   await loadProfiles()
   await loadTags()
+  auth.fetchMe().catch(() => {})
+  // 探测协同服务: 可用才进入协同模式(否则保持单机编辑)
+  http.get('/api/collab/health').then(() => { collabEnabled.value = true }).catch(() => { collabEnabled.value = false })
   window.addEventListener('keydown', handleKeydown)
   const targetId = route.query.page as string | undefined
   if (targetId) {
