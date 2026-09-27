@@ -1,5 +1,5 @@
 <template>
-  <div class="tiptap-editor" @mousemove="onEditorMouseMove" @mouseleave="onEditorMouseLeave">
+  <div class="tiptap-editor" :class="prefClasses" @mousemove="onEditorMouseMove" @mouseleave="onEditorMouseLeave">
     <!-- 工具栏 -->
     <div class="editor-toolbar" v-if="editor">
       <select class="tb-select" :value="headingValue" @change="setHeading" title="段落样式">
@@ -56,6 +56,22 @@
 
       <button class="tb-btn" @click="editor.chain().focus().undo().run()" :disabled="!editor.can().undo()" title="撤销 (Ctrl+Z)"><Undo2 :size="16" /></button>
       <button class="tb-btn" @click="editor.chain().focus().redo().run()" :disabled="!editor.can().redo()" title="重做 (Ctrl+Shift+Z)"><Redo2 :size="16" /></button>
+
+      <span class="tb-spacer"></span>
+
+      <el-dropdown trigger="click" @command="applyPref">
+        <button class="tb-btn" title="视图与字号"><Settings2 :size="16" /></button>
+        <template #dropdown>
+          <el-dropdown-menu>
+            <el-dropdown-item command="font-sm">字号 小</el-dropdown-item>
+            <el-dropdown-item command="font-md">字号 标准</el-dropdown-item>
+            <el-dropdown-item command="font-lg">字号 大</el-dropdown-item>
+            <el-dropdown-item command="focus" divided>专注宽度：{{ prefs.focus ? '开' : '关' }}</el-dropdown-item>
+            <el-dropdown-item command="typewriter">打字机模式：{{ prefs.typewriter ? '开' : '关' }}</el-dropdown-item>
+          </el-dropdown-menu>
+        </template>
+      </el-dropdown>
+      <button class="tb-btn" @click="helpOpen = true" title="快捷键"><Keyboard :size="16" /></button>
     </div>
 
     <!-- 表格上下文工具条 -->
@@ -88,7 +104,14 @@
       :style="{ top: handle.y + 'px', left: (handle.x - 34) + 'px' }"
       @mouseenter="handle.visible = true"
     >
-      <button class="handle-btn" title="块操作" @click.stop="toggleBlockMenu">
+      <button
+        class="handle-btn"
+        title="拖动排序 / 点击菜单"
+        draggable="true"
+        @click.stop="toggleBlockMenu"
+        @dragstart="onHandleDragStart"
+        @dragend="onHandleDragEnd"
+      >
         <GripVertical :size="16" />
       </button>
       <div
@@ -100,6 +123,8 @@
         <button class="bm-item" @click="moveBlock('up')"><ArrowUp :size="15" /> 上移</button>
         <button class="bm-item" @click="moveBlock('down')"><ArrowDown :size="15" /> 下移</button>
         <button class="bm-item" @click="duplicateBlock"><Copy :size="15" /> 复制</button>
+        <button class="bm-item" @click="copyBlockMarkdown"><FileText :size="15" /> 复制 Markdown</button>
+        <button class="bm-item" @click="insertParagraphAfter"><BetweenHorizontalEnd :size="15" /> 在下方加段落</button>
         <div class="bm-sep"></div>
         <div class="bm-title">转换为</div>
         <button class="bm-item" @click="changeBlock('p')"><Pilcrow :size="15" /> 正文</button>
@@ -155,11 +180,24 @@
         </div>
       </div>
     </Teleport>
+
+    <!-- 拖拽落点指示线 -->
+    <div v-if="drag.active && drag.toIndex >= 0" class="drop-indicator" :style="dragIndicatorStyle"></div>
+
+    <!-- 快捷键说明 -->
+    <el-dialog v-model="helpOpen" title="快捷键" width="480px" append-to-body>
+      <div class="shortcut-list">
+        <div v-for="s in SHORTCUTS" :key="s.label" class="shortcut-row">
+          <span class="sc-label">{{ s.label }}</span>
+          <span class="sc-keys"><kbd v-for="k in s.keys" :key="k">{{ k }}</kbd></span>
+        </div>
+      </div>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { watch, computed, reactive, onBeforeUnmount, nextTick } from 'vue'
+import { watch, ref, computed, reactive, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useEditor, EditorContent, VueNodeViewRenderer, BubbleMenu } from '@tiptap/vue-3'
 import { Extension } from '@tiptap/core'
 import Suggestion from '@tiptap/suggestion'
@@ -207,6 +245,7 @@ import {
   List, ListOrdered, ListChecks, Quote, SquareCode, AlignLeft, AlignCenter, AlignRight,
   Image as ImageIcon, Table as TableIcon, Workflow, Undo2, Redo2, Plus, Trash2, Copy,
   ArrowUp, ArrowDown, Pilcrow, GripVertical, Heading1, Heading2, Heading3, Eraser,
+  Settings2, Keyboard, FileText, BetweenHorizontalEnd,
 } from 'lucide-vue-next'
 
 const uploadAndInsert = (view: any, file: File) => {
@@ -413,6 +452,19 @@ const editor = useEditor({
   onCreate: () => {
     nextTick(() => { scheduleMermaid(); disableSpellcheck() })
   },
+  onSelectionUpdate: () => {
+    keepCaretCentered()
+  },
+  editorProps: {
+    handleKeyDown: (_view, event) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault()
+        setLink()
+        return true
+      }
+      return false
+    },
+  },
 })
 
 const headingValue = computed(() => {
@@ -540,6 +592,185 @@ function deleteBlock() {
   blockMenu.open = false
   handle.visible = false
 }
+
+async function copyBlockMarkdown() {
+  const e = editor.value
+  const r = topRange(handle.pos)
+  if (!e || !r) return
+  let text = ''
+  try {
+    text = e.storage.markdown.serializer.serialize(r.node)
+  } catch {
+    text = r.node.textContent || ''
+  }
+  await copyText(text.trim())
+  ElMessage.success('已复制 Markdown')
+  blockMenu.open = false
+}
+
+function insertParagraphAfter() {
+  const e = editor.value
+  const r = topRange(handle.pos)
+  if (!e || !r) return
+  const para = e.schema.nodes.paragraph.create()
+  const tr = e.state.tr.insert(r.end, para)
+  e.view.dispatch(tr)
+  e.commands.focus(r.end + 1)
+  blockMenu.open = false
+}
+
+async function copyText(text: string) {
+  try {
+    await navigator.clipboard.writeText(text)
+  } catch {
+    const ta = document.createElement('textarea')
+    ta.value = text
+    document.body.appendChild(ta)
+    ta.select()
+    document.execCommand('copy')
+    document.body.removeChild(ta)
+  }
+}
+
+// ---------------- 拖拽排序 ----------------
+const drag = reactive({ active: false, fromIndex: -1, toIndex: -1, indicatorY: 0, indicatorX: 0, indicatorW: 0 })
+let dragNode: any = null
+let dragStart = 0
+let dragEnd = 0
+
+const dragIndicatorStyle = computed(() => ({
+  top: drag.indicatorY + 'px',
+  left: drag.indicatorX + 'px',
+  width: drag.indicatorW + 'px',
+}))
+
+function onHandleDragStart(ev: DragEvent) {
+  const e = editor.value
+  const r = topRange(handle.pos)
+  if (!e || !r) { ev.preventDefault?.(); return }
+  drag.active = true
+  drag.fromIndex = r.index
+  dragNode = r.node
+  dragStart = r.start
+  dragEnd = r.end
+  drag.toIndex = -1
+  if (ev.dataTransfer) {
+    ev.dataTransfer.effectAllowed = 'move'
+    ev.dataTransfer.setData('text/plain', r.node.textContent || '')
+  }
+}
+
+function onHandleDragEnd() {
+  drag.active = false
+  drag.toIndex = -1
+}
+
+function onDocDragOver(ev: DragEvent) {
+  const e = editor.value
+  if (!drag.active || !e) return
+  const pm = e.view.dom as HTMLElement
+  const pmRect = pm.getBoundingClientRect()
+  if (ev.clientY < pmRect.top - 4 || ev.clientY > pmRect.bottom + 4) {
+    drag.toIndex = -1
+    return
+  }
+  ev.preventDefault()
+  if (ev.dataTransfer) ev.dataTransfer.dropEffect = 'move'
+  const children = Array.from(pm.children) as HTMLElement[]
+  let idx = children.length
+  for (let i = 0; i < children.length; i++) {
+    const r = children[i].getBoundingClientRect()
+    if (ev.clientY < r.top + r.height / 2) { idx = i; break }
+  }
+  drag.toIndex = idx
+  drag.indicatorX = pmRect.left
+  drag.indicatorW = pmRect.width
+  if (idx < children.length) {
+    drag.indicatorY = children[idx].getBoundingClientRect().top - 2
+  } else if (children.length) {
+    drag.indicatorY = children[children.length - 1].getBoundingClientRect().bottom - 2
+  }
+}
+
+function onDocDrop(ev: DragEvent) {
+  const e = editor.value
+  if (!drag.active || !e || drag.toIndex < 0 || !dragNode) {
+    onHandleDragEnd()
+    return
+  }
+  ev.preventDefault()
+  const from = drag.fromIndex
+  const to = drag.toIndex
+  drag.active = false
+  const doc = e.state.doc
+  if (to === from || to === from + 1) { drag.toIndex = -1; return }
+  const tr = e.state.tr
+  tr.delete(dragStart, dragEnd)
+  let insertPos = 0
+  for (let i = 0; i < to; i++) insertPos += doc.child(i).nodeSize
+  if (to > from) insertPos -= dragNode.nodeSize
+  tr.insert(insertPos, dragNode)
+  e.view.dispatch(tr)
+  drag.toIndex = -1
+}
+
+// ---------------- 视图偏好 ----------------
+interface Prefs { font: 'sm' | 'md' | 'lg'; focus: boolean; typewriter: boolean }
+const prefs = reactive<Prefs>(loadPrefs())
+
+function loadPrefs(): Prefs {
+  try {
+    const raw = localStorage.getItem('rag-editor-prefs')
+    if (raw) return { font: 'md', focus: false, typewriter: false, ...JSON.parse(raw) }
+  } catch { /* ignore */ }
+  return { font: 'md', focus: false, typewriter: false }
+}
+
+function savePrefs() {
+  try { localStorage.setItem('rag-editor-prefs', JSON.stringify(prefs)) } catch { /* ignore */ }
+}
+
+const prefClasses = computed(() => [
+  `pref-font-${prefs.font}`,
+  prefs.focus ? 'pref-focus' : '',
+  prefs.typewriter ? 'pref-typewriter' : '',
+].filter(Boolean))
+
+function applyPref(cmd: string) {
+  if (cmd === 'font-sm') prefs.font = 'sm'
+  else if (cmd === 'font-md') prefs.font = 'md'
+  else if (cmd === 'font-lg') prefs.font = 'lg'
+  else if (cmd === 'focus') prefs.focus = !prefs.focus
+  else if (cmd === 'typewriter') prefs.typewriter = !prefs.typewriter
+  savePrefs()
+}
+
+function keepCaretCentered() {
+  if (!prefs.typewriter || !editor.value) return
+  const view = editor.value.view
+  const pos = view.state.selection.head
+  try {
+    const coords = view.coordsAtPos(pos)
+    window.scrollTo({ top: window.scrollY + coords.top - window.innerHeight / 2, behavior: 'smooth' })
+  } catch { /* ignore */ }
+}
+
+// ---------------- 快捷键说明 ----------------
+const helpOpen = ref(false)
+const SHORTCUTS = [
+  { label: '加粗', keys: ['Ctrl', 'B'] },
+  { label: '斜体', keys: ['Ctrl', 'I'] },
+  { label: '下划线', keys: ['Ctrl', 'U'] },
+  { label: '行内代码', keys: ['Ctrl', 'E'] },
+  { label: '标题 1/2/3', keys: ['Ctrl', 'Alt', '1/2/3'] },
+  { label: '无序列表', keys: ['Ctrl', 'Shift', '8'] },
+  { label: '有序列表', keys: ['Ctrl', 'Shift', '7'] },
+  { label: '引用', keys: ['Ctrl', 'Shift', 'B'] },
+  { label: '代码块', keys: ['Ctrl', 'Alt', 'C'] },
+  { label: '插入链接', keys: ['Ctrl', 'K'] },
+  { label: '撤销 / 重做', keys: ['Ctrl', 'Z / Y'] },
+  { label: '插入内容块', keys: ['/'] },
+]
 
 function changeBlock(kind: string) {
   const e = editor.value
@@ -690,7 +921,14 @@ function insertMermaid() {
   scheduleMermaid()
 }
 
+onMounted(() => {
+  document.addEventListener('dragover', onDocDragOver)
+  document.addEventListener('drop', onDocDrop)
+})
+
 onBeforeUnmount(() => {
+  document.removeEventListener('dragover', onDocDragOver)
+  document.removeEventListener('drop', onDocDrop)
   if (mermaidTimer) {
     clearTimeout(mermaidTimer)
     mermaidTimer = null
@@ -786,6 +1024,59 @@ onBeforeUnmount(() => {
   cursor: pointer;
   outline: none;
 }
+
+.tb-spacer {
+  flex: 1 1 auto;
+}
+
+.drop-indicator {
+  position: fixed;
+  z-index: 25;
+  height: 2px;
+  background: #3b82f6;
+  border-radius: 2px;
+  pointer-events: none;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.18);
+}
+
+.shortcut-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.shortcut-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 7px 4px;
+  border-bottom: 1px solid #f3f4f6;
+  font-size: 13px;
+  color: #374151;
+}
+
+.sc-keys kbd {
+  display: inline-block;
+  padding: 2px 7px;
+  margin-left: 4px;
+  background: #f3f4f6;
+  border: 1px solid #e5e7eb;
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  font-family: inherit;
+  font-size: 12px;
+  color: #4b5563;
+}
+
+/* 视图偏好 */
+.pref-font-sm :deep(.ProseMirror) { font-size: 14px; }
+.pref-font-lg :deep(.ProseMirror) { font-size: 18px; }
+.pref-focus :deep(.ProseMirror) {
+  max-width: 720px;
+  margin-left: auto;
+  margin-right: auto;
+}
+.pref-typewriter :deep(.ProseMirror) { padding-bottom: 40vh; }
 
 .editor-toolbar .divider {
   width: 1px;
@@ -1181,6 +1472,7 @@ onBeforeUnmount(() => {
 }
 
 .block-handle .handle-btn:hover { background: #eef1f5; color: #6b7280; }
+.block-handle .handle-btn:active { cursor: grabbing; }
 
 .block-menu {
   position: fixed;

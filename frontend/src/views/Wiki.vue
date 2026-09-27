@@ -143,6 +143,7 @@ import http from '../api/http'
 import { signImageElement, signRenderedImages } from '../utils/imageSign'
 import { useAuthStore } from '../stores/auth'
 import MarkdownIt from 'markdown-it'
+import taskLists from 'markdown-it-task-lists'
 import hljs from 'highlight.js'
 
 const md = new MarkdownIt({
@@ -155,7 +156,7 @@ const md = new MarkdownIt({
     }
     return (hljs.highlightAuto(str) as any).value
   },
-})
+}).use(taskLists, { enabled: false, label: true })
 
 const route = useRoute()
 const router = useRouter()
@@ -636,6 +637,24 @@ onBeforeUnmount(() => {
 .wiki-body :deep(img) {
   max-width: 100%;
   border-radius: 8px;
+}
+.wiki-body :deep(ul.contains-task-list) {
+  list-style: none;
+  padding-left: 4px;
+}
+.wiki-body :deep(li.task-list-item) {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.wiki-body :deep(li.task-list-item input[type='checkbox']) {
+  margin-top: 5px;
+  accent-color: #2563eb;
+}
+.wiki-body :deep(mark) {
+  background: #fef08a;
+  padding: 1px 3px;
+  border-radius: 3px;
 }
 .wiki-link {
   color: #2563eb;

@@ -124,6 +124,7 @@ import { ElMessage } from 'element-plus'
 import http from '../api/http'
 import { signImageElement, signRenderedImages } from '../utils/imageSign'
 import MarkdownIt from 'markdown-it'
+import taskLists from 'markdown-it-task-lists'
 import hljs from 'highlight.js'
 
 const md = new MarkdownIt({
@@ -136,7 +137,7 @@ const md = new MarkdownIt({
     }
     return (hljs.highlightAuto(str) as any).value
   },
-})
+}).use(taskLists, { enabled: false, label: true })
 
 const router = useRouter()
 
@@ -622,6 +623,19 @@ const confirmSaveNote = async () => {
 .markdown-body :deep(img) {
   max-width: 100%;
   border-radius: 8px;
+}
+.markdown-body :deep(ul.contains-task-list) {
+  list-style: none;
+  padding-left: 2px;
+}
+.markdown-body :deep(li.task-list-item) {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+.markdown-body :deep(li.task-list-item input[type='checkbox']) {
+  margin-top: 4px;
+  accent-color: #2563eb;
 }
 :global(.source-tooltip-imgs) {
   display: flex;

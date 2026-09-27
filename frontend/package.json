@@ -37,6 +37,7 @@
     "lowlight": "^3.3.0",
     "lucide-vue-next": "^0.577.0",
     "markdown-it": "^14.1.1",
+    "markdown-it-task-lists": "^2.1.1",
     "mermaid": "^10.6.0",
     "pinia": "^2.1.0",
     "tiptap-markdown": "^0.8.0",
