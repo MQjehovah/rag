@@ -53,17 +53,20 @@
           </div>
         </div>
         <div v-for="cat in filteredCategories" :key="cat.name" class="wiki-cat">
-          <div class="wiki-cat-name">
-            {{ cat.name }}
+          <div class="wiki-cat-name" @click="toggleCat(cat.name)">
+            <span class="wiki-cat-chevron" :class="{ open: !collapsedCats.includes(cat.name) }">›</span>
+            <span class="wiki-cat-label">{{ cat.name }}</span>
             <span class="wiki-cat-count">{{ cat.pages.length }}</span>
           </div>
-          <div
-            v-for="p in cat.pages"
-            :key="p.id"
-            class="wiki-page-item"
-            :class="{ active: current && current.id === p.id }"
-            @click="openPage(p.id)"
-          >{{ p.title }}</div>
+          <div v-show="!collapsedCats.includes(cat.name)">
+            <div
+              v-for="p in cat.pages"
+              :key="p.id"
+              class="wiki-page-item"
+              :class="{ active: current && current.id === p.id }"
+              @click="openPage(p.id)"
+            >{{ p.title }}</div>
+          </div>
         </div>
         <el-empty
           v-if="!total && !running"
@@ -183,6 +186,12 @@ const running = ref(false)
 const rebuilding = ref(false)
 const current = ref<any>(null)
 const filterText = ref('')
+const collapsedCats = ref<string[]>([])
+const toggleCat = (name: string) => {
+  collapsedCats.value = collapsedCats.value.includes(name)
+    ? collapsedCats.value.filter(x => x !== name)
+    : [...collapsedCats.value, name]
+}
 const semanticQuery = ref('')
 const searching = ref(false)
 const searched = ref(false)
@@ -484,16 +493,28 @@ onBeforeUnmount(() => {
   margin-bottom: 6px;
 }
 .wiki-cat-name {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   font-size: 12px;
   font-weight: 600;
-  color: #64748b;
-  padding: 8px 10px 4px;
-  text-transform: uppercase;
-  letter-spacing: 0.3px;
+  color: var(--text-3);
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
 }
+.wiki-cat-name:hover { background: var(--surface-2); color: var(--text-2); }
+.wiki-cat-chevron {
+  display: inline-flex;
+  color: var(--text-3);
+  font-size: 12px;
+  transition: transform 0.15s;
+}
+.wiki-cat-chevron.open { transform: rotate(90deg); }
+.wiki-cat-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wiki-cat-count {
-  background: #f1f5f9;
-  color: #94a3b8;
+  background: var(--surface-3);
+  color: var(--text-3);
   border-radius: 8px;
   padding: 0 6px;
   font-size: 11px;

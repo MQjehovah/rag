@@ -259,6 +259,13 @@
               <button class="db-tab" :class="{ active: currentPage.view_type === 'doc' }" @click="setViewType('doc')">📄 文档</button>
             </div>
             <div class="db-toolbar-right">
+              <el-select v-model="dbFilterStatus" size="small" clearable placeholder="全部状态" style="width: 118px">
+                <el-option v-for="s in STATUS_OPTIONS.filter(x => x)" :key="s" :label="s" :value="s" />
+              </el-select>
+              <el-select v-model="dbSort" size="small" style="width: 118px">
+                <el-option label="按更新时间" value="updated" />
+                <el-option label="按标题" value="title" />
+              </el-select>
               <el-button size="small" type="primary" @click="addRow">＋ 新建</el-button>
             </div>
           </div>
@@ -269,7 +276,7 @@
               <span class="db-c-status">状态</span>
               <span class="db-c-time">更新时间</span>
             </div>
-            <div v-for="c in dbChildren" :key="c.id" class="db-row">
+            <div v-for="c in dbChildrenFiltered" :key="c.id" class="db-row">
               <span class="db-c-title"><a class="db-link" @click="openPageById(c.id)">{{ c.title || '无标题' }}</a></span>
               <span class="db-c-status">
                 <el-select :model-value="c.status || ''" size="small" style="width: 112px" @change="(v: string) => setChildStatus(c.id, v)">
@@ -278,7 +285,7 @@
               </span>
               <span class="db-c-time">{{ formatTime(c.updated_at) }}</span>
             </div>
-            <div v-if="!dbChildren.length" class="muted-hint" style="padding: 16px">暂无数据，点击右上角「新建」添加</div>
+            <div v-if="!dbChildrenFiltered.length" class="muted-hint" style="padding: 16px">暂无数据，点击右上角「新建」添加</div>
           </div>
 
           <div v-else-if="currentPage.view_type === 'board'" class="db-board">
@@ -293,11 +300,11 @@
               <div class="db-col-head">
                 <span class="db-col-dot" :style="{ background: STATUS_META[col].dot }"></span>
                 <span class="db-col-name">{{ col || '未设置' }}</span>
-                <span class="db-col-count">{{ dbChildren.filter(c => (c.status || '') === col).length }}</span>
+                <span class="db-col-count">{{ dbChildrenFiltered.filter(c => (c.status || '') === col).length }}</span>
               </div>
               <div class="db-col-body">
                 <div
-                  v-for="c in dbChildren.filter(x => (x.status || '') === col)"
+                  v-for="c in dbChildrenFiltered.filter(x => (x.status || '') === col)"
                   :key="c.id"
                   class="db-card"
                   draggable="true"
@@ -1726,6 +1733,15 @@ const isDatabase = computed(() => (currentPage.value?.view_type || 'doc') !== 'd
 const dbChildren = computed(() =>
   treeRows.value.filter(r => (r.page.parent_id ?? null) === currentPage.value?.id).map(r => r.page)
 )
+const dbFilterStatus = ref('')
+const dbSort = ref<'updated' | 'title'>('updated')
+const dbChildrenFiltered = computed(() => {
+  let arr = dbChildren.value.slice()
+  if (dbFilterStatus.value) arr = arr.filter(c => (c.status || '') === dbFilterStatus.value)
+  if (dbSort.value === 'title') arr.sort((a, b) => (a.title || '').localeCompare(b.title || '', 'zh'))
+  else arr.sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())
+  return arr
+})
 const calendar = computed(() => {
   const now = new Date()
   const year = now.getFullYear()
@@ -1734,7 +1750,7 @@ const calendar = computed(() => {
   const startDay = new Date(year, month, 1).getDay()
   const cells: { day: number; items: PageListItem[] }[] = []
   for (let d = 1; d <= daysInMonth; d++) {
-    const items = dbChildren.value.filter(c => {
+    const items = dbChildrenFiltered.value.filter(c => {
       const dt = new Date(c.updated_at)
       return dt.getFullYear() === year && dt.getMonth() === month && dt.getDate() === d
     })

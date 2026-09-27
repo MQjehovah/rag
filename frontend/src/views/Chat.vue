@@ -66,17 +66,23 @@
       </div>
     </div>
     <div class="chat-input-area">
-      <el-input
-        v-model="input"
-        type="textarea"
-        :rows="1"
-        placeholder="输入问题，按 Enter 发送..."
-        resize="none"
-        autosize
-        @keydown.enter.exact.prevent="sendMessage"
-        :disabled="loading"
-      />
-      <el-button type="primary" :loading="loading" @click="sendMessage" :disabled="!input.trim()">发送</el-button>
+      <div class="composer" :class="{ loading }">
+        <el-input
+          v-model="input"
+          class="composer-input"
+          type="textarea"
+          :rows="1"
+          placeholder="输入问题…"
+          resize="none"
+          autosize
+          @keydown.enter.exact.prevent="sendMessage"
+          :disabled="loading"
+        />
+        <button class="composer-send" :disabled="!input.trim() || loading" title="发送" @click="sendMessage">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7" /></svg>
+        </button>
+      </div>
+      <div class="composer-hint">Enter 发送 · Shift+Enter 换行 · 回答基于知识库内容</div>
     </div>
 
     <el-dialog v-model="saveDialogVisible" title="保存为笔记" width="600px">
@@ -800,4 +806,62 @@ const confirmSaveNote = async () => {
 }
 .chat-input-area :deep(.el-textarea__inner::placeholder) { color: var(--text-3, #8b93a4); }
 .chat-input-area > .el-button { height: 40px; border-radius: 12px; }
+
+/* ---- Notion 式排版: composer + 消息 ---- */
+.chat-input-area {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  padding: 12px 24px 18px;
+}
+.composer {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 8px 8px 8px 14px;
+  box-shadow: var(--shadow-sm);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.composer:focus-within { border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-weak); }
+.composer :deep(.el-textarea__inner) {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  padding: 6px 0 !important;
+  color: var(--text) !important;
+  max-height: 200px;
+}
+.composer-send {
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  border: none;
+  border-radius: 9px;
+  background: var(--primary);
+  color: #fff;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.composer-send:disabled { background: var(--surface-3); color: var(--text-3); cursor: default; }
+.composer-hint { text-align: center; font-size: 11px; color: var(--text-3); }
+
+.chat-message.assistant .message-content {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  padding: 2px 0 !important;
+}
+.chat-message.user .message-content {
+  background: var(--surface-2) !important;
+  color: var(--text) !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+.chat-message.assistant .message-avatar { background: var(--primary) !important; color: #fff !important; border: none !important; }
+.chat-message.user .message-avatar { background: var(--surface-3) !important; color: var(--text-2) !important; }
 </style>
