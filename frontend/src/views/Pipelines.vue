@@ -16,8 +16,13 @@
           <el-tag v-if="!row.enabled" size="small" type="info" style="margin-left: 6px">停用</el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="编译方式" width="110">
-        <template #default="{ row }">{{ KIND_LABELS[row.compiler_kind] || row.compiler_kind }}</template>
+      <el-table-column label="编译方式 / 模板" min-width="200">
+        <template #default="{ row }">
+          <el-tag size="small" effect="light">{{ KIND_LABELS[row.compiler_kind] || row.compiler_kind }}</el-tag>
+          <el-tag v-if="row.template_id" size="small" type="info" effect="plain" style="margin-left: 6px">
+            {{ templateName(row.template_id) || '模板' }}
+          </el-tag>
+        </template>
       </el-table-column>
       <el-table-column label="来源" min-width="160">
         <template #default="{ row }">
@@ -61,6 +66,9 @@
           <el-button size="small" type="danger" plain @click="removePipeline(row)">删除</el-button>
         </template>
       </el-table-column>
+      <template #empty>
+        <div class="empty">暂无编译管道，点击右上角「新建管道」创建</div>
+      </template>
     </el-table>
 
     <div v-if="statusText" class="muted" style="font-size: 12px; margin-top: 8px">{{ statusText }}</div>
@@ -329,6 +337,11 @@ function spaceName(id?: string | null) {
   return spaces.value.find(s => s.id === id)?.name || '默认空间'
 }
 
+function templateName(id?: string | null) {
+  if (!id) return ''
+  return templateLib.value.find(t => t.id === id)?.name || ''
+}
+
 async function loadCompileTemplates() {
   try {
     const d = (await http.get('/api/pipelines/compile-templates')).data
@@ -544,6 +557,7 @@ onUnmounted(() => {
 .page-head { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 18px; gap: 12px; }
 .page-head h2 { margin: 0 0 4px; font-size: 24px; font-weight: 700; color: var(--text); }
 .muted { color: var(--text-3); }
+.empty { color: var(--text-3); padding: 32px; text-align: center; font-size: 13px; }
 .link { color: #409eff; text-decoration: none; }
 .md-preview {
   max-height: 60vh; overflow: auto; background: var(--surface-2); padding: 12px;

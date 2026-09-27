@@ -11,8 +11,10 @@
     <div v-if="loading" class="muted">加载中...</div>
     <el-table v-else :data="templates" border size="small">
       <el-table-column prop="name" label="名称" min-width="200" />
-      <el-table-column label="编译方式" width="110">
-        <template #default="{ row }">{{ KIND_LABELS[row.compiler_kind] || row.compiler_kind }}</template>
+      <el-table-column label="编译方式" width="120">
+        <template #default="{ row }">
+          <el-tag size="small" effect="light">{{ KIND_LABELS[row.compiler_kind] || row.compiler_kind }}</el-tag>
+        </template>
       </el-table-column>
       <el-table-column prop="description" label="说明" min-width="300" show-overflow-tooltip />
       <el-table-column label="操作" width="160">
@@ -21,6 +23,9 @@
           <el-button size="small" type="danger" plain @click="remove(row)">删除</el-button>
         </template>
       </el-table-column>
+      <template #empty>
+        <div class="empty">暂无编译模板，点击右上角「新建模板」创建</div>
+      </template>
     </el-table>
 
     <el-dialog v-model="dialog" :title="editing ? '编辑模板' : '新建模板'" width="760px">
@@ -174,4 +179,5 @@ onMounted(() => {
 .page-head { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 18px; gap: 12px; }
 .page-head h2 { margin: 0 0 4px; font-size: 24px; font-weight: 700; color: var(--text); }
 .muted { color: var(--text-3); }
+.empty { color: var(--text-3); padding: 32px; text-align: center; font-size: 13px; }
 </style>
