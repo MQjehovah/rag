@@ -86,6 +86,7 @@ The frontend nginx proxies `/api/collab` → `rag-collab:1234` with `Upgrade`; t
 - **`.env` required in `backend/`**. Old `.env` with `CHROMADB_PATH` causes pydantic validation errors — remove it. Production `.env` is baked into the image; changing it requires a rebuild.
 - **Frontend `npm run build`** runs `vue-tsc` first — type errors block the build. `noUnusedLocals`/`noUnusedParameters` are on.
 - **Reranker is optional** — empty `RERANKER_API_URL` skips reranking.
+- **Embeddings depend on Xinference** (host `34:9997`) having `bge-large-zh-v1.5` (1024-d) **launched**; the gateway (`34:3100/v1/embeddings`) proxies to it. Xinference **loses launched models on restart** → embeddings return `400 Model not found in the model list`. Relaunch from local files: `docker exec xinference xinference launch --model-name bge-large-zh-v1.5 --model-type embedding --model-uid bge-large-zh-v1.5 --model-path /data/models/bge-large-zh-v1.5` (files at host `~/models/bge-large-zh-v1.5`, mounted `/data/models`). A self-heal cron on 34 (`*/5 * * * * /home/xzrobot/apps/ensure-embed.sh`) relaunches if missing. Note: `backend/.env`'s `LLM_API_KEY` is stale; compose injects the valid gateway key.
 - **SSO 双轨**: 资源轨(`SSO_ISSUER`/`SSO_AUDIENCE`/`SSO_JWKS_URI`)校验别的系统(dashboard)传来的 token;
   登录轨(`SSO_CLIENT_ID`/`SSO_CLIENT_SECRET`/`SSO_REDIRECT_URI`/`SSO_REDIRECT_TARGET`)提供浏览器授权码流程
   (`GET /api/auth/sso/start` + `GET /api/auth/oidc/callback`,前端登录页按钮「企业 SSO 登录」)。
