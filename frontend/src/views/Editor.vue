@@ -265,8 +265,19 @@
           </div>
 
           <div v-else-if="currentPage.view_type === 'board'" class="db-board">
-            <div v-for="col in ['待办', '进行中', '完成', '']" :key="col" class="db-col" @dragover.prevent @drop="onBoardDrop(col, $event)">
-              <div class="db-col-head">{{ col || '未设置' }}<span class="db-col-count">{{ dbChildren.filter(c => (c.status || '') === col).length }}</span></div>
+            <div
+              v-for="col in BOARD_COLUMNS"
+              :key="col"
+              class="db-col"
+              :style="{ background: STATUS_META[col].bg }"
+              @dragover.prevent
+              @drop="onBoardDrop(col, $event)"
+            >
+              <div class="db-col-head">
+                <span class="db-col-dot" :style="{ background: STATUS_META[col].dot }"></span>
+                <span class="db-col-name">{{ col || '未设置' }}</span>
+                <span class="db-col-count">{{ dbChildren.filter(c => (c.status || '') === col).length }}</span>
+              </div>
               <div class="db-col-body">
                 <div
                   v-for="c in dbChildren.filter(x => (x.status || '') === col)"
@@ -277,6 +288,7 @@
                   @dragend="boardDragId = null"
                   @click="openPageById(c.id)"
                 >{{ c.title || '无标题' }}</div>
+                <div class="db-col-add" @click="addRow">＋ 新页面</div>
               </div>
             </div>
           </div>
@@ -1672,7 +1684,15 @@ const onNbDrop = async (nb: Notebook, ev: DragEvent) => {
 const onNbDragEnd = () => { nbDragId.value = null; nbDrop.value = null }
 
 // ---------------- 数据库视图(子页面为数据行) ----------------
-const STATUS_OPTIONS = ['待办', '进行中', '完成', '']
+const STATUS_OPTIONS = ['待办', '进行中', '审核中', '完成', '']
+const BOARD_COLUMNS = ['待办', '进行中', '审核中', '完成', '']
+const STATUS_META: Record<string, { dot: string; bg: string }> = {
+  待办: { dot: '#9b9a97', bg: '#f1f1ef' },
+  进行中: { dot: '#dfab01', bg: '#fbf3db' },
+  审核中: { dot: '#2383e2', bg: '#e7f1fb' },
+  完成: { dot: '#0f7b6c', bg: '#e6f2e6' },
+  '': { dot: '#c9c9c5', bg: '#f7f7f5' },
+}
 const isDatabase = computed(() => (currentPage.value?.view_type || 'doc') !== 'doc')
 const dbChildren = computed(() =>
   treeRows.value.filter(r => (r.page.parent_id ?? null) === currentPage.value?.id).map(r => r.page)
@@ -2883,9 +2903,9 @@ html, body, #app { height: 100%; }
 .notebook-item.nb-drop-after > .notebook-info { box-shadow: inset 0 -2px 0 var(--primary, #4f46e5); }
 
 /* 数据库视图 */
-.db-view { max-width: 1120px; margin: 0 auto; padding: 40px 48px 140px; }
-.db-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; }
-.db-title { font-size: 26px; font-weight: 700; color: #37352f; }
+.db-view { max-width: 1180px; margin: 0 auto; padding: 40px 48px 140px; }
+.db-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+.db-title { font-size: 30px; font-weight: 700; color: var(--text); letter-spacing: -0.02em; }
 .db-head-actions { display: flex; align-items: center; gap: 6px; }
 .db-table { border: 1px solid #eceef2; border-radius: 12px; overflow: hidden; }
 .db-row {
@@ -2901,13 +2921,17 @@ html, body, #app { height: 100%; }
 .db-link { color: #37352f; cursor: pointer; }
 .db-link:hover { color: #4f46e5; text-decoration: underline; }
 .db-c-time { font-size: 12px; color: #9b9a97; }
-.db-board { display: flex; gap: 14px; align-items: flex-start; overflow-x: auto; }
-.db-col { flex: 1 1 0; min-width: 200px; background: #f7f7f5; border-radius: 12px; padding: 10px; }
-.db-col-head { display: flex; justify-content: space-between; font-size: 13px; font-weight: 600; color: #59616f; margin-bottom: 8px; padding: 0 4px; }
-.db-col-count { color: #9b9a97; }
-.db-col-body { min-height: 40px; }
-.db-card { background: #fff; border: 1px solid #eceef2; border-radius: 8px; padding: 8px 10px; margin-bottom: 6px; font-size: 13px; color: #37352f; cursor: pointer; }
-.db-card:hover { border-color: #cdcbf8; }
+.db-board { display: flex; gap: 12px; align-items: flex-start; overflow-x: auto; padding-bottom: 8px; }
+.db-col { flex: 1 1 0; min-width: 244px; border-radius: 10px; padding: 8px; }
+.db-col-head { display: flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 8px; padding: 2px 4px; }
+.db-col-dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
+.db-col-name { flex: 0 0 auto; }
+.db-col-count { color: var(--text-3); font-weight: 500; }
+.db-col-body { min-height: 20px; display: flex; flex-direction: column; gap: 6px; }
+.db-card { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; font-size: 14px; color: var(--text); cursor: pointer; box-shadow: var(--shadow-sm); transition: box-shadow 0.12s, border-color 0.12s; }
+.db-card:hover { box-shadow: var(--shadow); }
+.db-col-add { color: var(--text-3); font-size: 13px; padding: 6px 8px; border-radius: 6px; cursor: pointer; }
+.db-col-add:hover { background: rgba(55, 53, 47, 0.06); color: var(--text-2); }
 .db-cal-head { font-size: 15px; font-weight: 600; color: #37352f; margin-bottom: 10px; }
 .db-cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
 .db-cal-dow { text-align: center; font-size: 12px; color: #9b9a97; padding: 4px 0; }

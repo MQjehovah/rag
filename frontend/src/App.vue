@@ -3,35 +3,49 @@
     <template v-if="showNav">
       <aside class="rail">
         <div class="rail-head">
-          <span class="rail-logo">R</span>
-          <span class="rail-brand">企业知识库</span>
-          <button class="rail-icon" title="收起导航" @click="toggleCollapse">«</button>
+          <button class="ws-btn" :title="collapsed ? '展开导航' : '企业知识库'" @click="collapsed && toggleCollapse()">
+            <span class="ws-emoji">🏢</span>
+            <span class="ws-name">企业知识库</span>
+            <svg class="ws-chevron" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6" /></svg>
+          </button>
+          <button class="rail-collapse" title="收起导航" @click="toggleCollapse">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9 4v16" /></svg>
+          </button>
         </div>
 
-        <nav class="rail-nav">
-          <router-link
-            v-for="item in navItems"
-            :key="item.path"
-            :to="item.path"
-            class="rail-item"
-            active-class="active"
-            :title="collapsed ? item.label : ''"
-          >
-            <span class="rail-item-icon">{{ item.icon }}</span>
-            <span class="rail-item-label">{{ item.label }}</span>
-          </router-link>
-        </nav>
+        <div class="rail-scroll">
+          <div v-for="grp in navGroups" :key="grp.label" class="rail-section">
+            <div class="rail-section-label">{{ grp.label }}</div>
+            <router-link
+              v-for="item in grp.items"
+              :key="item.path"
+              :to="item.path"
+              class="rail-item"
+              active-class="active"
+              :title="collapsed ? item.label : ''"
+            >
+              <span class="rail-item-icon">
+                <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" v-html="item.svg" />
+              </span>
+              <span class="rail-item-label">{{ item.label }}</span>
+            </router-link>
+          </div>
+        </div>
 
         <div class="rail-foot">
           <el-dropdown trigger="click" placement="top-start" @command="applyTheme">
-            <button class="rail-icon rail-theme" :title="`主题：${themeLabel}`">
-              <span>{{ theme === 'dark' ? '🌙' : theme === 'system' ? '🖥' : '☀️' }}</span>
+            <button class="rail-item as-btn" :title="`主题：${themeLabel}`">
+              <span class="rail-item-icon">
+                <svg v-if="theme === 'dark'" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" /></svg>
+                <svg v-else viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" /></svg>
+              </span>
+              <span class="rail-item-label">{{ themeLabel }}</span>
             </button>
             <template #dropdown>
               <el-dropdown-menu>
-                <el-dropdown-item command="light">☀️ 亮色</el-dropdown-item>
-                <el-dropdown-item command="dark">🌙 深色</el-dropdown-item>
-                <el-dropdown-item command="system">🖥 跟随系统</el-dropdown-item>
+                <el-dropdown-item command="light">亮色</el-dropdown-item>
+                <el-dropdown-item command="dark">深色</el-dropdown-item>
+                <el-dropdown-item command="system">跟随系统</el-dropdown-item>
               </el-dropdown-menu>
             </template>
           </el-dropdown>
@@ -66,14 +80,24 @@ const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
 
-const navItems = [
-  { path: '/', label: 'AI 问答', icon: '💬' },
-  { path: '/notes', label: '笔记', icon: '📝' },
-  { path: '/wiki', label: '知识库', icon: '📚' },
-  { path: '/pipelines', label: '编译管道', icon: '🔀' },
-  { path: '/sources', label: '数据源', icon: '🔌' },
-  { path: '/graph', label: '知识图谱', icon: '🕸' },
-  { path: '/embeddings', label: '嵌入模型', icon: '🧬' },
+const navGroups = [
+  {
+    label: '工作区',
+    items: [
+      { path: '/', label: 'AI 问答', svg: '<path d="M21 11.5a8.4 8.4 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.4 8.4 0 0 1 3.8-.9h.5a8.5 8.5 0 0 1 8 8z"/>' },
+      { path: '/notes', label: '笔记', svg: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/>' },
+      { path: '/wiki', label: '知识库', svg: '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>' },
+    ],
+  },
+  {
+    label: '数据与管道',
+    items: [
+      { path: '/pipelines', label: '编译管道', svg: '<circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M6 9v6M18 6a9 9 0 0 1-9 9"/>' },
+      { path: '/sources', label: '数据源', svg: '<path d="M9 2v6M15 2v6M6 8h12v4a6 6 0 0 1-12 0V8zM12 18v4"/>' },
+      { path: '/graph', label: '知识图谱', svg: '<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="M8.6 10.7l6.8-4M8.6 13.3l6.8 4"/>' },
+      { path: '/embeddings', label: '嵌入模型', svg: '<rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 2v2M15 2v2M9 20v2M15 20v2M20 9h2M20 14h2M2 9h2M2 14h2"/>' },
+    ],
+  },
 ]
 
 const showNav = computed(() => route.path !== '/login' && !route.path.startsWith('/share'))
@@ -104,131 +128,118 @@ const handleLogout = () => {
 </script>
 
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body {
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', 'PingFang SC', 'Microsoft YaHei', sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
-.app-layout {
-  height: 100vh;
-  display: flex;
-  overflow: hidden;
-  background: var(--bg);
-}
+.app-layout { height: 100vh; display: flex; overflow: hidden; background: var(--bg); }
 
-/* 左侧一级导航 */
+/* 左侧导航 (Notion 侧栏) */
 .rail {
-  width: 236px;
+  width: 240px;
   flex: 0 0 auto;
   height: 100vh;
-  background: var(--surface);
+  background: var(--bg);
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
-  transition: width 0.18s ease;
+  transition: width 0.16s ease;
   overflow: hidden;
 }
 .rail-head {
-  height: 56px;
+  height: 46px;
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 0 14px;
+  gap: 4px;
+  padding: 0 8px;
 }
-.rail-logo {
-  width: 28px;
-  height: 28px;
-  flex: 0 0 auto;
-  border-radius: 8px;
-  background: linear-gradient(135deg, #6366f1, #4f46e5);
-  color: #fff;
-  font-weight: 700;
-  font-size: 14px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow: 0 2px 8px rgba(79, 70, 229, 0.35);
-}
-.rail-brand {
+.ws-btn {
   flex: 1;
-  font-weight: 700;
-  font-size: 14.5px;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: none;
+  background: transparent;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
   color: var(--text);
-  white-space: nowrap;
-  letter-spacing: -0.2px;
 }
-.rail-icon {
+.ws-btn:hover { background: var(--surface-hover); }
+.ws-emoji { font-size: 17px; flex: 0 0 auto; }
+.ws-name { flex: 1; text-align: left; font-weight: 600; font-size: 14px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ws-chevron { color: var(--text-3); flex: 0 0 auto; }
+.rail-collapse {
   width: 28px;
   height: 28px;
   flex: 0 0 auto;
   border: none;
   background: transparent;
   color: var(--text-3);
-  border-radius: 7px;
+  border-radius: 6px;
   cursor: pointer;
-  font-size: 14px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
 }
-.rail-icon:hover { background: var(--surface-2); color: var(--text); }
+.rail-collapse:hover { background: var(--surface-hover); color: var(--text); }
 
-.rail-nav {
-  flex: 1;
-  overflow-y: auto;
-  padding: 6px 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+.rail-scroll { flex: 1; overflow-y: auto; padding: 4px 8px 8px; }
+.rail-section { margin-bottom: 2px; }
+.rail-section-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-3);
+  padding: 8px 10px 3px;
+  letter-spacing: 0.02em;
 }
 .rail-item {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 8px 10px;
-  border-radius: 8px;
+  gap: 9px;
+  padding: 5px 10px;
+  height: 30px;
+  border-radius: 5px;
   text-decoration: none;
   color: var(--text-2);
-  font-size: 13.5px;
-  font-weight: 500;
+  font-size: 14px;
+  font-weight: 400;
   white-space: nowrap;
-  transition: background 0.14s, color 0.14s;
+  transition: background 0.1s, color 0.1s;
 }
-.rail-item-icon { width: 20px; text-align: center; font-size: 15px; flex: 0 0 auto; }
-.rail-item:hover { background: var(--surface-2); color: var(--text); }
-.rail-item.active { background: var(--primary-weak); color: var(--primary); }
+.rail-item-icon { display: inline-flex; width: 17px; flex: 0 0 auto; opacity: 0.9; }
+.rail-item:hover { background: var(--surface-hover); color: var(--text); }
+.rail-item.active { background: var(--surface-3); color: var(--text); font-weight: 500; }
+.rail-item.as-btn { width: 100%; border: none; background: transparent; cursor: pointer; text-align: left; }
 
 .rail-foot {
   flex: 0 0 auto;
   border-top: 1px solid var(--border);
-  padding: 8px 10px 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+  padding: 6px 8px 10px;
 }
-.rail-theme { width: 100%; justify-content: flex-start; padding: 0 8px; gap: 8px; }
 .rail-user {
   display: flex;
   align-items: center;
   gap: 9px;
-  padding: 5px 8px;
-  border-radius: 8px;
+  padding: 5px 10px;
+  height: 30px;
+  border-radius: 5px;
   cursor: pointer;
 }
-.rail-user:hover { background: var(--surface-2); }
+.rail-user:hover { background: var(--surface-hover); }
 .rail-avatar {
-  width: 26px;
-  height: 26px;
+  width: 20px;
+  height: 20px;
   flex: 0 0 auto;
-  border-radius: 7px;
+  border-radius: 5px;
   background: linear-gradient(135deg, #38bdf8, #6366f1);
   color: #fff;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
   display: flex;
   align-items: center;
@@ -236,23 +247,18 @@ body {
 }
 .rail-username { font-size: 13px; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* 收起态: 仅图标 */
-.app-layout.rail-collapsed .rail { width: 64px; }
-.app-layout.rail-collapsed .rail-brand,
-.app-layout.rail-collapsed .rail-username,
+/* 收起态 */
+.app-layout.rail-collapsed .rail { width: 60px; }
+.app-layout.rail-collapsed .ws-name,
+.app-layout.rail-collapsed .ws-chevron,
+.app-layout.rail-collapsed .rail-section-label,
 .app-layout.rail-collapsed .rail-item-label,
-.app-layout.rail-collapsed .rail-theme span:not(:first-child) { display: none; }
-.app-layout.rail-collapsed .rail-head { justify-content: center; padding: 0; }
-.app-layout.rail-collapsed .rail-head .rail-icon { display: none; }
-.app-layout.rail-collapsed .rail-item { justify-content: center; padding: 9px 0; }
-.app-layout.rail-collapsed .rail-foot { align-items: center; }
-.app-layout.rail-collapsed .rail-theme { width: 28px; padding: 0; justify-content: center; }
-.app-layout.rail-collapsed .rail-user { padding: 5px 0; }
+.app-layout.rail-collapsed .rail-username { display: none; }
+.app-layout.rail-collapsed .rail-collapse { display: none; }
+.app-layout.rail-collapsed .rail-head { justify-content: center; padding: 0 4px; }
+.app-layout.rail-collapsed .ws-btn { flex: 0 0 auto; padding: 6px; }
+.app-layout.rail-collapsed .rail-item,
+.app-layout.rail-collapsed .rail-user { justify-content: center; padding: 5px 0; }
 
-.content {
-  flex: 1;
-  min-width: 0;
-  height: 100vh;
-  overflow: hidden;
-}
+.content { flex: 1; min-width: 0; height: 100vh; overflow: hidden; }
 </style>
