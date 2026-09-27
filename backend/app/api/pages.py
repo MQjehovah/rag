@@ -10,7 +10,7 @@ from collections import Counter
 
 logger = logging.getLogger(__name__)
 
-from app.models.database import Page, Notebook, PageChunk, get_engine
+from app.models.database import Page, Notebook, PageChunk, PageRevision, User, get_engine
 from app.models.schema import PageCreate, PageUpdate, PageMove, PageResponse, PageListItem, PageListResponse
 from app.core.rag import EmbeddingService, VectorStore
 from app.core.hybrid import HybridIndex
@@ -323,6 +323,68 @@ def page_backlinks(page_id: str, db: Session = Depends(get_db), current_user=Dep
     rows = q.limit(50).all()
     return {"items": [{"id": r[0], "title": r[1] or "无标题"} for r in rows]}
 
+@router.get("/{page_id}/revisions")
+def page_revisions(page_id: str, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    """历史版本列表(最多 50 条)。"""
+    page = db.query(Page).filter(Page.id == page_id).first()
+    if not page or page.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="笔记不存在")
+    _check_page_access(page, current_user, db)
+    rows = (
+        db.query(PageRevision)
+        .filter(PageRevision.page_id == page_id)
+        .order_by(PageRevision.created_at.desc())
+        .limit(50)
+        .all()
+    )
+    return {
+        "items": [
+            {
+                "id": r.id,
+                "title": r.title or "无标题",
+                "editor": r.editor or "",
+                "created_at": r.created_at,
+                "size": len(r.content or ""),
+            }
+            for r in rows
+        ]
+    }
+
+@router.get("/{page_id}/revisions/{rev_id}")
+def page_revision(page_id: str, rev_id: str, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    page = db.query(Page).filter(Page.id == page_id).first()
+    if not page or page.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="笔记不存在")
+    _check_page_access(page, current_user, db)
+    rev = db.query(PageRevision).filter(PageRevision.id == rev_id, PageRevision.page_id == page_id).first()
+    if not rev:
+        raise HTTPException(status_code=404, detail="版本不存在")
+    return {
+        "id": rev.id,
+        "title": rev.title or "无标题",
+        "content": rev.content or "",
+        "editor": rev.editor or "",
+        "created_at": rev.created_at,
+    }
+
+@router.post("/{page_id}/revisions/{rev_id}/restore", response_model=PageResponse)
+def restore_revision(page_id: str, rev_id: str, background_tasks: BackgroundTasks, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    page = db.query(Page).filter(Page.id == page_id).first()
+    if not page or page.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="笔记不存在")
+    _check_page_access(page, current_user, db)
+    rev = db.query(PageRevision).filter(PageRevision.id == rev_id, PageRevision.page_id == page_id).first()
+    if not rev:
+        raise HTTPException(status_code=404, detail="版本不存在")
+    page.title = rev.title or page.title
+    page.content = rev.content or ""
+    page.updated_at = datetime.now()
+    db.commit()
+    db.refresh(page)
+    if _should_index(page.id):
+        background_tasks.add_task(background_index_page, page.id)
+    return page
+
 @router.put("/{page_id}", response_model=PageResponse)
 def update_page(page_id: str, data: PageUpdate, background_tasks: BackgroundTasks, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     page = db.query(Page).filter(Page.id == page_id).first()
@@ -347,6 +409,44 @@ def update_page(page_id: str, data: PageUpdate, background_tasks: BackgroundTask
     if data.cover is not None:
         page.cover = data.cover
     page.updated_at = datetime.now()
+
+    # 历史版本: 内容变化时按 2 分钟节流存快照, 每页最多保留 50 条
+    if data.title is not None or data.content is not None:
+        last = (
+            db.query(PageRevision)
+            .filter(PageRevision.page_id == page.id)
+            .order_by(PageRevision.created_at.desc())
+            .first()
+        )
+        now = datetime.now()
+        if last is None or (
+            last.content != (page.content or "")
+            and (now - (last.created_at or now)).total_seconds() > 120
+        ):
+            editor_name = ""
+            uid = current_user.get("sub") if isinstance(current_user, dict) else None
+            if uid:
+                u = db.query(User).filter(User.id == uid).first()
+                if u:
+                    editor_name = u.display_name or u.username or ""
+            db.add(PageRevision(
+                id=str(uuid.uuid4()),
+                page_id=page.id,
+                title=page.title or "",
+                content=page.content or "",
+                editor=editor_name,
+                created_at=now,
+            ))
+            db.flush()
+            old = (
+                db.query(PageRevision.id)
+                .filter(PageRevision.page_id == page.id)
+                .order_by(PageRevision.created_at.desc())
+                .offset(50)
+                .all()
+            )
+            for (rid,) in old:
+                db.query(PageRevision).filter(PageRevision.id == rid).delete()
 
     db.commit()
     db.refresh(page)
@@ -427,6 +527,7 @@ def purge_page(page_id: str, db: Session = Depends(get_db), current_user=Depends
     HybridIndex(db).delete_page(page_id)
     EntityGraphStore(db).delete_page(page_id)
     db.query(PageChunk).filter(PageChunk.page_id == page_id).delete()
+    db.query(PageRevision).filter(PageRevision.page_id == page_id).delete()
     db.delete(page)
     db.commit()
     return {"message": "已彻底删除"}

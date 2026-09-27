@@ -181,6 +181,7 @@
                   <el-dropdown-item command="link">复制链接</el-dropdown-item>
                   <el-dropdown-item command="dup">创建副本</el-dropdown-item>
                   <el-dropdown-item command="export">导出 Markdown</el-dropdown-item>
+                  <el-dropdown-item command="history">版本历史</el-dropdown-item>
                   <el-dropdown-item command="wide" divided>{{ pageWide ? '关闭全宽' : '全宽显示' }}</el-dropdown-item>
                   <el-dropdown-item command="small">{{ pageSmall ? '取消小字号' : '小字号' }}</el-dropdown-item>
                   <el-dropdown-item command="delete" divided>移到回收站</el-dropdown-item>
@@ -420,6 +421,35 @@
         <el-button @click="confirmDialogVisible = false">取消</el-button>
         <el-button v-if="confirmForm.should_save" type="primary" :loading="confirmLoading" @click="confirmImport">确认保存</el-button>
       </template>
+    </el-dialog>
+
+    <!-- 版本历史 -->
+    <el-dialog v-model="historyOpen" title="版本历史" width="780px">
+      <div class="history-wrap">
+        <div class="history-list">
+          <div v-if="!revisions.length" class="muted-hint" style="padding: 10px">暂无历史版本</div>
+          <div
+            v-for="r in revisions"
+            :key="r.id"
+            class="history-item"
+            :class="{ active: revisionPreview?.id === r.id }"
+            @click="previewRevision(r.id)"
+          >
+            <div class="history-time">{{ formatTime(r.created_at) }}</div>
+            <div class="history-meta">{{ r.editor || '未知' }} · {{ r.size }} 字</div>
+          </div>
+        </div>
+        <div class="history-preview">
+          <template v-if="revisionPreview">
+            <div class="history-preview-head">
+              <span class="history-preview-title">{{ revisionPreview.title }}</span>
+              <el-button size="small" type="primary" @click="restoreRevision(revisionPreview.id)">恢复此版本</el-button>
+            </div>
+            <pre class="history-content">{{ revisionPreview.content }}</pre>
+          </template>
+          <div v-else class="muted-hint" style="padding: 14px">选择左侧版本查看内容</div>
+        </div>
+      </div>
     </el-dialog>
 
     <!-- 快速切换 (Ctrl+K) -->
@@ -1179,7 +1209,38 @@ const onPageMenu = (cmd: string) => {
   else if (cmd === 'export') exportMarkdown()
   else if (cmd === 'wide') toggleWide()
   else if (cmd === 'small') toggleSmall()
+  else if (cmd === 'history') openHistory()
   else if (cmd === 'delete') deleteCurrent()
+}
+
+// 版本历史
+const historyOpen = ref(false)
+const revisions = ref<{ id: string; title: string; editor: string; created_at: string; size: number }[]>([])
+const revisionPreview = ref<{ id: string; title: string; content: string; editor: string; created_at: string } | null>(null)
+const formatTime = (s: string) => (s ? new Date(s).toLocaleString('zh-CN', { hour12: false }) : '')
+const openHistory = async () => {
+  if (!currentPage.value) return
+  historyOpen.value = true
+  revisionPreview.value = null
+  try {
+    revisions.value = (await http.get(`/api/pages/${currentPage.value.id}/revisions`)).data.items || []
+  } catch { revisions.value = [] }
+}
+const previewRevision = async (id: string) => {
+  if (!currentPage.value) return
+  try {
+    revisionPreview.value = (await http.get(`/api/pages/${currentPage.value.id}/revisions/${id}`)).data
+  } catch { ElMessage.error('加载版本失败') }
+}
+const restoreRevision = async (id: string) => {
+  if (!currentPage.value) return
+  try {
+    const res = await http.post(`/api/pages/${currentPage.value.id}/revisions/${id}/restore`)
+    currentPage.value = res.data
+    await loadTree()
+    historyOpen.value = false
+    ElMessage.success('已恢复该版本')
+  } catch { ElMessage.error('恢复失败') }
 }
 
 const openQuick = async () => {
@@ -2285,4 +2346,30 @@ html, body, #app { height: 100%; }
 }
 .link-panel-head .count { background: #e3e3e0; color: #6b6b68; border-radius: 8px; padding: 0 7px; font-size: 11px; }
 .link-list { max-height: 220px; overflow-y: auto; padding-bottom: 14px; }
+
+/* 版本历史 */
+.history-wrap { display: flex; gap: 14px; height: 520px; }
+.history-list { width: 220px; flex: 0 0 auto; overflow-y: auto; border-right: 1px solid #f0f0ef; padding-right: 8px; }
+.history-item { padding: 8px 10px; border-radius: 8px; cursor: pointer; margin-bottom: 2px; }
+.history-item:hover { background: #f1f1ef; }
+.history-item.active { background: #eef0ff; }
+.history-time { font-size: 13px; color: #37352f; font-weight: 500; }
+.history-meta { font-size: 11px; color: #9b9a97; margin-top: 2px; }
+.history-preview { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.history-preview-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.history-preview-title { font-weight: 600; color: #37352f; }
+.history-content {
+  flex: 1;
+  overflow: auto;
+  background: #f8f9fc;
+  border: 1px solid #eceef2;
+  border-radius: 10px;
+  padding: 12px;
+  font-size: 12.5px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: #374151;
+  margin: 0;
+}
 </style>

@@ -47,6 +47,18 @@ class Page(Base):
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now, index=True)
 
 
+class PageRevision(Base):
+    """页面历史版本快照(用于查看与回滚)。"""
+    __tablename__ = 'page_revisions'
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    page_id = Column(String(36), ForeignKey('pages.id', ondelete='CASCADE'), nullable=False, index=True)
+    title = Column(String(255), default='')
+    content = Column(Text, default='')
+    editor = Column(String(255), default='')
+    created_at = Column(DateTime, default=datetime.now)
+
+
 class PageChunk(Base):
     __tablename__ = 'page_chunks'
 
