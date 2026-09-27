@@ -392,6 +392,7 @@ const SlashCommand = Extension.create({
     return [
       Suggestion({
         editor: this.editor,
+        pluginKey: new PluginKey('slashSuggestion'),
         char: '/',
         startOfLine: false,
         allowSpaces: false,
@@ -456,6 +457,7 @@ const PageMention = Extension.create({
     return [
       Suggestion({
         editor: this.editor,
+        pluginKey: new PluginKey('mentionSuggestion'),
         char: '[[',
         startOfLine: false,
         allowSpaces: false,
