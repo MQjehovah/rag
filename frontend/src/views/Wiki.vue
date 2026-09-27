@@ -11,6 +11,30 @@
           @click="rebuildWiki"
         >{{ running ? '编译中' : '重新编译' }}</el-button>
       </div>
+      <div class="space-bar">
+        <div class="space-item" :class="{ active: activeSpace === '' }" @click="activeSpace = ''">
+          <span class="space-icon">📚</span>
+          <span class="space-name">全部</span>
+          <span class="space-count">{{ totalAll }}</span>
+        </div>
+        <div class="space-item" :class="{ active: activeSpace === 'default' }" @click="activeSpace = 'default'">
+          <span class="space-icon">📄</span>
+          <span class="space-name">默认空间</span>
+          <span class="space-count">{{ defaultCount }}</span>
+        </div>
+        <div
+          v-for="s in spaces"
+          :key="s.id"
+          class="space-item"
+          :class="{ active: activeSpace === s.id }"
+          @click="activeSpace = s.id"
+        >
+          <span class="space-icon">{{ s.icon || '🗂️' }}</span>
+          <span class="space-name">{{ s.name }}</span>
+          <span class="space-count">{{ s.count }}</span>
+        </div>
+        <button class="space-add" @click="spaceDialog = true">＋ 新建空间</button>
+      </div>
       <el-input
         v-model="filterText"
         placeholder="搜索页面..."
@@ -52,22 +76,46 @@
             <div v-if="r.summary" class="wiki-result-summary">{{ r.summary }}</div>
           </div>
         </div>
-        <div v-for="cat in filteredCategories" :key="cat.name" class="wiki-cat">
-          <div class="wiki-cat-name" @click="toggleCat(cat.name)">
-            <span class="wiki-cat-chevron" :class="{ open: !collapsedCats.includes(cat.name) }">›</span>
-            <span class="wiki-cat-label">{{ cat.name }}</span>
-            <span class="wiki-cat-count">{{ cat.pages.length }}</span>
-          </div>
-          <div v-show="!collapsedCats.includes(cat.name)">
-            <div
-              v-for="p in cat.pages"
-              :key="p.id"
-              class="wiki-page-item"
-              :class="{ active: current && current.id === p.id }"
-              @click="openPage(p.id)"
-            >{{ p.title }}</div>
+        <div class="wiki-tree">
+          <div
+            v-for="row in wikiTreeRows"
+            :key="row.page.id"
+            class="wiki-tree-item"
+            :class="{
+              active: current && current.id === row.page.id,
+              dragging: wikiDragId === row.page.id,
+              'drop-before': wikiDrop?.id === row.page.id && wikiDrop?.zone === 'before',
+              'drop-after': wikiDrop?.id === row.page.id && wikiDrop?.zone === 'after',
+              'drop-inside': wikiDrop?.id === row.page.id && wikiDrop?.zone === 'inside',
+            }"
+            :style="{ paddingLeft: (8 + row.depth * 14) + 'px' }"
+            draggable="true"
+            @dragstart="onWikiDragStart(row.page, $event)"
+            @dragover="onWikiDragOver(row.page, $event)"
+            @drop.stop="onWikiDrop(row.page, $event)"
+            @dragend="onWikiDragEnd"
+            @click="openPage(row.page.id)"
+          >
+            <span
+              v-if="row.hasChildren"
+              class="wiki-tree-chev"
+              :class="{ open: !row.collapsed }"
+              @click.stop="toggleWiki(row.page.id)"
+            >›</span>
+            <span v-else class="wiki-tree-chev placeholder"></span>
+            <span class="wiki-tree-title">{{ row.page.title }}</span>
+            <el-dropdown trigger="click" @command="(c: string) => c === 'child' ? createWikiPage(row.page.id) : deleteWikiPage(row.page.id)">
+              <button class="wiki-tree-menu" title="更多" @click.stop>⋯</button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item command="child">新建子页面</el-dropdown-item>
+                  <el-dropdown-item command="delete" divided>删除</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
           </div>
         </div>
+        <div class="wiki-tree-add" @click="createWikiPage(null)">＋ 新建页面</div>
         <el-empty
           v-if="!total && !running"
           description="Wiki 尚未生成，点右上角重新编译"
@@ -78,7 +126,19 @@
     <main class="wiki-main">
       <div v-if="current" class="wiki-content-card">
         <div class="wiki-card-actions">
-          <el-button v-if="!editing" size="small" text type="primary" @click="startEdit">编辑</el-button>
+          <template v-if="!editing">
+            <el-dropdown trigger="click" @command="(sid: string) => moveToSpace(sid === 'default' ? null : sid)">
+              <el-button size="small" text>移动到空间 ▾</el-button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item command="default">📄 默认空间</el-dropdown-item>
+                  <el-dropdown-item v-for="s in spaces" :key="s.id" :command="s.id">{{ s.icon || '🗂️' }} {{ s.name }}</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
+            <el-button size="small" text type="danger" @click="deleteWikiPage(current.id)">删除</el-button>
+            <el-button size="small" text type="primary" @click="startEdit">编辑</el-button>
+          </template>
           <span v-else class="wiki-edit-tip">编辑中（下次编译会保留你的修改）</span>
         </div>
         <div class="wiki-crumb">{{ current.category }}</div>
@@ -135,13 +195,32 @@
         <p v-if="running" class="wiki-progress">{{ progressText }}</p>
       </div>
     </main>
+
+    <!-- 新建空间 -->
+    <el-dialog v-model="spaceDialog" title="新建空间" width="440px">
+      <el-form label-width="80px">
+        <el-form-item label="图标">
+          <el-input v-model="newSpace.icon" maxlength="4" style="width: 100px" />
+        </el-form-item>
+        <el-form-item label="名称">
+          <el-input v-model="newSpace.name" placeholder="如：研发知识库" @keyup.enter="createSpace" />
+        </el-form-item>
+        <el-form-item label="说明">
+          <el-input v-model="newSpace.description" placeholder="可选" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="spaceDialog = false">取消</el-button>
+        <el-button type="primary" :loading="savingSpace" @click="createSpace">创建</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import http from '../api/http'
 import { signImageElement, signRenderedImages } from '../utils/imageSign'
 import { useAuthStore } from '../stores/auth'
@@ -181,17 +260,18 @@ interface WikiSearchItem {
 }
 
 const categories = ref<{ name: string; pages: WikiPageListItem[] }[]>([])
+const spaces = ref<{ id: string; name: string; icon: string; description: string; count: number }[]>([])
+const activeSpace = ref<string>('')   // '' 全部 | 'default' 默认空间 | 空间 id
+const defaultCount = ref(0)
+const spaceDialog = ref(false)
+const newSpace = ref({ name: '', icon: '🗂️', description: '' })
+const savingSpace = ref(false)
 const total = ref(0)
 const running = ref(false)
 const rebuilding = ref(false)
 const current = ref<any>(null)
 const filterText = ref('')
-const collapsedCats = ref<string[]>([])
-const toggleCat = (name: string) => {
-  collapsedCats.value = collapsedCats.value.includes(name)
-    ? collapsedCats.value.filter(x => x !== name)
-    : [...collapsedCats.value, name]
-}
+
 const semanticQuery = ref('')
 const searching = ref(false)
 const searched = ref(false)
@@ -215,13 +295,7 @@ const titleToId = computed(() => {
   return map
 })
 
-const filteredCategories = computed(() => {
-  if (!filterText.value) return categories.value
-  const q = filterText.value.toLowerCase()
-  return categories.value
-    .map(c => ({ name: c.name, pages: c.pages.filter(p => p.title.toLowerCase().includes(q)) }))
-    .filter(c => c.pages.length > 0)
-})
+
 
 const progressText = computed(() => {
   return status.value.total > 0 ? `${status.value.processed}/${status.value.total} 篇已蒸馏` : status.value.message
@@ -232,12 +306,146 @@ let pollTimer: number | null = null
 
 const loadList = async () => {
   try {
-    const res = await http.get('/api/wiki')
+    const params: Record<string, string> = {}
+    if (activeSpace.value) params.space_id = activeSpace.value
+    const res = await http.get('/api/wiki', { params })
+    items.value = res.data.items || []
     categories.value = res.data.categories || []
     total.value = res.data.total || 0
     running.value = !!res.data.running
   } catch { /* ignore */ }
 }
+
+const loadSpaces = async () => {
+  try {
+    const res = await http.get('/api/wiki/spaces')
+    spaces.value = res.data.spaces || []
+    defaultCount.value = res.data.default_count || 0
+  } catch { /* ignore */ }
+}
+
+const createSpace = async () => {
+  if (!newSpace.value.name.trim()) { ElMessage.warning('请输入空间名称'); return }
+  savingSpace.value = true
+  try {
+    await http.post('/api/wiki/spaces', { ...newSpace.value })
+    spaceDialog.value = false
+    newSpace.value = { name: '', icon: '🗂️', description: '' }
+    ElMessage.success('已创建空间')
+    await loadSpaces()
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail || '创建失败')
+  } finally {
+    savingSpace.value = false
+  }
+}
+
+const moveToSpace = async (spaceId: string | null) => {
+  if (!current.value) return
+  try {
+    await http.put(`/api/wiki/${current.value.id}/space`, { space_id: spaceId })
+    current.value.space_id = spaceId
+    await Promise.all([loadSpaces(), loadList()])
+    ElMessage.success('已移动')
+  } catch {
+    ElMessage.error('移动失败')
+  }
+}
+
+watch(activeSpace, () => loadList())
+
+// ---- Wiki 多级树 ----
+const items = ref<{ id: string; title: string; parent_id: string | null; position: number; space_id: string | null }[]>([])
+const collapsedWiki = ref<string[]>([])
+const totalAll = computed(() => defaultCount.value + spaces.value.reduce((a, s) => a + s.count, 0))
+const wikiTreeRows = computed(() => {
+  const q = filterText.value.trim().toLowerCase()
+  const source = q ? items.value.filter(p => (p.title || '').toLowerCase().includes(q)) : items.value
+  const byId = new Map<string, any>()
+  source.forEach(p => byId.set(p.id, p))
+  const childrenOf = new Map<string | null, any[]>()
+  for (const p of source) {
+    const pid = p.parent_id && byId.has(p.parent_id) ? p.parent_id : null
+    if (!childrenOf.has(pid)) childrenOf.set(pid, [])
+    childrenOf.get(pid)!.push(p)
+  }
+  const rows: { page: any; depth: number; hasChildren: boolean; collapsed: boolean }[] = []
+  const walk = (pid: string | null, depth: number) => {
+    const kids = (childrenOf.get(pid) || []).slice().sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
+    for (const k of kids) {
+      const hasChildren = (childrenOf.get(k.id) || []).length > 0
+      const collapsed = collapsedWiki.value.includes(k.id)
+      rows.push({ page: k, depth, hasChildren, collapsed })
+      if (!collapsed) walk(k.id, depth + 1)
+    }
+  }
+  walk(null, 0)
+  return rows
+})
+const toggleWiki = (id: string) => {
+  collapsedWiki.value = collapsedWiki.value.includes(id)
+    ? collapsedWiki.value.filter(x => x !== id)
+    : [...collapsedWiki.value, id]
+}
+const createWikiPage = async (parentId: string | null = null) => {
+  const spaceId = activeSpace.value && activeSpace.value !== 'default' ? activeSpace.value : null
+  try {
+    const res = await http.post('/api/wiki', { title: '无标题', space_id: spaceId, parent_id: parentId })
+    await loadSpaces()
+    await loadList()
+    await openPage(res.data.id)
+  } catch { ElMessage.error('创建失败') }
+}
+const deleteWikiPage = async (id: string) => {
+  try { await ElMessageBox.confirm('确认删除该页面？其子页面将上移一级。', '删除', { type: 'warning' }) } catch { return }
+  try {
+    await http.delete(`/api/wiki/${id}`)
+    if (current.value?.id === id) current.value = null
+    await loadSpaces()
+    await loadList()
+    ElMessage.success('已删除')
+  } catch { ElMessage.error('删除失败') }
+}
+const wikiDragId = ref<string | null>(null)
+const wikiDrop = ref<{ id: string; zone: 'before' | 'after' | 'inside' } | null>(null)
+const onWikiDragStart = (p: any, ev: DragEvent) => {
+  wikiDragId.value = p.id
+  if (ev.dataTransfer) { ev.dataTransfer.effectAllowed = 'move'; ev.dataTransfer.setData('text/plain', p.id) }
+}
+const onWikiDragOver = (p: any, ev: DragEvent) => {
+  if (!wikiDragId.value || wikiDragId.value === p.id) return
+  ev.preventDefault()
+  const rect = (ev.currentTarget as HTMLElement).getBoundingClientRect()
+  const y = ev.clientY - rect.top
+  const zone: 'before' | 'after' | 'inside' = y < rect.height * 0.3 ? 'before' : y > rect.height * 0.7 ? 'after' : 'inside'
+  wikiDrop.value = { id: p.id, zone }
+}
+const onWikiDrop = async (p: any, ev: DragEvent) => {
+  ev.preventDefault()
+  const dragId = wikiDragId.value
+  const t = wikiDrop.value
+  wikiDragId.value = null
+  wikiDrop.value = null
+  if (!dragId || !t || dragId === p.id) return
+  let parentId: string | null = null
+  let position = 0
+  if (t.zone === 'inside') {
+    parentId = p.id
+    position = items.value.filter(x => x.parent_id === p.id).length
+  } else {
+    parentId = p.parent_id ?? null
+    const sib = items.value.filter(x => (x.parent_id ?? null) === parentId).sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
+    const idx = sib.findIndex(x => x.id === p.id)
+    position = t.zone === 'before' ? Math.max(0, idx) : idx + 1
+  }
+  try {
+    await http.put(`/api/wiki/${dragId}/move`, { parent_id: parentId, position })
+    await loadList()
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail || '移动失败')
+  }
+}
+const onWikiDragEnd = () => { wikiDragId.value = null; wikiDrop.value = null }
 
 const openPage = async (pageId: string) => {
   try {
@@ -404,7 +612,7 @@ watch(
 )
 
 onMounted(async () => {
-  await loadList()
+  await Promise.all([loadSpaces(), loadList()])
   const id = route.params.id
   if (id) {
     await openPage(String(id))
@@ -771,4 +979,85 @@ onBeforeUnmount(() => {
 .wiki-progress {
   font-size: 13px;
 }
+
+/* 空间选择 */
+.space-bar { padding: 4px 8px 8px; display: flex; flex-direction: column; gap: 1px; }
+.space-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-2);
+}
+.space-item:hover { background: var(--surface-2); }
+.space-item.active { background: var(--surface-3); color: var(--text); font-weight: 500; }
+.space-icon { flex: 0 0 auto; }
+.space-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.space-count { font-size: 11px; color: var(--text-3); }
+.space-add {
+  border: none;
+  background: transparent;
+  color: var(--text-3);
+  font-size: 12px;
+  text-align: left;
+  padding: 5px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.space-add:hover { background: var(--surface-2); color: var(--text-2); }
+
+/* 多级树 */
+.wiki-tree { padding: 2px 4px; }
+.wiki-tree-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 5px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-2);
+}
+.wiki-tree-item:hover { background: var(--surface-2); }
+.wiki-tree-item.active { background: var(--surface-3); color: var(--text); font-weight: 500; }
+.wiki-tree-chev {
+  width: 14px;
+  display: inline-flex;
+  justify-content: center;
+  color: var(--text-3);
+  font-size: 12px;
+  transition: transform 0.15s;
+  flex: 0 0 auto;
+}
+.wiki-tree-chev.open { transform: rotate(90deg); }
+.wiki-tree-chev.placeholder { visibility: hidden; }
+.wiki-tree-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wiki-tree-menu {
+  opacity: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  border-radius: 4px;
+  padding: 0 5px;
+  line-height: 1.4;
+}
+.wiki-tree-item:hover .wiki-tree-menu { opacity: 1; }
+.wiki-tree-menu:hover { background: var(--surface-3); color: var(--text); }
+.wiki-tree-item.dragging { opacity: 0.5; }
+.wiki-tree-item.drop-before { box-shadow: inset 0 2px 0 var(--primary); }
+.wiki-tree-item.drop-after { box-shadow: inset 0 -2px 0 var(--primary); }
+.wiki-tree-item.drop-inside { background: var(--primary-weak); outline: 1px dashed var(--primary); outline-offset: -2px; }
+.wiki-tree-add {
+  color: var(--text-3);
+  font-size: 13px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.wiki-tree-add:hover { background: var(--surface-2); color: var(--text-2); }
 </style>

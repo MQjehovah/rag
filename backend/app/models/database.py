@@ -170,6 +170,11 @@ class WikiPage(Base):
     summary = Column(Text, default='')
     embedding = Column(Text, nullable=True)
     source_note_ids = Column(Text, default='[]')
+    # 所属空间(NULL=默认空间)
+    space_id = Column(String(36), nullable=True, index=True)
+    # 树状层级: 父页面 + 同级排序位次
+    parent_id = Column(String(36), nullable=True, index=True)
+    position = Column(Integer, default=0)
     # 由哪个编译管道产出(NULL=经典 wiki 蒸馏管道)
     pipeline_id = Column(String(36), nullable=True, index=True)
     # 编译单元键(pipeline_id + 来源单元),用于增量 upsert
@@ -177,6 +182,19 @@ class WikiPage(Base):
     embedding_profile = Column(String(36), nullable=True)
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class WikiSpace(Base):
+    """知识库空间(类似 Docmost/Outline 的 Space): 顶层分组。"""
+    __tablename__ = 'wiki_spaces'
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    name = Column(String(255), nullable=False)
+    icon = Column(String(32), default='')
+    description = Column(Text, default='')
+    position = Column(Integer, default=0)
+    group_id = Column(String(255), nullable=True, index=True)
+    created_at = Column(DateTime, default=datetime.now)
 
 
 class GraphCommunity(Base):
