@@ -2,7 +2,7 @@
   <div class="app-container" :class="{ 'sidebar-collapsed': sidebarCollapsed }">
     <div class="app-body">
       <!-- 侧边栏 -->
-      <aside class="sidebar">
+      <aside class="sidebar" :style="{ width: sidebarCollapsed ? '0px' : sidebarWidth + 'px' }">
         <div class="ws-head">
           <span class="ws-badge">R</span>
           <span class="ws-name">我的笔记</span>
@@ -94,6 +94,13 @@
                 @dragend="onPageDragEnd"
               >
                 <div class="page-info" @click="selectPage(row.page)">
+                  <span
+                    v-if="row.hasChildren"
+                    class="page-chevron"
+                    :class="{ open: !row.collapsed }"
+                    @click.stop="toggleCollapse(row.page.id)"
+                  >›</span>
+                  <span v-else class="page-chevron placeholder"></span>
                   <span class="page-dot"></span>
                   <span class="page-title">{{ row.page.title || '无标题' }}</span>
                 </div>
@@ -118,6 +125,7 @@
             暂无笔记本
           </div>
         </div>
+        <div v-if="!sidebarCollapsed" class="sidebar-resizer" @mousedown.prevent="startSidebarResize"></div>
       </aside>
 
       <!-- 主编辑区 -->
@@ -418,7 +426,11 @@ const currentPage = ref<Page | null>(null)
 const saveStatus = ref<'saved' | 'saving' | 'unsaved'>('saved')
 
 const searchQuery = ref('')
-const sidebarCollapsed = ref(false)
+const sidebarCollapsed = ref(localStorage.getItem('rag-sidebar-collapsed') === '1')
+const sidebarWidth = ref(Math.min(360, Math.max(208, Number(localStorage.getItem('rag-sidebar-width')) || 260)))
+const collapsedPages = ref<string[]>([])
+watch(sidebarCollapsed, (v) => localStorage.setItem('rag-sidebar-collapsed', v ? '1' : '0'))
+watch(sidebarWidth, (v) => localStorage.setItem('rag-sidebar-width', String(v)))
 const showNewNotebook = ref(false)
 const newNotebookName = ref('')
 const profiles = ref<EmbeddingProfile[]>([])
@@ -532,17 +544,27 @@ const treeRows = computed(() => {
     if (!childrenOf.has(pid)) childrenOf.set(pid, [])
     childrenOf.get(pid)!.push(p)
   }
-  const rows: { page: PageListItem; depth: number }[] = []
+  const rows: { page: PageListItem; depth: number; hasChildren: boolean; collapsed: boolean }[] = []
   const walk = (pid: string | null, depth: number) => {
     const kids = (childrenOf.get(pid) || []).slice().sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
     for (const k of kids) {
-      rows.push({ page: k, depth })
-      walk(k.id, depth + 1)
+      const hasChildren = (childrenOf.get(k.id) || []).length > 0
+      const collapsed = collapsedPages.value.includes(k.id)
+      rows.push({ page: k, depth, hasChildren, collapsed })
+      if (!collapsed) walk(k.id, depth + 1)
     }
   }
   walk(null, 0)
   return rows
 })
+
+const toggleCollapse = (id: string) => {
+  if (collapsedPages.value.includes(id)) {
+    collapsedPages.value = collapsedPages.value.filter(x => x !== id)
+  } else {
+    collapsedPages.value = [...collapsedPages.value, id]
+  }
+}
 
 const loadTree = async () => {
   if (!currentNotebook.value) { treePages.value = []; return }
@@ -622,6 +644,25 @@ const onPageDrop = async (page: PageListItem, ev: DragEvent) => {
 const onPageDragEnd = () => {
   dragPageId.value = null
   dropTarget.value = null
+}
+
+// 侧边栏宽度拖拽
+const startSidebarResize = (ev: MouseEvent) => {
+  const startX = ev.clientX
+  const startW = sidebarWidth.value
+  const onMove = (e: MouseEvent) => {
+    sidebarWidth.value = Math.min(360, Math.max(208, startW + (e.clientX - startX)))
+  }
+  const onUp = () => {
+    document.removeEventListener('mousemove', onMove)
+    document.removeEventListener('mouseup', onUp)
+    document.body.style.userSelect = ''
+    document.body.style.cursor = ''
+  }
+  document.body.style.userSelect = 'none'
+  document.body.style.cursor = 'col-resize'
+  document.addEventListener('mousemove', onMove)
+  document.addEventListener('mouseup', onUp)
 }
 
 const selectPage = async (page: PageListItem) => {
@@ -1067,6 +1108,10 @@ const handleKeydown = (e: KeyboardEvent) => {
     if (currentPage.value && saveStatus.value !== 'saving') {
       savePage()
     }
+  }
+  if ((e.ctrlKey || e.metaKey) && e.key === '\\') {
+    e.preventDefault()
+    sidebarCollapsed.value = !sidebarCollapsed.value
   }
 }
 
@@ -1765,4 +1810,43 @@ html, body, #app { height: 100%; }
   cursor: pointer;
 }
 .emoji-foot-btn:hover { background: #efefed; }
+
+/* 侧边栏拖拽调宽 + 页面树折叠 */
+.sidebar { position: relative; }
+.sidebar-resizer {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 6;
+}
+.sidebar-resizer::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 2px;
+  width: 2px;
+  height: 100%;
+  background: transparent;
+  transition: background 0.15s;
+}
+.sidebar-resizer:hover::after { background: var(--primary, #4f46e5); opacity: 0.45; }
+.page-chevron {
+  width: 14px;
+  height: 14px;
+  margin-right: 2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #b9b9b6;
+  font-size: 12px;
+  border-radius: 4px;
+  transition: transform 0.15s, background 0.12s, color 0.12s;
+  flex: 0 0 auto;
+}
+.page-chevron.open { transform: rotate(90deg); }
+.page-chevron:not(.placeholder):hover { background: #e3e3e0; color: #37352f; }
+.page-chevron.placeholder { visibility: hidden; }
 </style>
