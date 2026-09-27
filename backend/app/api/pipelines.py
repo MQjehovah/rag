@@ -55,6 +55,7 @@ def _to_response(pipeline: Pipeline, db: Session) -> PipelineResponse:
         scope_type=pipeline.scope_type or "notebooks",
         notebook_ids=list(json.loads(pipeline.notebook_ids or "[]")),
         compiler_kind=pipeline.compiler_kind or "wiki",
+        template_id=pipeline.template_id,
         prompt_template=pipeline.prompt_template or "",
         compile_rules=pipeline.compile_rules or "",
         compile_template=pipeline.compile_template or "",
@@ -93,6 +94,7 @@ def create_pipeline(data: PipelineCreate, db: Session = Depends(get_db), current
         scope_type=data.scope_type or "notebooks",
         notebook_ids=json.dumps(data.notebook_ids or [], ensure_ascii=False),
         compiler_kind=data.compiler_kind or "wiki",
+        template_id=(data.template_id or None),
         prompt_template=data.prompt_template or "",
         compile_rules=data.compile_rules or "",
         compile_template=data.compile_template or "",
@@ -146,6 +148,8 @@ def update_pipeline(pipeline_id: str, data: PipelineUpdate, db: Session = Depend
         pipeline.notebook_ids = json.dumps(data.notebook_ids, ensure_ascii=False)
     if data.compiler_kind is not None:
         pipeline.compiler_kind = data.compiler_kind
+    if data.template_id is not None:
+        pipeline.template_id = data.template_id or None
     if data.prompt_template is not None:
         pipeline.prompt_template = data.prompt_template
     if data.compile_rules is not None:

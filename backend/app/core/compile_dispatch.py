@@ -12,7 +12,7 @@ import time
 from typing import Dict, Set, Tuple
 
 from app.config import settings
-from app.core.pipeline import _space_lock
+from app.core.pipeline import _space_lock, resolve_rule
 from app.core.wiki import ingest_note, refresh_note_wiki, resolve_space_id
 from app.models.database import (
     Notebook,
@@ -57,17 +57,14 @@ async def _ingest_for_pipeline(engine, pipeline_id: str, note_id: str) -> None:
             if not pipeline or not note or not (note.content or "").strip():
                 return
             space_id = resolve_space_id(db, pipeline.target_space_id)
-            kind = pipeline.compiler_kind or "wiki"
-            prompt = pipeline.prompt_template or ""
-            rules = pipeline.compile_rules or ""
-            template = pipeline.compile_template or ""
+            rule = resolve_rule(db, pipeline)
             model = pipeline.model or ""
         finally:
             db.close()
         try:
-            await ingest_note(engine, note, space_id, kind=kind, prompt=prompt, rules=rules,
-                              template=template, model=model, pipeline_id=pipeline_id,
-                              lock=_space_lock(space_id))
+            await ingest_note(engine, note, space_id, kind=rule["kind"], prompt=rule["prompt"],
+                              rules=rule["rules"], template=rule["template"], model=model,
+                              pipeline_id=pipeline_id, lock=_space_lock(space_id))
         except Exception as e:  # noqa: BLE001
             logger.warning("auto compile failed (%s/%s): %s", pipeline_id, note_id, e)
     finally:

@@ -12,10 +12,26 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, Optional
 
-from app.models.database import Notebook, Page, Pipeline, PipelineRun, get_session, init_db
+from app.models.database import CompileTemplate, Notebook, Page, Pipeline, PipelineRun, get_session, init_db
 from app.core.wiki import ingest_note, resolve_space_id
 
 logger = logging.getLogger(__name__)
+
+
+def resolve_rule(db, pipeline: Pipeline) -> Dict[str, str]:
+    """解析管道的有效编译规则: 管道字段优先, 其次所选模板, 最后内置默认。"""
+    kind = pipeline.compiler_kind or "wiki"
+    prompt = pipeline.prompt_template or ""
+    rules = pipeline.compile_rules or ""
+    template = pipeline.compile_template or ""
+    if pipeline.template_id:
+        t = db.query(CompileTemplate).filter(CompileTemplate.id == pipeline.template_id).first()
+        if t is not None:
+            kind = t.compiler_kind or kind
+            prompt = prompt or (t.prompt or "")
+            rules = rules or (t.rules or "")
+            template = template or (t.template or "")
+    return {"kind": kind, "prompt": prompt, "rules": rules, "template": template}
 
 # 每个目标空间一把进程内锁, 序列化页面读写(后端单进程)
 _space_locks: Dict[str, asyncio.Lock] = {}
@@ -60,10 +76,11 @@ async def run_pipeline(engine, pipeline_id: str, status: Dict[str, Any], mode: s
         if not pipeline:
             status.update(running=False, message="管道不存在")
             return
-        kind = pipeline.compiler_kind or "wiki"
-        prompt = pipeline.prompt_template or ""
-        rules = pipeline.compile_rules or ""
-        template = pipeline.compile_template or ""
+        rule = resolve_rule(db, pipeline)
+        kind = rule["kind"]
+        prompt = rule["prompt"]
+        rules = rule["rules"]
+        template = rule["template"]
         model = pipeline.model or ""
         space_id = resolve_space_id(db, pipeline.target_space_id)
 
@@ -132,23 +149,21 @@ async def preview_pipeline(engine, pipeline_id: str) -> Dict[str, Any]:
         if not pipeline:
             return {"ok": False, "error": "管道不存在"}
         space_id = resolve_space_id(db, pipeline.target_space_id)
+        rule = resolve_rule(db, pipeline)
         notes = _collect_notes(db, pipeline, None)
         if not notes:
             return {"ok": False, "error": "来源范围内没有可编译的笔记"}
         note = notes[0]
         nb = db.query(Notebook.name).filter(Notebook.id == note.notebook_id).first()
+        model = pipeline.model or ""
     finally:
         db.close()
 
     text = await ingest_note(
         engine, note, space_id,
-        kind=pipeline.compiler_kind or "wiki",
-        prompt=pipeline.prompt_template or "",
-        rules=pipeline.compile_rules or "",
-        template=pipeline.compile_template or "",
-        model=pipeline.model or "",
-        pipeline_id=pipeline_id,
-        dry_run=True,
+        kind=rule["kind"], prompt=rule["prompt"], rules=rule["rules"],
+        template=rule["template"], model=model,
+        pipeline_id=pipeline_id, dry_run=True,
     )
     if not text:
         return {"ok": False, "error": "LLM 未返回内容(检查 LLM 配置)"}

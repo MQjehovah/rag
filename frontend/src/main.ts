@@ -20,6 +20,7 @@ import Chat from './views/Chat.vue'
 import Wiki from './views/Wiki.vue'
 import Sources from './views/Sources.vue'
 import Pipelines from './views/Pipelines.vue'
+import CompileTemplates from './views/CompileTemplates.vue'
 import Embeddings from './views/Embeddings.vue'
 import SharedPage from './views/SharedPage.vue'
 
@@ -35,6 +36,7 @@ const router = createRouter({
     { path: '/wiki/:id', component: Wiki },
     { path: '/sources', component: Sources },
     { path: '/pipelines', component: Pipelines },
+    { path: '/templates', component: CompileTemplates },
     { path: '/embeddings', component: Embeddings },
   ]
 })

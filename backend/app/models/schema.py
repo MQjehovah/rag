@@ -83,12 +83,46 @@ class EmbeddingProfileResponse(EmbeddingProfileBase):
         from_attributes = True
 
 
+class CompileTemplateBase(BaseModel):
+    name: str
+    description: str = ''
+    compiler_kind: str = 'wiki'
+    prompt: str = ''
+    rules: str = ''
+    template: str = ''
+
+
+class CompileTemplateCreate(CompileTemplateBase):
+    group_id: Optional[str] = None
+
+
+class CompileTemplateUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    compiler_kind: Optional[str] = None
+    prompt: Optional[str] = None
+    rules: Optional[str] = None
+    template: Optional[str] = None
+    group_id: Optional[str] = None
+
+
+class CompileTemplateResponse(CompileTemplateBase):
+    id: str
+    group_id: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
 class PipelineCreate(BaseModel):
     name: str
     description: str = ''
     scope_type: str = 'notebooks'           # notebooks | group | all
     notebook_ids: List[str] = []
     compiler_kind: str = 'wiki'             # wiki | api_doc | markdown | changelog | custom
+    template_id: Optional[str] = None       # 选用的编译模板库条目
     prompt_template: str = ''               # 提示词(角色+目标)
     compile_rules: str = ''                 # 规则(约束)
     compile_template: str = ''              # 输出模板(正文结构)
@@ -107,6 +141,7 @@ class PipelineUpdate(BaseModel):
     scope_type: Optional[str] = None
     notebook_ids: Optional[List[str]] = None
     compiler_kind: Optional[str] = None
+    template_id: Optional[str] = None
     prompt_template: Optional[str] = None
     compile_rules: Optional[str] = None
     compile_template: Optional[str] = None
@@ -126,6 +161,7 @@ class PipelineResponse(BaseModel):
     scope_type: str = 'notebooks'
     notebook_ids: List[str] = []
     compiler_kind: str = 'wiki'
+    template_id: Optional[str] = None
     prompt_template: str = ''
     compile_rules: str = ''
     compile_template: str = ''

@@ -78,6 +78,21 @@
             <el-option v-for="(label, key) in KIND_LABELS" :key="key" :label="label" :value="key" />
           </el-select>
         </el-form-item>
+        <el-form-item label="编译模板">
+          <div style="display: flex; gap: 8px; width: 100%">
+            <el-select
+              v-model="form.template_id"
+              clearable
+              placeholder="不使用模板（用下方自定义 / 内置）"
+              style="flex: 1"
+              @change="onTemplateChange"
+            >
+              <el-option v-for="t in templateLib" :key="t.id" :label="t.name" :value="t.id" />
+            </el-select>
+            <el-button @click="router.push('/templates')">管理模板</el-button>
+          </div>
+          <div class="muted" style="font-size: 12px">选择模板后，其「提示词/规则/输出模板」作为缺省；下方留空的字段将采用模板值。</div>
+        </el-form-item>
         <el-form-item label="来源范围">
           <el-radio-group v-model="form.scope_type">
             <el-radio value="notebooks">指定笔记本</el-radio>
@@ -189,8 +204,11 @@
 
 <script setup lang="ts">
 import { onMounted, onUnmounted, reactive, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import http from '../api/http'
+
+const router = useRouter()
 
 interface Pipeline {
   id: string
@@ -199,6 +217,7 @@ interface Pipeline {
   scope_type: string
   notebook_ids: string[]
   compiler_kind: string
+  template_id?: string | null
   prompt_template: string
   compile_rules: string
   compile_template: string
@@ -227,6 +246,7 @@ const notebooks = ref<{ id: string; name: string }[]>([])
 const spaces = ref<WikiSpaceItem[]>([])
 const compileTemplates = ref<Record<string, { prompt: string; template: string }>>({})
 const compileRules = ref('')
+const templateLib = ref<{ id: string; name: string; compiler_kind: string }[]>([])
 const loading = ref(false)
 const dialog = ref(false)
 const saving = ref(false)
@@ -238,6 +258,7 @@ const form = reactive({
   scope_type: 'notebooks',
   notebook_ids: [] as string[],
   compiler_kind: 'wiki',
+  template_id: '' as string | null,
   prompt_template: '',
   compile_rules: '',
   compile_template: '',
@@ -315,6 +336,19 @@ function defaultTemplate(kind: string) {
   return compileTemplates.value[kind]?.template || ''
 }
 
+async function loadTemplateLib() {
+  try {
+    templateLib.value = (await http.get('/api/compile-templates')).data
+  } catch {
+    templateLib.value = []
+  }
+}
+
+function onTemplateChange(id: string | null) {
+  const t = templateLib.value.find(x => x.id === id)
+  if (t) form.compiler_kind = t.compiler_kind
+}
+
 function fillDefaultRule() {
   form.prompt_template = defaultPrompt(form.compiler_kind)
   form.compile_rules = compileRules.value
@@ -335,6 +369,7 @@ function openCreate() {
     scope_type: 'notebooks',
     notebook_ids: [],
     compiler_kind: 'wiki',
+    template_id: '',
     prompt_template: '',
     compile_rules: '',
     compile_template: '',
@@ -356,6 +391,7 @@ function openEdit(p: Pipeline) {
     scope_type: p.scope_type,
     notebook_ids: [...(p.notebook_ids || [])],
     compiler_kind: p.compiler_kind,
+    template_id: p.template_id || '',
     prompt_template: p.prompt_template,
     compile_rules: p.compile_rules,
     compile_template: p.compile_template,
@@ -481,6 +517,7 @@ onMounted(() => {
   loadNotebooks()
   loadSpaces()
   loadCompileTemplates()
+  loadTemplateLib()
   timer = setInterval(refreshRunning, 2500)
 })
 onUnmounted(() => {

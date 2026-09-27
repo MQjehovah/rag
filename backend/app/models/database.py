@@ -305,6 +305,22 @@ class EmbeddingProfile(Base):
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 
 
+class CompileTemplate(Base):
+    """编译模板库：可单独维护的「编译规则」(提示词/规则/输出模板), 供管道选用。"""
+    __tablename__ = 'compile_templates'
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    name = Column(String(255), nullable=False, index=True)
+    description = Column(Text, default='')
+    compiler_kind = Column(String(16), default='wiki')
+    prompt = Column(Text, default='')      # 提示词(角色+目标)
+    rules = Column(Text, default='')       # 规则(约束)
+    template = Column(Text, default='')    # 输出模板(正文结构)
+    group_id = Column(String(255), nullable=True, index=True)
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
 class Pipeline(Base):
     """编译管道：把某范围笔记本里的笔记编译成 wiki 页（或其它格式并入 wiki 浏览）。"""
     __tablename__ = 'pipelines'
@@ -317,6 +333,8 @@ class Pipeline(Base):
     notebook_ids = Column(Text, default='[]')  # JSON list[str]
     # 编译方式: wiki(蒸馏) | api_doc(接口文档) | markdown(合集) | changelog(变更记录) | custom
     compiler_kind = Column(String(16), default='wiki')
+    # 选用的编译模板库条目(可空); 选中后其 kind/prompt/rules/template 作为缺省, 本管道字段可覆盖
+    template_id = Column(String(36), nullable=True, index=True)
     # 编译规则(三段): 提示词(角色+目标) / 规则(约束) / 输出模板(正文结构); 留空用内置
     prompt_template = Column(Text, default='')
     compile_rules = Column(Text, default='')
