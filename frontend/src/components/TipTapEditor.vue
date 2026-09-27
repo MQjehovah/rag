@@ -1,5 +1,5 @@
 <template>
-  <div class="tiptap-editor">
+  <div class="tiptap-editor" @mousemove="onEditorMouseMove" @mouseleave="onEditorMouseLeave">
     <!-- 工具栏 -->
     <div class="editor-toolbar" v-if="editor">
       <select class="tb-select" :value="headingValue" @change="setHeading" title="段落样式">
@@ -8,51 +8,125 @@
         <option value="2">标题 2</option>
         <option value="3">标题 3</option>
       </select>
+
       <span class="divider"></span>
-      <button @click="editor.chain().focus().toggleBold().run()" :class="{ 'is-active': editor.isActive('bold') }" title="加粗">B</button>
-      <button @click="editor.chain().focus().toggleItalic().run()" :class="{ 'is-active': editor.isActive('italic') }" title="斜体"><i>I</i></button>
-      <button @click="editor.chain().focus().toggleUnderline().run()" :class="{ 'is-active': editor.isActive('underline') }" title="下划线"><u>U</u></button>
-      <button @click="editor.chain().focus().toggleStrike().run()" :class="{ 'is-active': editor.isActive('strike') }" title="删除线"><s>S</s></button>
-      <button @click="editor.chain().focus().toggleHighlight().run()" :class="{ 'is-active': editor.isActive('highlight') }" title="高亮">▨</button>
-      <button @click="editor.chain().focus().toggleCode().run()" :class="{ 'is-active': editor.isActive('code') }" title="行内代码">&lt;/&gt;</button>
-      <button @click="setLink" :class="{ 'is-active': editor.isActive('link') }" title="链接">🔗</button>
+
+      <button class="tb-btn" @click="editor.chain().focus().toggleBold().run()" :class="{ 'is-active': editor.isActive('bold') }" title="加粗 (Ctrl+B)"><Bold :size="16" /></button>
+      <button class="tb-btn" @click="editor.chain().focus().toggleItalic().run()" :class="{ 'is-active': editor.isActive('italic') }" title="斜体 (Ctrl+I)"><Italic :size="16" /></button>
+      <button class="tb-btn" @click="editor.chain().focus().toggleUnderline().run()" :class="{ 'is-active': editor.isActive('underline') }" title="下划线 (Ctrl+U)"><UnderlineIcon :size="16" /></button>
+      <button class="tb-btn" @click="editor.chain().focus().toggleStrike().run()" :class="{ 'is-active': editor.isActive('strike') }" title="删除线"><Strikethrough :size="16" /></button>
+      <button class="tb-btn" @click="editor.chain().focus().toggleHighlight().run()" :class="{ 'is-active': editor.isActive('highlight') }" title="高亮"><Highlighter :size="16" /></button>
+      <button class="tb-btn" @click="editor.chain().focus().toggleCode().run()" :class="{ 'is-active': editor.isActive('code') }" title="行内代码"><Code :size="16" /></button>
+      <button class="tb-btn" @click="setLink" :class="{ 'is-active': editor.isActive('link') }" title="链接"><LinkIcon :size="16" /></button>
+
       <span class="divider"></span>
-      <button @click="editor.chain().focus().toggleBulletList().run()" :class="{ 'is-active': editor.isActive('bulletList') }" title="无序列表">•</button>
-      <button @click="editor.chain().focus().toggleOrderedList().run()" :class="{ 'is-active': editor.isActive('orderedList') }" title="有序列表">1.</button>
-      <button @click="editor.chain().focus().toggleTaskList().run()" :class="{ 'is-active': editor.isActive('taskList') }" title="待办列表">☑</button>
-      <button @click="editor.chain().focus().toggleBlockquote().run()" :class="{ 'is-active': editor.isActive('blockquote') }" title="引用">❝</button>
-      <button @click="editor.chain().focus().toggleCodeBlock().run()" :class="{ 'is-active': editor.isActive('codeBlock') }" title="代码块">```</button>
+
+      <button class="tb-btn" @click="editor.chain().focus().toggleBulletList().run()" :class="{ 'is-active': editor.isActive('bulletList') }" title="无序列表"><List :size="16" /></button>
+      <button class="tb-btn" @click="editor.chain().focus().toggleOrderedList().run()" :class="{ 'is-active': editor.isActive('orderedList') }" title="有序列表"><ListOrdered :size="16" /></button>
+      <button class="tb-btn" @click="editor.chain().focus().toggleTaskList().run()" :class="{ 'is-active': editor.isActive('taskList') }" title="待办列表"><ListChecks :size="16" /></button>
+      <button class="tb-btn" @click="editor.chain().focus().toggleBlockquote().run()" :class="{ 'is-active': editor.isActive('blockquote') }" title="引用"><Quote :size="16" /></button>
+      <button class="tb-btn" @click="editor.chain().focus().toggleCodeBlock().run()" :class="{ 'is-active': editor.isActive('codeBlock') }" title="代码块"><SquareCode :size="16" /></button>
+
       <span class="divider"></span>
-      <button @click="editor.chain().focus().setTextAlign('left').run()" :class="{ 'is-active': editor.isActive({ textAlign: 'left' }) }" title="左对齐">⬅</button>
-      <button @click="editor.chain().focus().setTextAlign('center').run()" :class="{ 'is-active': editor.isActive({ textAlign: 'center' }) }" title="居中">↔</button>
-      <button @click="editor.chain().focus().setTextAlign('right').run()" :class="{ 'is-active': editor.isActive({ textAlign: 'right' }) }" title="右对齐">➡</button>
+
+      <button class="tb-btn" @click="editor.chain().focus().setTextAlign('left').run()" :class="{ 'is-active': editor.isActive({ textAlign: 'left' }) }" title="左对齐"><AlignLeft :size="16" /></button>
+      <button class="tb-btn" @click="editor.chain().focus().setTextAlign('center').run()" :class="{ 'is-active': editor.isActive({ textAlign: 'center' }) }" title="居中"><AlignCenter :size="16" /></button>
+      <button class="tb-btn" @click="editor.chain().focus().setTextAlign('right').run()" :class="{ 'is-active': editor.isActive({ textAlign: 'right' }) }" title="右对齐"><AlignRight :size="16" /></button>
+
       <span class="divider"></span>
-      <button @click="handleImageUpload" title="插入图片">🖼</button>
-      <button @click="editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()" title="插入表格">▦</button>
-      <button @click="insertMermaid" title="插入图表">◈</button>
+
+      <button class="tb-btn" @click="handleImageUpload" title="插入图片"><ImageIcon :size="16" /></button>
+      <button class="tb-btn" @click="editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()" title="插入表格"><TableIcon :size="16" /></button>
+      <button class="tb-btn" @click="insertMermaid" title="插入图表"><Workflow :size="16" /></button>
+
       <span class="divider"></span>
-      <button @click="editor.chain().focus().undo().run()" :disabled="!editor.can().undo()" title="撤销">↩</button>
-      <button @click="editor.chain().focus().redo().run()" :disabled="!editor.can().redo()" title="重做">↪</button>
+
+      <el-dropdown trigger="click" @command="insertBlock">
+        <button class="tb-btn" title="插入内容块"><Plus :size="16" /></button>
+        <template #dropdown>
+          <el-dropdown-menu>
+            <el-dropdown-item v-for="item in SLASH_ITEMS" :key="item.title" :command="item.title">
+              <span class="dd-icon">{{ item.icon }}</span>{{ item.title }}
+            </el-dropdown-item>
+          </el-dropdown-menu>
+        </template>
+      </el-dropdown>
+
+      <span class="divider"></span>
+
+      <button class="tb-btn" @click="editor.chain().focus().undo().run()" :disabled="!editor.can().undo()" title="撤销 (Ctrl+Z)"><Undo2 :size="16" /></button>
+      <button class="tb-btn" @click="editor.chain().focus().redo().run()" :disabled="!editor.can().redo()" title="重做 (Ctrl+Shift+Z)"><Redo2 :size="16" /></button>
+    </div>
+
+    <!-- 表格上下文工具条 -->
+    <div class="table-bar" v-if="editor && isInTable">
+      <span class="table-label"><TableIcon :size="14" /> 表格</span>
+      <button class="tb-btn sm" @click="editor.chain().focus().addRowBefore().run()">上方行</button>
+      <button class="tb-btn sm" @click="editor.chain().focus().addRowAfter().run()">下方行</button>
+      <button class="tb-btn sm" @click="editor.chain().focus().addColumnBefore().run()">左侧列</button>
+      <button class="tb-btn sm" @click="editor.chain().focus().addColumnAfter().run()">右侧列</button>
+      <span class="divider"></span>
+      <button class="tb-btn sm" @click="editor.chain().focus().toggleHeaderRow().run()">表头行</button>
+      <button class="tb-btn sm" @click="editor.chain().focus().mergeCells().run()">合并</button>
+      <button class="tb-btn sm" @click="editor.chain().focus().splitCell().run()">拆分</button>
+      <button class="tb-btn sm danger" @click="editor.chain().focus().deleteRow().run()">删行</button>
+      <button class="tb-btn sm danger" @click="editor.chain().focus().deleteColumn().run()">删列</button>
+      <button class="tb-btn sm danger" @click="editor.chain().focus().deleteTable().run()">删表</button>
     </div>
 
     <editor-content :editor="editor" class="editor-content" />
 
     <div v-if="editor" class="editor-status">
       <span>{{ charCount }} 字</span>
-      <span class="hint">输入 “/” 可插入标题、列表、表格、代码块等</span>
+      <span class="hint">输入 “/” 插入标题、列表、表格、代码块等 · 拖动左侧 ⋮⋮ 调整块</span>
+    </div>
+
+    <!-- 块操作手柄 -->
+    <div
+      v-if="editor && handle.visible"
+      class="block-handle"
+      :style="{ top: handle.y + 'px', left: (handle.x - 34) + 'px' }"
+      @mouseenter="handle.visible = true"
+    >
+      <button class="handle-btn" title="块操作" @click.stop="toggleBlockMenu">
+        <GripVertical :size="16" />
+      </button>
+      <div
+        v-if="blockMenu.open"
+        class="block-menu"
+        :style="{ top: (handle.y + 26) + 'px', left: (handle.x - 30) + 'px' }"
+        @mouseleave="blockMenu.open = false"
+      >
+        <button class="bm-item" @click="moveBlock('up')"><ArrowUp :size="15" /> 上移</button>
+        <button class="bm-item" @click="moveBlock('down')"><ArrowDown :size="15" /> 下移</button>
+        <button class="bm-item" @click="duplicateBlock"><Copy :size="15" /> 复制</button>
+        <div class="bm-sep"></div>
+        <div class="bm-title">转换为</div>
+        <button class="bm-item" @click="changeBlock('p')"><Pilcrow :size="15" /> 正文</button>
+        <button class="bm-item" @click="changeBlock('1')"><Heading1 :size="15" /> 标题 1</button>
+        <button class="bm-item" @click="changeBlock('2')"><Heading2 :size="15" /> 标题 2</button>
+        <button class="bm-item" @click="changeBlock('3')"><Heading3 :size="15" /> 标题 3</button>
+        <button class="bm-item" @click="changeBlock('bullet')"><List :size="15" /> 无序列表</button>
+        <button class="bm-item" @click="changeBlock('ordered')"><ListOrdered :size="15" /> 有序列表</button>
+        <button class="bm-item" @click="changeBlock('task')"><ListChecks :size="15" /> 待办列表</button>
+        <button class="bm-item" @click="changeBlock('quote')"><Quote :size="15" /> 引用</button>
+        <div class="bm-sep"></div>
+        <button class="bm-item danger" @click="deleteBlock"><Trash2 :size="15" /> 删除</button>
+      </div>
     </div>
 
     <!-- 选中文本浮动工具条 -->
     <bubble-menu v-if="editor" :editor="editor" :should-show="shouldShowBubble" :tippy-options="{ duration: 100, maxWidth: 'none' }">
       <div class="bubble-bar">
-        <button @click="editor.chain().focus().toggleBold().run()" :class="{ 'is-active': editor.isActive('bold') }">B</button>
-        <button @click="editor.chain().focus().toggleItalic().run()" :class="{ 'is-active': editor.isActive('italic') }"><i>I</i></button>
-        <button @click="editor.chain().focus().toggleUnderline().run()" :class="{ 'is-active': editor.isActive('underline') }"><u>U</u></button>
-        <button @click="editor.chain().focus().toggleStrike().run()" :class="{ 'is-active': editor.isActive('strike') }"><s>S</s></button>
-        <button @click="editor.chain().focus().toggleHighlight().run()" :class="{ 'is-active': editor.isActive('highlight') }">▨</button>
-        <button @click="editor.chain().focus().toggleCode().run()" :class="{ 'is-active': editor.isActive('code') }">&lt;/&gt;</button>
-        <button @click="setLink" :class="{ 'is-active': editor.isActive('link') }">🔗</button>
-        <button @click="editor.chain().focus().unsetAllMarks().run()" title="清除格式">⌫</button>
+        <button @click="editor.chain().focus().toggleBold().run()" :class="{ 'is-active': editor.isActive('bold') }" title="加粗"><Bold :size="15" /></button>
+        <button @click="editor.chain().focus().toggleItalic().run()" :class="{ 'is-active': editor.isActive('italic') }" title="斜体"><Italic :size="15" /></button>
+        <button @click="editor.chain().focus().toggleUnderline().run()" :class="{ 'is-active': editor.isActive('underline') }" title="下划线"><UnderlineIcon :size="15" /></button>
+        <button @click="editor.chain().focus().toggleStrike().run()" :class="{ 'is-active': editor.isActive('strike') }" title="删除线"><Strikethrough :size="15" /></button>
+        <button @click="editor.chain().focus().toggleHighlight().run()" :class="{ 'is-active': editor.isActive('highlight') }" title="高亮"><Highlighter :size="15" /></button>
+        <button @click="editor.chain().focus().toggleCode().run()" :class="{ 'is-active': editor.isActive('code') }" title="行内代码"><Code :size="15" /></button>
+        <button @click="setLink" :class="{ 'is-active': editor.isActive('link') }" title="链接"><LinkIcon :size="15" /></button>
+        <span class="bubble-sep"></span>
+        <button @click="editor.chain().focus().unsetAllMarks().run()" title="清除格式"><Eraser :size="15" /></button>
       </div>
     </bubble-menu>
 
@@ -64,6 +138,7 @@
         :style="{ top: slash.y + 'px', left: slash.x + 'px' }"
         @mousedown.prevent
       >
+        <div class="slash-header">插入内容块</div>
         <div
           v-for="(item, i) in slash.items"
           :key="item.title"
@@ -73,7 +148,10 @@
           @click="pick(i)"
         >
           <span class="slash-icon">{{ item.icon }}</span>
-          <span class="slash-title">{{ item.title }}</span>
+          <span class="slash-text">
+            <span class="slash-title">{{ item.title }}</span>
+            <span class="slash-desc">{{ item.desc }}</span>
+          </span>
         </div>
       </div>
     </Teleport>
@@ -124,6 +202,12 @@ import http from '../api/http'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plugin, PluginKey } from 'prosemirror-state'
 import type { Editor } from '@tiptap/core'
+import {
+  Bold, Italic, Underline as UnderlineIcon, Strikethrough, Highlighter, Code, Link as LinkIcon,
+  List, ListOrdered, ListChecks, Quote, SquareCode, AlignLeft, AlignCenter, AlignRight,
+  Image as ImageIcon, Table as TableIcon, Workflow, Undo2, Redo2, Plus, Trash2, Copy,
+  ArrowUp, ArrowDown, Pilcrow, GripVertical, Heading1, Heading2, Heading3, Eraser,
+} from 'lucide-vue-next'
 
 const uploadAndInsert = (view: any, file: File) => {
   const formData = new FormData()
@@ -163,22 +247,15 @@ const emit = defineEmits<{
   (e: 'update:modelValue', value: string): void
 }>()
 
-// Last markdown this component emitted back to the parent.  Comparing against
-// this is much cheaper than serializing the whole document on every prop
-// change, and it prevents feedback loops without re-parsing content.
 let lastEmitted = props.modelValue
-// True while we are applying an external content load (note switch), so the
-// resulting onUpdate is not emitted back as a user edit -> no phantom saves.
 let applyingExternal = false
 
-mermaid.initialize({
-  startOnLoad: false,
-  theme: 'default',
-})
+mermaid.initialize({ startOnLoad: false, theme: 'default' })
 
 // ---------------- 斜杠(/)插入菜单 ----------------
 interface SlashItem {
   title: string
+  desc: string
   icon: string
   keywords: string[]
   action: (editor: Editor, range: { from: number; to: number }) => void
@@ -188,19 +265,19 @@ const slash = reactive({ open: false, items: [] as SlashItem[], index: 0, x: 0, 
 let slashCommand: ((item: SlashItem) => void) | null = null
 
 const SLASH_ITEMS: SlashItem[] = [
-  { title: '正文', icon: 'T', keywords: ['text', 'paragraph', '正文', '文本'], action: (e, r) => { e.chain().focus().deleteRange(r).setParagraph().run() } },
-  { title: '标题 1', icon: 'H1', keywords: ['h1', 'heading', '标题', '一级'], action: (e, r) => { e.chain().focus().deleteRange(r).toggleHeading({ level: 1 }).run() } },
-  { title: '标题 2', icon: 'H2', keywords: ['h2', 'heading', '标题', '二级'], action: (e, r) => { e.chain().focus().deleteRange(r).toggleHeading({ level: 2 }).run() } },
-  { title: '标题 3', icon: 'H3', keywords: ['h3', 'heading', '标题', '三级'], action: (e, r) => { e.chain().focus().deleteRange(r).toggleHeading({ level: 3 }).run() } },
-  { title: '无序列表', icon: '•', keywords: ['bullet', 'list', '无序', '列表'], action: (e, r) => { e.chain().focus().deleteRange(r).toggleBulletList().run() } },
-  { title: '有序列表', icon: '1.', keywords: ['ordered', 'number', '有序', '列表', '编号'], action: (e, r) => { e.chain().focus().deleteRange(r).toggleOrderedList().run() } },
-  { title: '待办列表', icon: '☑', keywords: ['todo', 'task', '待办', '任务', '勾选'], action: (e, r) => { e.chain().focus().deleteRange(r).toggleTaskList().run() } },
-  { title: '引用', icon: '❝', keywords: ['quote', 'blockquote', '引用'], action: (e, r) => { e.chain().focus().deleteRange(r).toggleBlockquote().run() } },
-  { title: '代码块', icon: '</>', keywords: ['code', '代码'], action: (e, r) => { e.chain().focus().deleteRange(r).toggleCodeBlock().run() } },
-  { title: '表格', icon: '▦', keywords: ['table', '表格'], action: (e, r) => { e.chain().focus().deleteRange(r).insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run() } },
-  { title: '分割线', icon: '―', keywords: ['hr', 'divider', '分割', '横线'], action: (e, r) => { e.chain().focus().deleteRange(r).setHorizontalRule().run() } },
-  { title: '图片', icon: '🖼', keywords: ['image', 'img', '图片', '照片'], action: (e, r) => { e.chain().focus().deleteRange(r).run(); handleImageUpload() } },
-  { title: '图表', icon: '◈', keywords: ['mermaid', 'chart', 'diagram', '图表', '流程图'], action: (e, r) => { e.chain().focus().deleteRange(r).run(); insertMermaid() } },
+  { title: '正文', desc: '普通文本段落', icon: '¶', keywords: ['text', 'paragraph', '正文', '文本'], action: (e, r) => { e.chain().focus().deleteRange(r).setParagraph().run() } },
+  { title: '标题 1', desc: '大号章节标题', icon: 'H1', keywords: ['h1', 'heading', '标题', '一级'], action: (e, r) => { e.chain().focus().deleteRange(r).toggleHeading({ level: 1 }).run() } },
+  { title: '标题 2', desc: '中号章节标题', icon: 'H2', keywords: ['h2', 'heading', '标题', '二级'], action: (e, r) => { e.chain().focus().deleteRange(r).toggleHeading({ level: 2 }).run() } },
+  { title: '标题 3', desc: '小号章节标题', icon: 'H3', keywords: ['h3', 'heading', '标题', '三级'], action: (e, r) => { e.chain().focus().deleteRange(r).toggleHeading({ level: 3 }).run() } },
+  { title: '无序列表', desc: '项目符号列表', icon: '•', keywords: ['bullet', 'list', '无序', '列表'], action: (e, r) => { e.chain().focus().deleteRange(r).toggleBulletList().run() } },
+  { title: '有序列表', desc: '带编号的列表', icon: '1.', keywords: ['ordered', 'number', '有序', '列表', '编号'], action: (e, r) => { e.chain().focus().deleteRange(r).toggleOrderedList().run() } },
+  { title: '待办列表', desc: '可勾选的任务清单', icon: '☑', keywords: ['todo', 'task', '待办', '任务', '勾选'], action: (e, r) => { e.chain().focus().deleteRange(r).toggleTaskList().run() } },
+  { title: '引用', desc: '引用段落', icon: '❝', keywords: ['quote', 'blockquote', '引用'], action: (e, r) => { e.chain().focus().deleteRange(r).toggleBlockquote().run() } },
+  { title: '代码块', desc: '带语法高亮的代码', icon: '</>', keywords: ['code', '代码'], action: (e, r) => { e.chain().focus().deleteRange(r).toggleCodeBlock().run() } },
+  { title: '表格', desc: '3×3 表格', icon: '▦', keywords: ['table', '表格'], action: (e, r) => { e.chain().focus().deleteRange(r).insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run() } },
+  { title: '分割线', desc: '水平分隔线', icon: '―', keywords: ['hr', 'divider', '分割', '横线'], action: (e, r) => { e.chain().focus().deleteRange(r).setHorizontalRule().run() } },
+  { title: '图片', desc: '上传或插入图片', icon: '▧', keywords: ['image', 'img', '图片', '照片'], action: (e, r) => { e.chain().focus().deleteRange(r).run(); handleImageUpload() } },
+  { title: '图表', desc: 'Mermaid 流程图/时序图', icon: '◈', keywords: ['mermaid', 'chart', 'diagram', '图表', '流程图'], action: (e, r) => { e.chain().focus().deleteRange(r).run(); insertMermaid() } },
 ]
 
 function filterSlash(query: string): SlashItem[] {
@@ -265,22 +342,11 @@ const SlashCommand = Extension.create({
 
 const editor = useEditor({
   extensions: [
-    StarterKit.configure({
-      codeBlock: false,
-    }),
+    StarterKit.configure({ codeBlock: false }),
     CodeBlockLowlight
-      .extend({
-        addNodeView() {
-          return VueNodeViewRenderer(CodeBlockComponent)
-        },
-      })
-      .configure({
-        lowlight,
-        defaultLanguage: 'plaintext',
-      }),
-    Placeholder.configure({
-      placeholder: '开始写笔记... 输入 “/” 插入内容块',
-    }),
+      .extend({ addNodeView() { return VueNodeViewRenderer(CodeBlockComponent) } })
+      .configure({ lowlight, defaultLanguage: 'plaintext' }),
+    Placeholder.configure({ placeholder: '开始写笔记... 输入 “/” 插入内容块' }),
     Image.extend({
       addProseMirrorPlugins() {
         return [
@@ -316,13 +382,8 @@ const editor = useEditor({
           }),
         ]
       },
-    }).configure({
-      inline: true,
-      allowBase64: true,
-    }),
-    Table.configure({
-      resizable: true,
-    }),
+    }).configure({ inline: true, allowBase64: true }),
+    Table.configure({ resizable: true }),
     TableRow,
     TableCell,
     TableHeader,
@@ -340,27 +401,17 @@ const editor = useEditor({
     Typography,
     CharacterCount,
     SlashCommand,
-    Markdown.configure({
-      html: true,
-      breaks: true,
-      linkify: true,
-    }),
+    Markdown.configure({ html: true, breaks: true, linkify: true }),
   ],
   content: props.modelValue,
   onUpdate: ({ editor }) => {
     const markdown = editor.storage.markdown.getMarkdown()
     lastEmitted = markdown
     if (!applyingExternal) emit('update:modelValue', markdown)
-    nextTick(() => {
-      scheduleMermaid()
-      disableSpellcheck()
-    })
+    nextTick(() => { scheduleMermaid(); disableSpellcheck() })
   },
   onCreate: () => {
-    nextTick(() => {
-      scheduleMermaid()
-      disableSpellcheck()
-    })
+    nextTick(() => { scheduleMermaid(); disableSpellcheck() })
   },
 })
 
@@ -374,6 +425,7 @@ const headingValue = computed(() => {
 })
 
 const charCount = computed(() => editor.value?.storage.characterCount.characters() ?? 0)
+const isInTable = computed(() => editor.value?.isActive('table') ?? false)
 
 function setHeading(ev: Event) {
   const value = (ev.target as HTMLSelectElement).value
@@ -381,6 +433,118 @@ function setHeading(ev: Event) {
   if (!e) return
   if (value === 'p') e.chain().focus().setParagraph().run()
   else e.chain().focus().toggleHeading({ level: Number(value) as 1 | 2 | 3 }).run()
+}
+
+function insertBlock(title: string) {
+  const item = SLASH_ITEMS.find(i => i.title === title)
+  const e = editor.value
+  if (!item || !e) return
+  const { from, to } = e.state.selection
+  item.action(e, { from, to })
+}
+
+// ---------------- 块操作手柄 ----------------
+const handle = reactive({ visible: false, x: 0, y: 0, pos: 0 })
+const blockMenu = reactive({ open: false })
+
+function onEditorMouseMove(ev: MouseEvent) {
+  const target = ev.target as HTMLElement
+  if (target.closest('.block-handle') || target.closest('.block-menu')) return
+  const e = editor.value
+  if (!e) return
+  const el = target.closest('.ProseMirror > *') as HTMLElement | null
+  if (!el || !el.parentElement || !el.parentElement.classList.contains('ProseMirror')) {
+    handle.visible = false
+    blockMenu.open = false
+    return
+  }
+  const rect = el.getBoundingClientRect()
+  handle.x = rect.left
+  handle.y = rect.top
+  try {
+    handle.pos = e.view.posAtDOM(el, 0)
+  } catch {
+    handle.visible = false
+    return
+  }
+  handle.visible = true
+}
+
+function onEditorMouseLeave() {
+  window.setTimeout(() => {
+    if (!blockMenu.open) handle.visible = false
+  }, 150)
+}
+
+function toggleBlockMenu() {
+  blockMenu.open = !blockMenu.open
+}
+
+interface BlockRange { start: number; end: number; index: number; node: any }
+
+function topRange(pos: number): BlockRange | null {
+  const e = editor.value
+  if (!e) return null
+  const doc = e.state.doc
+  const $pos = doc.resolve(Math.max(0, Math.min(pos, doc.content.size)))
+  if ($pos.depth === 0) return null
+  const start = $pos.before(1)
+  const end = $pos.after(1)
+  const index = $pos.index(0)
+  const node = doc.child(index)
+  return { start, end, index, node }
+}
+
+function moveBlock(dir: 'up' | 'down') {
+  const e = editor.value
+  const r = topRange(handle.pos)
+  if (!e || !r) return
+  const doc = e.state.doc
+  const tr = e.state.tr
+  if (dir === 'up') {
+    if (r.index === 0) return
+    const prev = doc.child(r.index - 1)
+    tr.delete(r.start, r.end)
+    tr.insert(r.start - prev.nodeSize, r.node)
+  } else {
+    if (r.index >= doc.childCount - 1) return
+    const next = doc.child(r.index + 1)
+    tr.delete(r.start, r.end)
+    tr.insert(r.start + next.nodeSize, r.node)
+  }
+  e.view.dispatch(tr)
+  blockMenu.open = false
+}
+
+function duplicateBlock() {
+  const e = editor.value
+  const r = topRange(handle.pos)
+  if (!e || !r) return
+  e.view.dispatch(e.state.tr.insert(r.end, r.node))
+  blockMenu.open = false
+}
+
+function deleteBlock() {
+  const e = editor.value
+  const r = topRange(handle.pos)
+  if (!e || !r) return
+  e.view.dispatch(e.state.tr.delete(r.start, r.end))
+  blockMenu.open = false
+  handle.visible = false
+}
+
+function changeBlock(kind: string) {
+  const e = editor.value
+  const r = topRange(handle.pos)
+  if (!e || !r) return
+  const chain = e.chain().focus().setTextSelection({ from: r.start + 1, to: Math.max(r.start + 1, r.end - 1) })
+  if (kind === 'p') chain.setParagraph().run()
+  else if (kind === '1' || kind === '2' || kind === '3') chain.setHeading({ level: Number(kind) as 1 | 2 | 3 }).run()
+  else if (kind === 'bullet') chain.toggleBulletList().run()
+  else if (kind === 'ordered') chain.toggleOrderedList().run()
+  else if (kind === 'task') chain.toggleTaskList().run()
+  else if (kind === 'quote') chain.toggleBlockquote().run()
+  blockMenu.open = false
 }
 
 const shouldShowBubble = ({ editor: e, from, to }: any) => {
@@ -416,19 +580,14 @@ watch(() => props.modelValue, (newValue) => {
   if (!editor.value || lastEmitted === newValue) return
   const apply = () => {
     if (!editor.value) return
-    if (props.modelValue !== newValue) return // a newer note arrived meanwhile
+    if (props.modelValue !== newValue) return
     if (lastEmitted === newValue) return
     applyingExternal = true
     editor.value.commands.setContent(newValue || '')
     applyingExternal = false
     mermaidCache.clear()
-    nextTick(() => {
-      scheduleMermaid()
-      disableSpellcheck()
-    })
+    nextTick(() => { scheduleMermaid(); disableSpellcheck() })
   }
-  // Parsing large markdown is synchronous and can take tens of ms; defer it
-  // to the next idle slot so switching notes never blocks the UI.
   if (typeof requestIdleCallback !== 'undefined') {
     requestIdleCallback(apply, { timeout: 300 })
   } else {
@@ -449,23 +608,17 @@ const renderMermaid = async () => {
     clearTimeout(mermaidTimer)
     mermaidTimer = null
   }
-
   const editorEl = document.querySelector('.ProseMirror')
   if (!editorEl) return
-
   const mermaidBlocks = editorEl.querySelectorAll('.language-mermaid')
-
   for (const block of mermaidBlocks) {
     const codeBlock = block.querySelector('code')
     if (!codeBlock) continue
-
     const codeText = codeBlock.textContent || ''
     if (!codeText.trim()) continue
-
     const diagramDiv = block.querySelector('.mermaid-diagram')
     const cachedSvg = mermaidCache.get(codeText)
     if (diagramDiv && cachedSvg && diagramDiv.innerHTML === cachedSvg) continue
-
     try {
       let svg = cachedSvg
       if (!svg) {
@@ -474,7 +627,6 @@ const renderMermaid = async () => {
         svg = rendered.svg
         mermaidCache.set(codeText, svg)
       }
-
       let targetDiv = diagramDiv
       if (!targetDiv) {
         targetDiv = document.createElement('div')
@@ -491,7 +643,6 @@ const renderMermaid = async () => {
 const disableSpellcheck = () => {
   const editorEl = document.querySelector('.ProseMirror')
   if (!editorEl) return
-
   editorEl.setAttribute('spellcheck', 'false')
   editorEl.setAttribute('autocorrect', 'off')
   editorEl.setAttribute('autocomplete', 'off')
@@ -504,7 +655,6 @@ function handleImageUpload() {
   input.onchange = async (e: Event) => {
     const file = (e.target as HTMLInputElement).files?.[0]
     if (!file || !editor.value) return
-
     try {
       const formData = new FormData()
       formData.append('file', file)
@@ -522,16 +672,13 @@ function insertMermaid() {
     A[开始] --> B{判断}
     B -->|Yes| C[成功]
     B -->|No| D[失败]`
-
   editor.value?.chain().focus().toggleCodeBlock().run()
-
   const { $from } = editor.value!.state.selection
   const node = $from.node()
   if (node.type.name === 'codeBlock') {
     editor.value?.chain().focus().updateAttributes('codeBlock', { language: 'mermaid' }).run()
     editor.value?.chain().focus().insertContent(template).run()
   }
-
   scheduleMermaid()
 }
 
@@ -547,65 +694,118 @@ onBeforeUnmount(() => {
 <style scoped>
 .tiptap-editor {
   width: 100%;
+  position: relative;
 }
 
 .editor-toolbar {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 8px 10px;
-  background: #f8f9fa;
-  border: 1px solid #eef0f3;
-  border-radius: 10px;
+  gap: 2px;
+  padding: 6px 8px;
+  background: rgba(248, 249, 251, 0.9);
+  backdrop-filter: blur(6px);
+  border: 1px solid #eceef2;
+  border-radius: 12px;
   margin-bottom: 18px;
   flex-wrap: wrap;
   position: sticky;
   top: 0;
-  z-index: 5;
+  z-index: 20;
 }
 
-.editor-toolbar button {
-  padding: 6px 9px;
+.tb-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px;
+  min-width: 30px;
+  height: 30px;
   border: none;
   background: transparent;
-  border-radius: 6px;
+  border-radius: 7px;
   cursor: pointer;
-  font-size: 14px;
-  font-weight: 500;
-  color: #374151;
-  transition: all 0.15s;
+  color: #4b5563;
+  transition: background 0.15s, color 0.15s;
   line-height: 1;
 }
 
-.editor-toolbar button:hover:not(:disabled) {
-  background: #e5e7eb;
+.tb-btn.sm {
+  font-size: 12px;
+  padding: 4px 8px;
+  height: 26px;
+  min-width: auto;
+  color: #4b5563;
+  background: #fff;
+  border: 1px solid #e5e7eb;
 }
 
-.editor-toolbar button.is-active {
-  background: #3b82f6;
-  color: #fff;
+.tb-btn:hover:not(:disabled) {
+  background: #e9ecf1;
+  color: #111827;
 }
 
-.editor-toolbar button:disabled {
+.tb-btn.sm:hover:not(:disabled) {
+  background: #f3f4f6;
+}
+
+.tb-btn.is-active {
+  background: #e0edff;
+  color: #1d4ed8;
+}
+
+.tb-btn:disabled {
   opacity: 0.35;
   cursor: default;
 }
 
+.tb-btn.danger {
+  color: #dc2626;
+  border-color: #fecaca;
+}
+
+.tb-btn.danger:hover:not(:disabled) {
+  background: #fef2f2;
+}
+
 .tb-select {
   padding: 5px 8px;
+  height: 30px;
   border: 1px solid #e5e7eb;
-  border-radius: 6px;
+  border-radius: 7px;
   background: #fff;
   font-size: 13px;
   color: #374151;
   cursor: pointer;
+  outline: none;
 }
 
 .editor-toolbar .divider {
   width: 1px;
-  height: 20px;
+  height: 18px;
   background: #e5e7eb;
-  margin: 0 6px;
+  margin: 0 5px;
+}
+
+.table-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  padding: 6px 10px;
+  margin: -8px 0 16px;
+  background: #f0f7ff;
+  border: 1px solid #d6e6ff;
+  border-radius: 10px;
+}
+
+.table-bar .table-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: #2563eb;
+  font-weight: 600;
+  margin-right: 6px;
 }
 
 .editor-status {
@@ -629,39 +829,50 @@ onBeforeUnmount(() => {
   outline: none;
   min-height: 400px;
   font-size: 16px;
-  line-height: 1.75;
+  line-height: 1.78;
   color: #1f2937;
+  caret-color: #2563eb;
+}
+
+.editor-content :deep(.ProseMirror ::selection) {
+  background: #dbeafe;
+}
+
+.editor-content :deep(.ProseMirror > * + *) {
+  margin-top: 0.55em;
 }
 
 .editor-content :deep(.ProseMirror p) {
-  margin: 10px 0;
+  margin: 0.4em 0;
 }
 
 .editor-content :deep(.ProseMirror h1) {
-  font-size: 28px;
+  font-size: 30px;
   font-weight: 700;
-  margin: 26px 0 14px;
+  line-height: 1.3;
+  margin: 1.1em 0 0.4em;
+  letter-spacing: -0.01em;
 }
 
 .editor-content :deep(.ProseMirror h2) {
-  font-size: 22px;
-  font-weight: 600;
-  margin: 22px 0 12px;
+  font-size: 23px;
+  font-weight: 650;
+  margin: 1em 0 0.35em;
 }
 
 .editor-content :deep(.ProseMirror h3) {
-  font-size: 18px;
+  font-size: 19px;
   font-weight: 600;
-  margin: 16px 0 10px;
+  margin: 0.9em 0 0.3em;
 }
 
 .editor-content :deep(.ProseMirror code) {
   background: #f3f4f6;
   padding: 2px 6px;
-  border-radius: 4px;
+  border-radius: 5px;
   font-family: 'Fira Code', 'Consolas', monospace;
-  font-size: 0.9em;
-  color: #e11d48;
+  font-size: 0.88em;
+  color: #db2777;
 }
 
 .editor-content :deep(.ProseMirror mark) {
@@ -673,20 +884,21 @@ onBeforeUnmount(() => {
 .editor-content :deep(.ProseMirror a) {
   color: #2563eb;
   text-decoration: underline;
+  text-underline-offset: 2px;
   cursor: pointer;
 }
 
 .editor-content :deep(.ProseMirror hr) {
   border: none;
   border-top: 1px solid #e5e7eb;
-  margin: 22px 0;
+  margin: 1.4em 0;
 }
 
 .editor-content :deep(.ProseMirror pre) {
   background: #282c34;
   color: #abb2bf;
   padding: 16px 20px;
-  border-radius: 8px;
+  border-radius: 10px;
   overflow-x: auto;
   font-family: 'Fira Code', 'Consolas', monospace;
   font-size: 14px;
@@ -703,38 +915,22 @@ onBeforeUnmount(() => {
 }
 
 .editor-content :deep(.ProseMirror pre code .hljs-comment),
-.editor-content :deep(.ProseMirror pre code .hljs-quote) {
-  color: #5c6370;
-  font-style: italic;
-}
-
+.editor-content :deep(.ProseMirror pre code .hljs-quote) { color: #5c6370; font-style: italic; }
 .editor-content :deep(.ProseMirror pre code .hljs-doctag),
 .editor-content :deep(.ProseMirror pre code .hljs-keyword),
-.editor-content :deep(.ProseMirror pre code .hljs-formula) {
-  color: #c678dd;
-}
-
+.editor-content :deep(.ProseMirror pre code .hljs-formula) { color: #c678dd; }
 .editor-content :deep(.ProseMirror pre code .hljs-section),
 .editor-content :deep(.ProseMirror pre code .hljs-name),
 .editor-content :deep(.ProseMirror pre code .hljs-tag),
 .editor-content :deep(.ProseMirror pre code .hljs-selector-tag),
 .editor-content :deep(.ProseMirror pre code .hljs-deletion),
-.editor-content :deep(.ProseMirror pre code .hljs-subst) {
-  color: #e06c75;
-}
-
-.editor-content :deep(.ProseMirror pre code .hljs-literal) {
-  color: #56b6c2;
-}
-
+.editor-content :deep(.ProseMirror pre code .hljs-subst) { color: #e06c75; }
+.editor-content :deep(.ProseMirror pre code .hljs-literal) { color: #56b6c2; }
 .editor-content :deep(.ProseMirror pre code .hljs-string),
 .editor-content :deep(.ProseMirror pre code .hljs-regexp),
 .editor-content :deep(.ProseMirror pre code .hljs-addition),
 .editor-content :deep(.ProseMirror pre code .hljs-attribute),
-.editor-content :deep(.ProseMirror pre code .hljs-meta .hljs-string) {
-  color: #98c379;
-}
-
+.editor-content :deep(.ProseMirror pre code .hljs-meta .hljs-string) { color: #98c379; }
 .editor-content :deep(.ProseMirror pre code .hljs-attr),
 .editor-content :deep(.ProseMirror pre code .hljs-variable),
 .editor-content :deep(.ProseMirror pre code .hljs-template-variable),
@@ -742,39 +938,28 @@ onBeforeUnmount(() => {
 .editor-content :deep(.ProseMirror pre code .hljs-selector-class),
 .editor-content :deep(.ProseMirror pre code .hljs-selector-attr),
 .editor-content :deep(.ProseMirror pre code .hljs-selector-pseudo),
-.editor-content :deep(.ProseMirror pre code .hljs-number) {
-  color: #d19a66;
-}
-
+.editor-content :deep(.ProseMirror pre code .hljs-number) { color: #d19a66; }
 .editor-content :deep(.ProseMirror pre code .hljs-symbol),
 .editor-content :deep(.ProseMirror pre code .hljs-bullet),
 .editor-content :deep(.ProseMirror pre code .hljs-link),
 .editor-content :deep(.ProseMirror pre code .hljs-meta),
 .editor-content :deep(.ProseMirror pre code .hljs-selector-id),
-.editor-content :deep(.ProseMirror pre code .hljs-title) {
-  color: #61afef;
-}
-
+.editor-content :deep(.ProseMirror pre code .hljs-title) { color: #61afef; }
 .editor-content :deep(.ProseMirror pre code .hljs-built_in),
 .editor-content :deep(.ProseMirror pre code .hljs-title.class_),
-.editor-content :deep(.ProseMirror pre code .hljs-class .hljs-title) {
-  color: #e6c07b;
-}
-
-.editor-content :deep(.ProseMirror pre code .hljs-emphasis) {
-  font-style: italic;
-}
-
-.editor-content :deep(.ProseMirror pre code .hljs-strong) {
-  font-weight: bold;
-}
+.editor-content :deep(.ProseMirror pre code .hljs-class .hljs-title) { color: #e6c07b; }
+.editor-content :deep(.ProseMirror pre code .hljs-emphasis) { font-style: italic; }
+.editor-content :deep(.ProseMirror pre code .hljs-strong) { font-weight: bold; }
 
 .editor-content :deep(.ProseMirror ul),
 .editor-content :deep(.ProseMirror ol) {
   padding-left: 24px;
 }
 
-/* 待办列表 */
+.editor-content :deep(.ProseMirror li + li) {
+  margin-top: 3px;
+}
+
 .editor-content :deep(.ProseMirror ul[data-type='taskList']) {
   list-style: none;
   padding-left: 4px;
@@ -800,18 +985,22 @@ onBeforeUnmount(() => {
   width: 16px;
   height: 16px;
   cursor: pointer;
+  accent-color: #2563eb;
 }
 
 .editor-content :deep(.ProseMirror blockquote) {
-  border-left: 4px solid #3b82f6;
-  padding-left: 16px;
-  color: #6b7280;
+  border-left: 3px solid #93c5fd;
+  padding: 2px 0 2px 14px;
+  color: #4b5563;
   margin: 14px 0;
+  background: #f8fafc;
+  border-radius: 0 6px 6px 0;
 }
 
 .editor-content :deep(.ProseMirror img) {
   max-width: 100%;
-  border-radius: 8px;
+  border-radius: 10px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.06);
 }
 
 .editor-content :deep(.ProseMirror table) {
@@ -819,6 +1008,7 @@ onBeforeUnmount(() => {
   margin: 16px 0;
   width: 100%;
   table-layout: fixed;
+  overflow: hidden;
 }
 
 .editor-content :deep(.ProseMirror th),
@@ -831,7 +1021,7 @@ onBeforeUnmount(() => {
 }
 
 .editor-content :deep(.ProseMirror th) {
-  background: #f9fafb;
+  background: #f8fafc;
   font-weight: 600;
 }
 
@@ -856,7 +1046,7 @@ onBeforeUnmount(() => {
 .editor-content :deep(.ProseMirror .mermaid-diagram) {
   background: #fff;
   padding: 20px;
-  border-radius: 8px;
+  border-radius: 10px;
   margin-top: 16px;
   text-align: center;
 }
@@ -872,85 +1062,152 @@ onBeforeUnmount(() => {
 .editor-content :deep(.ProseMirror p.is-editor-empty:first-child::before) {
   content: attr(data-placeholder);
   float: left;
-  color: #adb5bd;
+  color: #b6bcc6;
   pointer-events: none;
   height: 0;
 }
 </style>
 
 <style>
-/* 浮动工具条与斜杠菜单需为全局样式(挂在 body 上,scoped 无法命中) */
+/* 浮动工具条、斜杠菜单、块手柄需全局样式(挂载在 body / 定位到视口) */
 .bubble-bar {
   display: flex;
   align-items: center;
-  gap: 2px;
-  padding: 4px 6px;
+  gap: 1px;
+  padding: 3px 4px;
   background: #1f2937;
-  border-radius: 8px;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
+  border-radius: 9px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
 }
 
 .bubble-bar button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border: none;
   background: transparent;
   color: #e5e7eb;
-  padding: 5px 8px;
-  border-radius: 5px;
+  padding: 5px 6px;
+  border-radius: 6px;
   cursor: pointer;
-  font-size: 13px;
   line-height: 1;
 }
 
-.bubble-bar button:hover {
-  background: #374151;
-}
-
-.bubble-bar button.is-active {
-  background: #3b82f6;
-  color: #fff;
-}
+.bubble-bar button:hover { background: #374151; }
+.bubble-bar button.is-active { background: #3b82f6; color: #fff; }
+.bubble-bar .bubble-sep { width: 1px; height: 16px; background: #4b5563; margin: 0 3px; }
 
 .slash-menu {
   position: fixed;
   z-index: 9999;
-  width: 220px;
-  max-height: 320px;
+  width: 260px;
+  max-height: 340px;
   overflow-y: auto;
   background: #fff;
-  border: 1px solid #e5e7eb;
-  border-radius: 10px;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.16);
+  border: 1px solid #eceef2;
+  border-radius: 12px;
+  box-shadow: 0 16px 40px rgba(15, 23, 42, 0.18);
   padding: 6px;
+}
+
+.slash-header {
+  font-size: 11px;
+  color: #9ca3af;
+  padding: 6px 10px 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 .slash-item {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 8px 10px;
-  border-radius: 7px;
+  padding: 7px 10px;
+  border-radius: 8px;
   cursor: pointer;
   color: #374151;
 }
 
-.slash-item.active {
-  background: #eff6ff;
-  color: #1d4ed8;
-}
+.slash-item.active { background: #eff6ff; }
 
 .slash-item .slash-icon {
-  width: 26px;
-  height: 26px;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   background: #f3f4f6;
-  border-radius: 6px;
-  font-size: 13px;
+  border-radius: 7px;
+  font-size: 12px;
   font-weight: 600;
+  color: #4b5563;
 }
 
-.slash-item .slash-title {
-  font-size: 14px;
+.slash-item.active .slash-icon { background: #dbeafe; color: #1d4ed8; }
+
+.slash-item .slash-text { display: flex; flex-direction: column; min-width: 0; }
+.slash-item .slash-title { font-size: 14px; line-height: 1.3; }
+.slash-item .slash-desc { font-size: 11px; color: #9ca3af; line-height: 1.3; }
+
+.dd-icon { display: inline-block; width: 20px; }
+
+.block-handle {
+  position: fixed;
+  z-index: 30;
+  display: flex;
+  align-items: flex-start;
 }
+
+.block-handle .handle-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  background: transparent;
+  color: #cbd0d8;
+  border-radius: 6px;
+  cursor: grab;
+}
+
+.block-handle .handle-btn:hover { background: #eef1f5; color: #6b7280; }
+
+.block-menu {
+  position: fixed;
+  z-index: 40;
+  min-width: 168px;
+  background: #fff;
+  border: 1px solid #eceef2;
+  border-radius: 10px;
+  box-shadow: 0 14px 36px rgba(15, 23, 42, 0.16);
+  padding: 5px;
+}
+
+.block-menu .bm-title {
+  font-size: 11px;
+  color: #9ca3af;
+  padding: 5px 10px 2px;
+}
+
+.block-menu .bm-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 7px 10px;
+  border: none;
+  background: transparent;
+  border-radius: 7px;
+  cursor: pointer;
+  color: #374151;
+  font-size: 13px;
+  text-align: left;
+}
+
+.block-menu .bm-item:hover { background: #f3f4f6; }
+.block-menu .bm-item.danger { color: #dc2626; }
+.block-menu .bm-item.danger:hover { background: #fef2f2; }
+.block-menu .bm-sep { height: 1px; background: #f0f1f4; margin: 4px 0; }
 </style>
