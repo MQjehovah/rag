@@ -119,3 +119,18 @@ body {
 .el-empty__description p {
   color: var(--text-3);
 }
+
+/* 键盘可达性: 聚焦环 */
+:focus-visible {
+  outline: 2px solid var(--primary, #4f46e5);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* 平滑过渡(减少突兀) */
+.el-button,
+.el-input__wrapper,
+.el-dropdown-menu__item,
+.nav-link {
+  transition: background-color 0.15s, color 0.15s, border-color 0.15s;
+}

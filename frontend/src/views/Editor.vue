@@ -200,14 +200,18 @@
           <div class="topbar-actions">
             <button class="icon-btn" :class="{ 'is-on': commentsOpen }" title="评论" @click="toggleComments">💬<span v-if="comments.length" class="badge">{{ comments.length }}</span></button>
             <button class="icon-btn" :class="{ 'is-on': outlineOpen }" title="大纲" @click="outlineOpen = !outlineOpen; if (outlineOpen) commentsOpen = false">☰</button>
-            <span class="save-badge" :class="saveStatus">{{ saveStatus === 'saved' ? '已保存' : saveStatus === 'saving' ? '保存中…' : '未保存' }}</span>
-            <el-button size="small" @click="importDialogVisible = true">导入</el-button>
-            <el-button size="small" :loading="organizing" @click="handleOrganize">{{ organizing ? '整理中…' : '自动整理' }}</el-button>
+            <span
+              class="save-dot"
+              :class="saveStatus"
+              :title="saveStatus === 'saved' ? '已保存' : saveStatus === 'saving' ? '保存中…' : '未保存'"
+            ></span>
             <el-dropdown v-if="currentPage" trigger="click" @command="onPageMenu">
               <button class="icon-btn" title="页面设置">⋯</button>
               <template #dropdown>
                 <el-dropdown-menu>
-                  <el-dropdown-item command="fav">{{ isFav ? '★ 取消收藏' : '☆ 收藏' }}</el-dropdown-item>
+                  <el-dropdown-item command="import">导入知识</el-dropdown-item>
+                  <el-dropdown-item command="organize">{{ organizing ? '整理中…' : '自动整理' }}</el-dropdown-item>
+                  <el-dropdown-item command="fav" divided>{{ isFav ? '★ 取消收藏' : '☆ 收藏' }}</el-dropdown-item>
                   <el-dropdown-item command="link">复制链接</el-dropdown-item>
                   <el-dropdown-item command="dup">创建副本</el-dropdown-item>
                   <el-dropdown-item command="export">导出 Markdown</el-dropdown-item>
@@ -1388,6 +1392,8 @@ const onPageMenu = (cmd: string) => {
   else if (cmd === 'export-pdf') exportPdf()
   else if (cmd === 'template') saveAsTemplate()
   else if (cmd.startsWith('view-')) setViewType(cmd.slice(5))
+  else if (cmd === 'import') importDialogVisible.value = true
+  else if (cmd === 'organize') handleOrganize()
   else if (cmd === 'delete') deleteCurrent()
 }
 
@@ -1887,6 +1893,27 @@ const handleKeydown = (e: KeyboardEvent) => {
     e.preventDefault()
     openQuick()
   }
+  if (e.key === 'Escape') {
+    if (quickOpen.value) { quickOpen.value = false; return }
+    if (iconPickerVisible.value || coverPickerVisible.value) {
+      iconPickerVisible.value = false
+      coverPickerVisible.value = false
+      return
+    }
+    if (commentsOpen.value) { commentsOpen.value = false; return }
+    if (outlineOpen.value) { outlineOpen.value = false; return }
+  }
+}
+
+// 点击空白处关闭图标/封面选择器
+const onDocMousedown = (e: MouseEvent) => {
+  const el = e.target as HTMLElement
+  if (iconPickerVisible.value && !el.closest('.icon-picker') && !el.closest('.page-icon-btn')) {
+    iconPickerVisible.value = false
+  }
+  if (coverPickerVisible.value && !el.closest('.cover-picker') && !el.closest('.cover-add') && !el.closest('.cover-actions')) {
+    coverPickerVisible.value = false
+  }
 }
 
 const selectTextInElement = (root: Element, needles: string[]): boolean => {
@@ -1950,6 +1977,7 @@ onMounted(async () => {
   // 探测协同服务: 可用才进入协同模式(否则保持单机编辑)
   http.get('/api/collab/health').then(() => { collabEnabled.value = true }).catch(() => { collabEnabled.value = false })
   window.addEventListener('keydown', handleKeydown)
+  document.addEventListener('mousedown', onDocMousedown)
   const targetId = route.query.page as string | undefined
   if (targetId) {
     await openPageById(targetId)
@@ -1963,6 +1991,7 @@ onBeforeUnmount(() => {
     saveTimeout = null
   }
   window.removeEventListener('keydown', handleKeydown)
+  document.removeEventListener('mousedown', onDocMousedown)
 })
 </script>
 
@@ -2886,4 +2915,36 @@ html, body, #app { height: 100%; }
 .db-cal-cell.empty { border: none; }
 .db-cal-day { color: #b9b9b6; margin-bottom: 2px; }
 .db-cal-item { background: #eef0ff; color: #4f46e5; border-radius: 5px; padding: 1px 5px; margin-bottom: 2px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---- 交互细节打磨 ---- */
+.save-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #d3d3d0;
+  margin: 0 4px;
+  flex: 0 0 auto;
+}
+.save-dot.saved { background: #10b981; }
+.save-dot.saving { background: #f59e0b; animation: dotPulse 1s infinite; }
+.save-dot.unsaved { background: #ef4444; }
+@keyframes dotPulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+@keyframes panelIn {
+  from { opacity: 0; transform: translateX(8px); }
+  to { opacity: 1; transform: none; }
+}
+.outline-panel, .comments-panel { animation: panelIn 0.18s ease; }
+
+.db-row:not(.db-row-head):hover { background: #fafafe; }
+.db-card { transition: box-shadow 0.15s, border-color 0.15s, transform 0.15s; }
+.db-card:hover { box-shadow: 0 6px 16px rgba(16, 24, 40, 0.08); transform: translateY(-1px); }
+.db-col.drag-over { outline: 2px dashed #cdcbf8; }
+
+/* 分区标题 hover 显示新建 */
+.side-section { border-radius: 6px; }
+.side-section:hover { background: #efefed; }
+
+/* 统一过渡 */
+.tb-btn, .icon-btn, .nav-link, .page-item, .notebook-info { transition: background 0.14s, color 0.14s; }
 </style>
