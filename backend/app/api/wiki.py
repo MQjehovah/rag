@@ -12,7 +12,7 @@ from app.api.deps import get_db
 from app.api.search_common import get_visible_page_ids, visible_wiki_filter
 from app.core.jwt_utils import get_current_user
 from app.core.rag import EmbeddingService
-from app.core.wiki import build_wiki, refresh_stale_wiki
+from app.core.wiki import build_wiki, ensure_default_space, refresh_stale_wiki, resolve_space_id
 from app.core.wiki_embedding import embed_wiki_pages
 from app.core.wiki_search import search_wiki
 from app.models.database import Page, WikiPage, WikiSpace
@@ -89,7 +89,8 @@ def _space_visible(space: WikiSpace, current_user) -> bool:
 @router.get("/spaces")
 def list_spaces(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     spaces = db.query(WikiSpace).order_by(WikiSpace.position.asc(), WikiSpace.created_at.asc()).all()
-    spaces = [s for s in spaces if _space_visible(s, current_user)]
+    default_id = ensure_default_space(db).id
+    spaces = [s for s in spaces if _space_visible(s, current_user) and s.id != default_id]
     # 计数(按空间)
     counts: Dict[str, int] = {}
     for (sid,) in db.query(WikiPage.space_id).filter(visible_wiki_filter(current_user)).all():
@@ -106,7 +107,7 @@ def list_spaces(db: Session = Depends(get_db), current_user=Depends(get_current_
             }
             for s in spaces
         ],
-        "default_count": counts.get("", 0),
+        "default_count": counts.get(default_id, 0) + counts.get("", 0),
         "total": sum(counts.values()),
     }
 
@@ -160,7 +161,7 @@ def move_wiki_space(page_id: str, data: WikiSpaceMove, db: Session = Depends(get
     page = db.query(WikiPage).filter(WikiPage.id == page_id).first()
     if not page or not _wiki_visible(page, current_user):
         raise HTTPException(status_code=404, detail="Wiki 页面不存在")
-    page.space_id = data.space_id or None
+    page.space_id = resolve_space_id(db, data.space_id)
     db.commit()
     return {"message": "已移动", "id": page.id, "space_id": page.space_id}
 
@@ -173,21 +174,21 @@ def create_wiki_page(data: WikiPageCreate, db: Session = Depends(get_db), curren
         parent = db.query(WikiPage).filter(WikiPage.id == parent_id).first()
         if not parent:
             parent_id = None
+    space_id = resolve_space_id(db, data.space_id)
     group_id = None
-    if data.space_id:
-        space = db.query(WikiSpace).filter(WikiSpace.id == data.space_id).first()
-        if space:
-            group_id = space.group_id
+    space = db.query(WikiSpace).filter(WikiSpace.id == space_id).first()
+    if space:
+        group_id = space.group_id
     if group_id is None and current_user["groups"]:
         group_id = current_user["groups"][0]
     q = db.query(WikiPage).filter(
         WikiPage.parent_id == parent_id if parent_id else WikiPage.parent_id.is_(None)
     )
-    q = q.filter(WikiPage.space_id == data.space_id) if data.space_id else q.filter(WikiPage.space_id.is_(None))
+    q = q.filter(WikiPage.space_id == space_id)
     pos = q.count()
     page = WikiPage(
         id=str(uuid.uuid4()), title=(data.title or "无标题"), content="", summary="",
-        space_id=data.space_id or None, parent_id=parent_id, position=pos, group_id=group_id,
+        space_id=space_id, parent_id=parent_id, position=pos, group_id=group_id,
     )
     db.add(page)
     db.commit()
@@ -230,22 +231,11 @@ def move_wiki_page(page_id: str, data: WikiPageMove, db: Session = Depends(get_d
     return {"message": "ok"}
 
 
-@router.delete("/{page_id}")
-def delete_wiki_page(page_id: str, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
-    page = db.query(WikiPage).filter(WikiPage.id == page_id).first()
-    if not page or not _wiki_visible(page, current_user):
-        raise HTTPException(status_code=404, detail="Wiki 页面不存在")
-    db.query(WikiPage).filter(WikiPage.parent_id == page_id).update({WikiPage.parent_id: None})
-    db.delete(page)
-    db.commit()
-    return {"message": "已删除"}
-
-
 @router.get("")
 def list_wiki(space_id: str | None = None, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     query = db.query(WikiPage).filter(visible_wiki_filter(current_user))
     if space_id == "default":
-        query = query.filter(WikiPage.space_id.is_(None))
+        query = query.filter(WikiPage.space_id == ensure_default_space(db).id)
     elif space_id:
         query = query.filter(WikiPage.space_id == space_id)
     pages = query.order_by(WikiPage.position.asc(), WikiPage.title).all()
@@ -314,6 +304,17 @@ async def search_wiki_endpoint(
         ],
         "total": len(hits),
     }
+
+
+@router.delete("/{page_id}")
+def delete_wiki_page(page_id: str, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    page = db.query(WikiPage).filter(WikiPage.id == page_id).first()
+    if not page or not _wiki_visible(page, current_user):
+        raise HTTPException(status_code=404, detail="Wiki 页面不存在")
+    db.query(WikiPage).filter(WikiPage.parent_id == page_id).update({WikiPage.parent_id: None})
+    db.delete(page)
+    db.commit()
+    return {"message": "已删除"}
 
 
 @router.get("/{page_id}")

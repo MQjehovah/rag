@@ -27,6 +27,12 @@
           <el-tag v-if="row.incremental" size="small" style="margin-left: 6px">增量</el-tag>
         </template>
       </el-table-column>
+      <el-table-column label="目标空间" width="150">
+        <template #default="{ row }">
+          <span>{{ spaceName(row.target_space_id) }}</span>
+          <el-tag v-if="row.auto_trigger" size="small" type="success" style="margin-left: 6px">自动</el-tag>
+        </template>
+      </el-table-column>
       <el-table-column label="最近状态" width="150">
         <template #default="{ row }">
           <el-tag v-if="row.running" size="small" type="warning">运行中</el-tag>
@@ -37,9 +43,17 @@
       </el-table-column>
       <el-table-column label="操作" width="360">
         <template #default="{ row }">
-          <el-button size="small" type="primary" :loading="row.running" :disabled="!row.enabled" @click="run(row)">
-            {{ row.running ? '编译中…' : '运行' }}
-          </el-button>
+          <el-dropdown trigger="click" @command="(m: string) => run(row, m as 'incremental' | 'full')">
+            <el-button size="small" type="primary" :loading="row.running" :disabled="!row.enabled">
+              {{ row.running ? '编译中…' : '运行 ▾' }}
+            </el-button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="incremental">增量运行</el-dropdown-item>
+                <el-dropdown-item command="full">全量重编</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
           <el-button size="small" @click="preview(row)">试编译</el-button>
           <el-button size="small" @click="openOutputs(row)">产出</el-button>
           <el-button size="small" @click="openRuns(row)">记录</el-button>
@@ -79,8 +93,18 @@
         <el-form-item v-if="form.compiler_kind === 'custom'" label="自定义指令">
           <el-input v-model="form.prompt_template" type="textarea" :rows="5" placeholder="给 LLM 的编译指令（Markdown 输出）" />
         </el-form-item>
+        <el-form-item label="目标空间">
+          <el-select v-model="form.target_space_id" clearable placeholder="默认空间" style="width: 100%">
+            <el-option v-for="s in spaces" :key="s.id" :label="s.name" :value="s.id" />
+          </el-select>
+          <div class="muted" style="font-size: 12px">留空=默认空间；产物按知识结构生成在该空间内（层级由 LLM 按管道指令决定）。</div>
+        </el-form-item>
         <el-form-item label="产出分类">
-          <el-input v-model="form.target_category" placeholder="写入知识库的分类，如：接口文档" />
+          <el-input v-model="form.target_category" placeholder="可选：写入知识库的分类标签，如：接口文档" />
+        </el-form-item>
+        <el-form-item label="自动编译">
+          <el-switch v-model="form.auto_trigger" />
+          <span class="muted" style="margin-left: 8px; font-size: 12px">笔记变更时自动逐条编译（按笔记限流）</span>
         </el-form-item>
         <el-form-item label="增量编译">
           <el-switch v-model="form.incremental" />
@@ -149,11 +173,15 @@ interface Pipeline {
   prompt_template: string
   model: string
   target_category: string
+  target_space_id?: string | null
+  auto_trigger: boolean
   incremental: boolean
   enabled: boolean
   running: boolean
   last_status: string
 }
+
+interface WikiSpaceItem { id: string; name: string; icon: string }
 
 const KIND_LABELS: Record<string, string> = {
   wiki: '知识蒸馏',
@@ -165,6 +193,7 @@ const KIND_LABELS: Record<string, string> = {
 
 const pipelines = ref<Pipeline[]>([])
 const notebooks = ref<{ id: string; name: string }[]>([])
+const spaces = ref<WikiSpaceItem[]>([])
 const loading = ref(false)
 const dialog = ref(false)
 const saving = ref(false)
@@ -179,6 +208,8 @@ const form = reactive({
   prompt_template: '',
   model: '',
   target_category: '',
+  target_space_id: '' as string | null,
+  auto_trigger: false,
   incremental: true,
   enabled: true
 })
@@ -216,6 +247,20 @@ async function loadNotebooks() {
   }
 }
 
+async function loadSpaces() {
+  try {
+    const r = await http.get('/api/wiki/spaces')
+    spaces.value = r.data.spaces || []
+  } catch {
+    spaces.value = []
+  }
+}
+
+function spaceName(id?: string | null) {
+  if (!id) return '默认空间'
+  return spaces.value.find(s => s.id === id)?.name || '默认空间'
+}
+
 function openCreate() {
   editing.value = null
   Object.assign(form, {
@@ -227,6 +272,8 @@ function openCreate() {
     prompt_template: '',
     model: '',
     target_category: '',
+    target_space_id: '',
+    auto_trigger: false,
     incremental: true,
     enabled: true
   })
@@ -244,6 +291,8 @@ function openEdit(p: Pipeline) {
     prompt_template: p.prompt_template,
     model: p.model,
     target_category: p.target_category,
+    target_space_id: p.target_space_id || '',
+    auto_trigger: p.auto_trigger,
     incremental: p.incremental,
     enabled: p.enabled
   })
@@ -277,10 +326,10 @@ async function save() {
   }
 }
 
-async function run(p: Pipeline) {
+async function run(p: Pipeline, mode: 'incremental' | 'full' = 'incremental') {
   try {
-    await http.post(`/api/pipelines/${p.id}/run`)
-    ElMessage.success('已开始编译')
+    await http.post(`/api/pipelines/${p.id}/run`, null, { params: { mode } })
+    ElMessage.success(mode === 'full' ? '已开始全量重编' : '已开始增量编译')
     await load()
   } catch (e: any) {
     ElMessage.error(e?.response?.data?.detail || '启动失败')
@@ -360,6 +409,7 @@ async function refreshRunning() {
 onMounted(() => {
   load()
   loadNotebooks()
+  loadSpaces()
   timer = setInterval(refreshRunning, 2500)
 })
 onUnmounted(() => {

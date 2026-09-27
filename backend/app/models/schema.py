@@ -92,6 +92,8 @@ class PipelineCreate(BaseModel):
     prompt_template: str = ''
     model: str = ''
     target_category: str = ''
+    target_space_id: Optional[str] = None   # 目标空间(留空=默认空间)
+    auto_trigger: bool = False              # 笔记变更时自动编译
     incremental: bool = True
     group_id: Optional[str] = None
     enabled: bool = True
@@ -106,6 +108,8 @@ class PipelineUpdate(BaseModel):
     prompt_template: Optional[str] = None
     model: Optional[str] = None
     target_category: Optional[str] = None
+    target_space_id: Optional[str] = None
+    auto_trigger: Optional[bool] = None
     incremental: Optional[bool] = None
     group_id: Optional[str] = None
     enabled: Optional[bool] = None
@@ -121,6 +125,8 @@ class PipelineResponse(BaseModel):
     prompt_template: str = ''
     model: str = ''
     target_category: str = ''
+    target_space_id: Optional[str] = None
+    auto_trigger: bool = False
     incremental: bool = True
     group_id: Optional[str] = None
     enabled: bool = True

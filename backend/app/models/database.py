@@ -10,6 +10,9 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# 实体化的「默认空间」名称(未指定空间的 wiki 产物归此)
+DEFAULT_SPACE_NAME = "默认空间"
+
 Base = declarative_base()
 
 
@@ -163,7 +166,8 @@ class WikiPage(Base):
     __tablename__ = 'wiki_pages'
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    title = Column(String(255), nullable=False, unique=True, index=True)
+    # 标题在"空间内"唯一(复合唯一索引见 __table_args__); 跨空间可同名
+    title = Column(String(255), nullable=False, index=True)
     category = Column(String(128), nullable=True, default='', index=True)
     group_id = Column(String(255), nullable=True, index=True)
     content = Column(Text, default='')
@@ -182,6 +186,11 @@ class WikiPage(Base):
     embedding_profile = Column(String(36), nullable=True)
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+    __table_args__ = (
+        # 标题在空间内唯一(跨空间可同名); 旧库由迁移脚本重建该索引
+        Index('uq_wiki_pages_space_title', 'space_id', 'title', unique=True),
+    )
 
 
 class WikiSpace(Base):
@@ -311,6 +320,10 @@ class Pipeline(Base):
     prompt_template = Column(Text, default='')  # custom 时的自定义指令
     model = Column(String(255), default='')     # 留空用全局 LLM
     target_category = Column(String(128), default='')  # 编译产物在 wiki 的分类
+    # 目标空间(NULL=默认空间): 产物写入该空间, 页面层级由 LLM/prompt 决定
+    target_space_id = Column(String(36), nullable=True, index=True)
+    # 笔记变更时自动编译(逐条笔记 ingest, 按笔记+管道限流)
+    auto_trigger = Column(Boolean, default=False)
     incremental = Column(Boolean, default=True)  # 仅编译自上次运行后有更新的笔记
     group_id = Column(String(255), nullable=True, index=True)
     enabled = Column(Boolean, default=True)

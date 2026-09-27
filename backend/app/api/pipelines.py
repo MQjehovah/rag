@@ -58,6 +58,8 @@ def _to_response(pipeline: Pipeline, db: Session) -> PipelineResponse:
         prompt_template=pipeline.prompt_template or "",
         model=pipeline.model or "",
         target_category=pipeline.target_category or "",
+        target_space_id=pipeline.target_space_id,
+        auto_trigger=bool(pipeline.auto_trigger),
         incremental=bool(pipeline.incremental),
         group_id=pipeline.group_id,
         enabled=bool(pipeline.enabled),
@@ -92,6 +94,8 @@ def create_pipeline(data: PipelineCreate, db: Session = Depends(get_db), current
         prompt_template=data.prompt_template or "",
         model=data.model or "",
         target_category=data.target_category or "",
+        target_space_id=(data.target_space_id or None),
+        auto_trigger=bool(data.auto_trigger),
         incremental=bool(data.incremental),
         group_id=group_id,
         enabled=bool(data.enabled),
@@ -133,6 +137,10 @@ def update_pipeline(pipeline_id: str, data: PipelineUpdate, db: Session = Depend
         pipeline.model = data.model
     if data.target_category is not None:
         pipeline.target_category = data.target_category
+    if data.target_space_id is not None:
+        pipeline.target_space_id = data.target_space_id or None
+    if data.auto_trigger is not None:
+        pipeline.auto_trigger = bool(data.auto_trigger)
     if data.incremental is not None:
         pipeline.incremental = bool(data.incremental)
     if data.enabled is not None:
@@ -155,14 +163,15 @@ def delete_pipeline(pipeline_id: str, db: Session = Depends(get_db), current_use
 
 
 @router.post("/{pipeline_id}/run")
-async def run_pipeline_endpoint(pipeline_id: str, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+async def run_pipeline_endpoint(pipeline_id: str, mode: str = "incremental", db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     pipeline = _get_or_404(pipeline_id, db, current_user)
     if _status.get(pipeline.id, {}).get("running"):
         return {"started": False, "running": True, "message": "该管道正在运行"}
+    run_mode = "full" if mode == "full" else "incremental"
     _status[pipeline.id] = {"running": True, "processed": 0, "total": 0, "changed": 0, "message": "启动编译..."}
     engine = db.get_bind()
-    _tasks[pipeline.id] = asyncio.create_task(run_pipeline(engine, pipeline.id, _status[pipeline.id]))
-    return {"started": True, "running": True}
+    _tasks[pipeline.id] = asyncio.create_task(run_pipeline(engine, pipeline.id, _status[pipeline.id], run_mode))
+    return {"started": True, "running": True, "mode": run_mode}
 
 
 @router.get("/{pipeline_id}/status")
