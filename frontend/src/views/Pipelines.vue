@@ -170,6 +170,17 @@
         <div v-if="previewError" class="muted" style="color: #f56c6c">{{ previewError }}</div>
         <template v-else>
           <div class="muted" style="font-size: 12px; margin-bottom: 6px">来源笔记本：{{ previewNotebook }}</div>
+          <div v-if="previewPlan.length" class="plan">
+            <div class="plan-head">拟定产出（新建/更新哪些页面、标题与父级）</div>
+            <div v-for="(o, i) in previewPlan" :key="i" class="plan-row">
+              <el-tag size="small" :type="o.action === 'create' ? 'success' : 'warning'">
+                {{ o.action === 'create' ? '新建' : '更新' }}
+              </el-tag>
+              <span class="plan-title">{{ o.title }}</span>
+              <span v-if="o.parent" class="muted plan-parent">父级：{{ o.parent }}</span>
+            </div>
+          </div>
+          <div class="muted" style="font-size: 12px; margin: 8px 0 4px">首个页面正文预览：</div>
           <pre class="md-preview">{{ previewContent }}</pre>
         </template>
       </template>
@@ -274,6 +285,7 @@ const previewDialog = ref(false)
 const previewLoading = ref(false)
 const previewError = ref('')
 const previewContent = ref('')
+const previewPlan = ref<{ action: string; title: string; parent: string }[]>([])
 const previewNotebook = ref('')
 
 const runsDialog = ref(false)
@@ -462,11 +474,13 @@ async function preview(p: Pipeline) {
   previewLoading.value = true
   previewError.value = ''
   previewContent.value = ''
+  previewPlan.value = []
   previewNotebook.value = ''
   try {
     const r = await http.post(`/api/pipelines/${p.id}/preview`)
     if (r.data.ok) {
       previewNotebook.value = r.data.notebook
+      previewPlan.value = r.data.plan || []
       previewContent.value = r.data.content
     } else {
       previewError.value = r.data.error || '预览失败'
@@ -532,7 +546,18 @@ onUnmounted(() => {
 .muted { color: var(--text-3); }
 .link { color: #409eff; text-decoration: none; }
 .md-preview {
-  max-height: 60vh; overflow: auto; background: #f7f8fa; padding: 12px;
+  max-height: 60vh; overflow: auto; background: var(--surface-2); padding: 12px;
   border-radius: 8px; font-size: 12px; white-space: pre-wrap; word-break: break-word;
 }
+.plan {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  max-height: 200px;
+  overflow: auto;
+}
+.plan-head { font-size: 12px; color: var(--text-3); margin-bottom: 6px; }
+.plan-row { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
+.plan-title { font-weight: 500; color: var(--text); }
+.plan-parent { font-size: 12px; }
 </style>

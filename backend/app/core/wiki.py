@@ -401,8 +401,8 @@ async def _ingest_one(
     pipeline_id: Optional[str] = None,
     lock: Optional[asyncio.Lock] = None,
     dry_run: bool = False,
-) -> Optional[str]:
-    """把一篇笔记 ingest 进空间; 返回(首个)生成正文(供预览), 或 None。"""
+) -> Any:
+    """把一篇笔记 ingest 进空间; dry_run 时返回 ops 计划, 否则返回 None。"""
     async def _read_index():
         if lock:
             async with lock:
@@ -445,9 +445,9 @@ async def _ingest_one(
                     logger.warning(f"merge failed for {op.get('title')}: {e}")
         final_ops.append(op)
 
-    preview_text = (final_ops[0].get("content") if final_ops else None)
     if dry_run:
-        return preview_text
+        # 预览：返回 ops 计划(建/并哪些页、标题、父级), 不落库
+        return final_ops
 
     if lock:
         async with lock:
@@ -459,7 +459,7 @@ async def _ingest_one(
 
     if changed_ids:
         await embed_wiki_pages(engine, changed_ids)
-    return preview_text
+    return None
 
 
 async def ingest_note(
@@ -474,7 +474,7 @@ async def ingest_note(
     pipeline_id: Optional[str] = None,
     lock: Optional[asyncio.Lock] = None,
     dry_run: bool = False,
-) -> Optional[str]:
+) -> Any:
     """对单条笔记执行编译(note: Page 行或含 id/title/notebook_id/content 的对象)。"""
     db = get_session(engine)
     try:

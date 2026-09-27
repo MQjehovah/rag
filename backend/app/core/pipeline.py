@@ -159,18 +159,23 @@ async def preview_pipeline(engine, pipeline_id: str) -> Dict[str, Any]:
     finally:
         db.close()
 
-    text = await ingest_note(
+    ops = await ingest_note(
         engine, note, space_id,
         kind=rule["kind"], prompt=rule["prompt"], rules=rule["rules"],
         template=rule["template"], model=model,
         pipeline_id=pipeline_id, dry_run=True,
     )
-    if not text:
-        return {"ok": False, "error": "LLM 未返回内容(检查 LLM 配置)"}
+    if not ops:
+        return {"ok": False, "error": "LLM 未返回内容(或判定笔记无价值)"}
+    plan = [
+        {"action": o.get("action", ""), "title": o.get("title", ""), "parent": o.get("parent", "")}
+        for o in ops
+    ]
     return {
         "ok": True,
         "notebook": nb[0] if nb else "",
         "title": note.title or "无标题",
         "summary": "",
-        "content": text,
+        "plan": plan,
+        "content": (ops[0].get("content") or ""),
     }
