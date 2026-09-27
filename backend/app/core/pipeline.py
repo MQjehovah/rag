@@ -61,7 +61,9 @@ async def run_pipeline(engine, pipeline_id: str, status: Dict[str, Any], mode: s
             status.update(running=False, message="管道不存在")
             return
         kind = pipeline.compiler_kind or "wiki"
-        template = pipeline.prompt_template or ""
+        prompt = pipeline.prompt_template or ""
+        rules = pipeline.compile_rules or ""
+        template = pipeline.compile_template or ""
         model = pipeline.model or ""
         space_id = resolve_space_id(db, pipeline.target_space_id)
 
@@ -93,8 +95,8 @@ async def run_pipeline(engine, pipeline_id: str, status: Dict[str, Any], mode: s
         status.update(message=f"编译笔记 {done[0] + 1}/{len(notes)}：{note.title or '无标题'}")
         try:
             await ingest_note(
-                engine, note, space_id, kind=kind, template=template, model=model,
-                pipeline_id=pipeline_id, lock=lock,
+                engine, note, space_id, kind=kind, prompt=prompt, rules=rules,
+                template=template, model=model, pipeline_id=pipeline_id, lock=lock,
             )
             changed[0] += 1
         except Exception as e:  # noqa: BLE001
@@ -141,7 +143,9 @@ async def preview_pipeline(engine, pipeline_id: str) -> Dict[str, Any]:
     text = await ingest_note(
         engine, note, space_id,
         kind=pipeline.compiler_kind or "wiki",
-        template=pipeline.prompt_template or "",
+        prompt=pipeline.prompt_template or "",
+        rules=pipeline.compile_rules or "",
+        template=pipeline.compile_template or "",
         model=pipeline.model or "",
         pipeline_id=pipeline_id,
         dry_run=True,

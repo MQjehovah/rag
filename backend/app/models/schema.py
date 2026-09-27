@@ -89,7 +89,9 @@ class PipelineCreate(BaseModel):
     scope_type: str = 'notebooks'           # notebooks | group | all
     notebook_ids: List[str] = []
     compiler_kind: str = 'wiki'             # wiki | api_doc | markdown | changelog | custom
-    prompt_template: str = ''
+    prompt_template: str = ''               # 提示词(角色+目标)
+    compile_rules: str = ''                 # 规则(约束)
+    compile_template: str = ''              # 输出模板(正文结构)
     model: str = ''
     target_category: str = ''
     target_space_id: Optional[str] = None   # 目标空间(留空=默认空间)
@@ -106,6 +108,8 @@ class PipelineUpdate(BaseModel):
     notebook_ids: Optional[List[str]] = None
     compiler_kind: Optional[str] = None
     prompt_template: Optional[str] = None
+    compile_rules: Optional[str] = None
+    compile_template: Optional[str] = None
     model: Optional[str] = None
     target_category: Optional[str] = None
     target_space_id: Optional[str] = None
@@ -123,6 +127,8 @@ class PipelineResponse(BaseModel):
     notebook_ids: List[str] = []
     compiler_kind: str = 'wiki'
     prompt_template: str = ''
+    compile_rules: str = ''
+    compile_template: str = ''
     model: str = ''
     target_category: str = ''
     target_space_id: Optional[str] = None

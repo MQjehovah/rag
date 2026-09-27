@@ -58,13 +58,16 @@ async def _ingest_for_pipeline(engine, pipeline_id: str, note_id: str) -> None:
                 return
             space_id = resolve_space_id(db, pipeline.target_space_id)
             kind = pipeline.compiler_kind or "wiki"
-            template = pipeline.prompt_template or ""
+            prompt = pipeline.prompt_template or ""
+            rules = pipeline.compile_rules or ""
+            template = pipeline.compile_template or ""
             model = pipeline.model or ""
         finally:
             db.close()
         try:
-            await ingest_note(engine, note, space_id, kind=kind, template=template,
-                              model=model, pipeline_id=pipeline_id, lock=_space_lock(space_id))
+            await ingest_note(engine, note, space_id, kind=kind, prompt=prompt, rules=rules,
+                              template=template, model=model, pipeline_id=pipeline_id,
+                              lock=_space_lock(space_id))
         except Exception as e:  # noqa: BLE001
             logger.warning("auto compile failed (%s/%s): %s", pipeline_id, note_id, e)
     finally:

@@ -56,6 +56,8 @@ def _to_response(pipeline: Pipeline, db: Session) -> PipelineResponse:
         notebook_ids=list(json.loads(pipeline.notebook_ids or "[]")),
         compiler_kind=pipeline.compiler_kind or "wiki",
         prompt_template=pipeline.prompt_template or "",
+        compile_rules=pipeline.compile_rules or "",
+        compile_template=pipeline.compile_template or "",
         model=pipeline.model or "",
         target_category=pipeline.target_category or "",
         target_space_id=pipeline.target_space_id,
@@ -92,6 +94,8 @@ def create_pipeline(data: PipelineCreate, db: Session = Depends(get_db), current
         notebook_ids=json.dumps(data.notebook_ids or [], ensure_ascii=False),
         compiler_kind=data.compiler_kind or "wiki",
         prompt_template=data.prompt_template or "",
+        compile_rules=data.compile_rules or "",
+        compile_template=data.compile_template or "",
         model=data.model or "",
         target_category=data.target_category or "",
         target_space_id=(data.target_space_id or None),
@@ -108,9 +112,13 @@ def create_pipeline(data: PipelineCreate, db: Session = Depends(get_db), current
 
 @router.get("/compile-templates")
 def compile_templates(current_user=Depends(get_current_user)):
-    """内置编译体（文体风格）+ 固定骨架，供前端预填/编辑模板。"""
-    from app.core.wiki import INGEST_PROMPT, KIND_STYLES
-    return {"kinds": KIND_STYLES, "skeleton": INGEST_PROMPT}
+    """内置编译规则(提示词/输出模板) + 通用规则 + 固定骨架，供前端预填/编辑模板。"""
+    from app.core.wiki import COMMON_RULES, INGEST_PROMPT, KIND_PROMPTS, KIND_TEMPLATES
+    kinds = {
+        k: {"prompt": KIND_PROMPTS.get(k, ""), "template": KIND_TEMPLATES.get(k, "")}
+        for k in KIND_PROMPTS
+    }
+    return {"kinds": kinds, "rules": COMMON_RULES, "skeleton": INGEST_PROMPT}
 
 
 def _get_or_404(pipeline_id: str, db: Session, current_user) -> Pipeline:
@@ -140,6 +148,10 @@ def update_pipeline(pipeline_id: str, data: PipelineUpdate, db: Session = Depend
         pipeline.compiler_kind = data.compiler_kind
     if data.prompt_template is not None:
         pipeline.prompt_template = data.prompt_template
+    if data.compile_rules is not None:
+        pipeline.compile_rules = data.compile_rules
+    if data.compile_template is not None:
+        pipeline.compile_template = data.compile_template
     if data.model is not None:
         pipeline.model = data.model
     if data.target_category is not None:

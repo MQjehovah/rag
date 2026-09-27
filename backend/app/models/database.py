@@ -317,7 +317,10 @@ class Pipeline(Base):
     notebook_ids = Column(Text, default='[]')  # JSON list[str]
     # 编译方式: wiki(蒸馏) | api_doc(接口文档) | markdown(合集) | changelog(变更记录) | custom
     compiler_kind = Column(String(16), default='wiki')
-    prompt_template = Column(Text, default='')  # custom 时的自定义指令
+    # 编译规则(三段): 提示词(角色+目标) / 规则(约束) / 输出模板(正文结构); 留空用内置
+    prompt_template = Column(Text, default='')
+    compile_rules = Column(Text, default='')
+    compile_template = Column(Text, default='')
     model = Column(String(255), default='')     # 留空用全局 LLM
     target_category = Column(String(128), default='')  # 编译产物在 wiki 的分类
     # 目标空间(NULL=默认空间): 产物写入该空间, 页面层级由 LLM/prompt 决定

@@ -90,19 +90,35 @@
             <el-option v-for="n in notebooks" :key="n.id" :label="n.name" :value="n.id" />
           </el-select>
         </el-form-item>
-        <el-form-item label="编译模板">
+        <el-form-item label="提示词">
+          <el-input
+            v-model="form.prompt_template"
+            type="textarea"
+            :rows="3"
+            :placeholder="defaultPrompt(form.compiler_kind) || '留空=内置角色与目标'"
+          />
+        </el-form-item>
+        <el-form-item label="规则">
+          <el-input
+            v-model="form.compile_rules"
+            type="textarea"
+            :rows="5"
+            :placeholder="compileRules || '留空=仅用内置通用规则'"
+          />
+        </el-form-item>
+        <el-form-item label="输出模板">
           <div style="width: 100%">
             <el-input
-              v-model="form.prompt_template"
+              v-model="form.compile_template"
               type="textarea"
-              :rows="6"
-              :placeholder="defaultTemplate(form.compiler_kind) || '留空=使用内置模板'"
+              :rows="7"
+              :placeholder="defaultTemplate(form.compiler_kind) || '留空=按内容合理分节'"
             />
             <div class="muted" style="font-size: 12px; margin-top: 4px; line-height: 1.6">
-              用于约束大模型的编译行为（文体、结构、取舍规则）。留空=使用内置模板；
-              系统会固定追加「JSON 输出协议 + 父级(parent)规则」，此处只填文体/结构要求。
-              <el-button link type="primary" size="small" @click="fillDefaultTemplate">填入内置模板</el-button>
-              <el-button link size="small" @click="form.prompt_template = ''">清空</el-button>
+              三段：<b>提示词</b>（角色+目标）、<b>规则</b>（约束 LLM 的编译行为，会追加在内置通用规则之后）、
+              <b>输出模板</b>（页面正文结构骨架）。均留空=用内置；系统固定追加「JSON 输出协议 + parent 规则」。
+              <el-button link type="primary" size="small" @click="fillDefaultRule">填入内置</el-button>
+              <el-button link size="small" @click="clearRule">清空</el-button>
             </div>
           </div>
         </el-form-item>
@@ -184,6 +200,8 @@ interface Pipeline {
   notebook_ids: string[]
   compiler_kind: string
   prompt_template: string
+  compile_rules: string
+  compile_template: string
   model: string
   target_category: string
   target_space_id?: string | null
@@ -207,7 +225,8 @@ const KIND_LABELS: Record<string, string> = {
 const pipelines = ref<Pipeline[]>([])
 const notebooks = ref<{ id: string; name: string }[]>([])
 const spaces = ref<WikiSpaceItem[]>([])
-const compileTemplates = ref<Record<string, string>>({})
+const compileTemplates = ref<Record<string, { prompt: string; template: string }>>({})
+const compileRules = ref('')
 const loading = ref(false)
 const dialog = ref(false)
 const saving = ref(false)
@@ -220,6 +239,8 @@ const form = reactive({
   notebook_ids: [] as string[],
   compiler_kind: 'wiki',
   prompt_template: '',
+  compile_rules: '',
+  compile_template: '',
   model: '',
   target_category: '',
   target_space_id: '' as string | null,
@@ -277,18 +298,33 @@ function spaceName(id?: string | null) {
 
 async function loadCompileTemplates() {
   try {
-    compileTemplates.value = (await http.get('/api/pipelines/compile-templates')).data.kinds || {}
+    const d = (await http.get('/api/pipelines/compile-templates')).data
+    compileTemplates.value = d.kinds || {}
+    compileRules.value = d.rules || ''
   } catch {
     compileTemplates.value = {}
+    compileRules.value = ''
   }
 }
 
-function defaultTemplate(kind: string) {
-  return compileTemplates.value[kind] || ''
+function defaultPrompt(kind: string) {
+  return compileTemplates.value[kind]?.prompt || ''
 }
 
-function fillDefaultTemplate() {
-  form.prompt_template = defaultTemplate(form.compiler_kind)
+function defaultTemplate(kind: string) {
+  return compileTemplates.value[kind]?.template || ''
+}
+
+function fillDefaultRule() {
+  form.prompt_template = defaultPrompt(form.compiler_kind)
+  form.compile_rules = compileRules.value
+  form.compile_template = defaultTemplate(form.compiler_kind)
+}
+
+function clearRule() {
+  form.prompt_template = ''
+  form.compile_rules = ''
+  form.compile_template = ''
 }
 
 function openCreate() {
@@ -300,6 +336,8 @@ function openCreate() {
     notebook_ids: [],
     compiler_kind: 'wiki',
     prompt_template: '',
+    compile_rules: '',
+    compile_template: '',
     model: '',
     target_category: '',
     target_space_id: '',
@@ -319,6 +357,8 @@ function openEdit(p: Pipeline) {
     notebook_ids: [...(p.notebook_ids || [])],
     compiler_kind: p.compiler_kind,
     prompt_template: p.prompt_template,
+    compile_rules: p.compile_rules,
+    compile_template: p.compile_template,
     model: p.model,
     target_category: p.target_category,
     target_space_id: p.target_space_id || '',

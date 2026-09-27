@@ -34,47 +34,115 @@ logger = logging.getLogger(__name__)
 
 IMAGE_RE = re.compile(r'!\[([^\]]*)\]\(([^)]*)\)')
 
-# 各文体的风格指令(供统一 ingest prompt 使用)
-KIND_STYLES = {
-    "wiki": (
-        "把它整理成知识库条目: 去重、合并同类信息, 提炼成可长期维护、结构清晰的 Markdown;"
-        "保留关键步骤/命令/参数/结论; 不要罗列原始笔记标题。"
-    ),
-    "api_doc": (
-        "整理成规范的接口文档(Markdown): 概述、鉴权、接口清单(方法/路径/请求参数/返回字段/错误码)、调用示例;"
-        "信息以笔记为准, 缺失处标注「待补充」。"
-    ),
-    "markdown": "整理成通顺的 Markdown 文档: 合理分节、顺序清晰、术语一致。",
-    "changelog": "整理成变更记录(Markdown): 按时间或版本倒序, 每条包含 变更点/影响/负责人(若有)。",
-    "custom": "",  # 由模板提供
+# 各文体的"提示词"(角色 + 目标), 供编译规则默认值使用
+KIND_PROMPTS = {
+    "wiki": "你是企业知识库编辑。把新笔记蒸馏、整合为可长期维护的知识库条目(Markdown)，面向读者、结构清晰、准确可执行。",
+    "api_doc": "你是接口文档工程师。把新笔记中与接口相关的信息整理为规范、完整的接口文档(Markdown)。",
+    "markdown": "你是文档编辑。把新笔记整理为通顺、规范的 Markdown 技术文档。",
+    "changelog": "你是发布/变更记录编辑。把新笔记整理为结构化、可追溯的变更记录(Markdown)。",
+    "custom": "",
 }
 
-INGEST_PROMPT = """你是企业知识库编辑。请把下面这篇新笔记的信息整合进知识库(空间：{space})。
+# 通用规则(约束 LLM 的编译行为, 所有文体共用; 用户规则会追加在其后)
+COMMON_RULES = """1. 只使用「新笔记」中提供的信息，不得编造；信息缺失处标注「待补充」。
+2. 蒸馏而非摘抄：去重、合并同类信息、改写为通顺条目，剔除口语、寒暄与时间序流水账；不要整段照搬原文。
+3. 原样保留：命令、代码、参数名、路径、数值、专有名词，以及笔记中的图片 Markdown 语法(仅用笔记里出现的 URL)。
+4. 一页一主题：一个页面聚焦一个概念/流程；派生细节放入该页小节，不要混入其他主题。
+5. 优先 update 现有页面，仅在确为新主题时 create；每篇笔记最多 create/update 共 2 个页面。
+6. 保留人工修改：update 时不得丢弃现有页面中被人工润色/更正的内容，仅在确有新信息时改动。
+7. 冲突处理：同一事实不一致时保留较新/更具体者，并在正文注明来源差异。
+8. parent：填"现有页面标题"以挂到该父页下(同空间已存在)；不确定或应作为顶层则填空字符串 ""。
+9. 交叉引用：相关页面用 [[页面标题]]。
+10. 语言：简体中文；风格：准确、简洁、可执行。
+11. 标题：简短的偏正名词短语(如「SW50 日常清洁作业流程」)，不要用句子。
+12. 摘要：30 字以内，概括整页。"""
 
-现有页面(缩进表示层级 | 标题 | 分类 | 摘要)：
+# 各文体的"输出模板"(页面正文结构骨架)
+KIND_TEMPLATES = {
+    "wiki": """# <页面标题>
+
+（开篇 1-2 句：这是什么 / 解决什么问题）
+
+## 概述
+## 适用场景
+## 操作步骤
+1. 步骤 → 结果
+## 关键参数 / 注意事项
+- 
+## 常见问题
+- Q: … A: …
+## 相关页面
+- [[页面标题]]""",
+    "api_doc": """# <接口名>
+
+## 概述
+## 鉴权
+## 接口清单
+### <方法> <路径>
+- 请求参数：…
+- 返回字段：…
+- 错误码：…
+## 调用示例
+```bash
+# 示例
+```
+## 相关页面
+- [[页面标题]]""",
+    "markdown": """# <文档标题>
+
+## 背景
+## 正文
+（按内容合理分节）
+## 小结
+## 相关页面
+- [[页面标题]]""",
+    "changelog": """# <标题：变更记录>
+
+（按时间/版本倒序）
+
+## [YYYY-MM-DD] 变更点
+- 影响：
+- 负责人：
+## 相关页面
+- [[页面标题]]""",
+    "custom": "",
+}
+
+INGEST_PROMPT = """<role>
+{role}
+</role>
+
+<space>{space}</space>
+
+<existing_pages>
+索引格式：缩进表示层级 | 标题 | 分类 | 摘要
 {index}
+</existing_pages>
 
-新笔记：
+<new_note>
 标题：{title}
 来源笔记本：{notebook}
 内容：
 {content}
+</new_note>
 
-文体要求：
-{style}
+<rules>
+{rules}
+</rules>
 
-规则：
-1. 先判断笔记是否有价值；垃圾、重复或信息量极低则返回空 ops。
-2. 有新增知识时：
-   - 现有页面能容纳 → update(给出该页完整新正文)；
-   - 新主题 → create(给出 title/category/parent/content/summary)；
-   - 每篇笔记最多 create/update 共 2 个页面，聚焦核心知识。
-3. parent 填"现有页面标题"表示挂到该父页下；不确定或应作为顶层则填空字符串 ""。
-4. 正文用 Markdown；页面间引用用 [[页面标题]]；保留关键命令/代码；图片保留笔记中的 Markdown 图片语法(仅用笔记里出现的 URL)。
-5. 每页给 30 字以内的摘要。
-6. 只返回 JSON，不要其他内容：
-{{"ops": [{{"action": "create", "title": "...", "category": "...", "parent": "", "content": "...", "summary": "..."}}, {{"action": "update", "title": "现有页面标题", "content": "完整新正文", "summary": "..."}}]}}
-"""
+<output_template>
+页面正文尽量遵循下面的结构模板(可增删小节，但保持层次一致；模板中的 <页面标题> 等占位符请替换为实际内容)：
+{template}
+</output_template>
+
+<output_format>
+只返回 JSON，不要使用 Markdown 代码围栏，不要任何解释或前后缀。形状：
+{{"ops": [
+  {{"action": "create", "title": "新页面标题", "category": "分类", "parent": "父页面标题或空字符串", "content": "完整 Markdown 正文", "summary": "30字以内摘要"}},
+  {{"action": "update", "title": "现有页面标题", "content": "合并后的完整 Markdown 正文", "summary": "30字以内摘要"}}
+]}}
+若笔记无价值/重复/信息量过低，返回 {{"ops": []}}。
+</output_format>"""
 
 MERGE_PROMPT = """你正在更新一个知识库页面。请把"现有页面"和"新资料"合并成一份最终 Markdown 正文：
 - 保留现有页面中仍然有效的内容(包括用户人工润色/修正过的段落)，不要丢弃；
@@ -303,13 +371,16 @@ def _persist(engine, changed: List[Dict[str, Any]], space_id: str, pipeline_id: 
         db.close()
 
 
-def _build_prompt(kind: str, template: str, space_name: str, index: str,
-                  title: str, notebook: str, content: str) -> str:
-    # 自定义模板对任意编译方式都生效(用于约束 LLM 的编译行为); 留空则用内置文体风格
-    style = (template or "").strip() or KIND_STYLES.get(kind, KIND_STYLES["wiki"])
+def _build_prompt(kind: str, prompt: str, rules: str, template: str, space_name: str,
+                  index: str, title: str, notebook: str, content: str) -> str:
+    role = (prompt or "").strip() or KIND_PROMPTS.get(kind) or KIND_PROMPTS["wiki"]
+    extra_rules = (rules or "").strip()
+    all_rules = COMMON_RULES + ("\n" + extra_rules if extra_rules else "")
+    tmpl = (template or "").strip() or KIND_TEMPLATES.get(kind, "")
     return INGEST_PROMPT.format(
-        space=space_name, index=index, title=title or "无标题",
-        notebook=notebook or "未分类", content=_clean_content(content or ""), style=style,
+        role=role, space=space_name, index=index, title=title or "无标题",
+        notebook=notebook or "未分类", content=_clean_content(content or ""),
+        rules=all_rules, template=tmpl or "(无特殊结构，按内容合理分节)",
     )
 
 
@@ -323,6 +394,8 @@ async def _ingest_one(
     space_id: str,
     space_name: str,
     kind: str = "wiki",
+    prompt: str = "",
+    rules: str = "",
     template: str = "",
     model: str = "",
     pipeline_id: Optional[str] = None,
@@ -337,7 +410,7 @@ async def _ingest_one(
         return _index_text(pages)
 
     index = await _read_index()
-    prompt = _build_prompt(kind, template, space_name, index, title, notebook, content)
+    prompt = _build_prompt(kind, prompt, rules, template, space_name, index, title, notebook, content)
     try:
         result = await call_llm_json(
             [{"role": "user", "content": prompt}],
@@ -394,6 +467,8 @@ async def ingest_note(
     note,
     space_id: str,
     kind: str = "wiki",
+    prompt: str = "",
+    rules: str = "",
     template: str = "",
     model: str = "",
     pipeline_id: Optional[str] = None,
@@ -414,7 +489,7 @@ async def ingest_note(
     pages = _load_pages(engine, space_id)
     return await _ingest_one(
         note.id, note.title or "", notebook, note.content or "", pages, engine,
-        space_id, space_name, kind, template, model, pipeline_id, lock, dry_run,
+        space_id, space_name, kind, prompt, rules, template, model, pipeline_id, lock, dry_run,
     )
 
 
@@ -480,7 +555,7 @@ async def refresh_stale_wiki(status: Dict[str, Any]) -> None:
     async def worker(n):
         async with sem:
             await _ingest_one(n.id, n.title or "", "", n.content or "", pages, engine, space_id,
-                              DEFAULT_SPACE_NAME, "wiki", "", "", None, lock)
+                              DEFAULT_SPACE_NAME, kind="wiki", lock=lock)
             done[0] += 1
             status.update(processed=done[0], message=f"刷新 {done[0]}/{len(notes)}")
 
@@ -511,7 +586,7 @@ async def build_wiki(status: Dict[str, Any], concurrency: int = 3) -> None:
     async def worker(n):
         async with sem:
             await _ingest_one(n.id, n.title or "", "", n.content or "", pages, engine, space_id,
-                              DEFAULT_SPACE_NAME, "wiki", "", "", None, lock)
+                              DEFAULT_SPACE_NAME, kind="wiki", lock=lock)
             processed[0] += 1
             status.update(processed=processed[0], message=f"已蒸馏 {processed[0]}/{len(notes)}")
 
