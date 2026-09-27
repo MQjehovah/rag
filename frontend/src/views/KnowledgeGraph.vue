@@ -178,6 +178,13 @@ const renderGraph = () => {
   const width = containerRef.value.clientWidth
   const height = containerRef.value.clientHeight
 
+  const _css = getComputedStyle(document.documentElement)
+  const _tok = (name: string, fallback: string) => _css.getPropertyValue(name).trim() || fallback
+  const cBorder = _tok('--border-strong', '#d3d7df')
+  const cSurface = _tok('--surface', '#ffffff')
+  const cText3 = _tok('--text-3', '#8b93a3')
+  const cPrimary = _tok('--primary', '#2383e2')
+
   svgSelection = d3.select(svgRef.value)
   svgSelection.attr('viewBox', `0 0 ${width} ${height}`)
 
@@ -209,9 +216,9 @@ const renderGraph = () => {
     .selectAll('line')
     .data(simLinks)
     .join('line')
-    .attr('stroke', '#334155')
+    .attr('stroke', cBorder)
     .attr('stroke-width', 1)
-    .attr('stroke-opacity', 0.6)
+    .attr('stroke-opacity', 0.7)
 
   const node = g.append('g')
     .selectAll<SVGCircleElement, typeof simNodes[0]>('circle')
@@ -219,7 +226,7 @@ const renderGraph = () => {
     .join('circle')
     .attr('r', (d) => d.kind === 'entity' ? 8 : Math.max(6, Math.sqrt(d.link_count + 1) * 5))
     .attr('fill', (d) => getColor(d))
-    .attr('stroke', '#1e293b')
+    .attr('stroke', cSurface)
     .attr('stroke-width', 2)
     .style('cursor', 'pointer')
     .on('mouseover', (event, d) => {
@@ -237,7 +244,7 @@ const renderGraph = () => {
       link.attr('stroke', l => {
         const s = (l.source as any).id
         const t = (l.target as any).id
-        return s === d.id || t === d.id ? '#38bdf8' : '#334155'
+        return s === d.id || t === d.id ? cPrimary : cBorder
       }).attr('stroke-width', l => {
         const s = (l.source as any).id
         const t = (l.target as any).id
@@ -247,7 +254,7 @@ const renderGraph = () => {
     .on('mouseout', () => {
       hoveredNode.value = null
       node.attr('opacity', 1)
-      link.attr('stroke', '#334155').attr('stroke-width', 1)
+      link.attr('stroke', cBorder).attr('stroke-width', 1)
     })
     .on('click', (_event, d) => {
       if (d.kind === 'page') {
@@ -282,7 +289,7 @@ const renderGraph = () => {
     .join('text')
     .text(d => d.title.length > 8 ? d.title.slice(0, 8) + '...' : d.title)
     .attr('font-size', 11)
-    .attr('fill', '#94a3b8')
+    .attr('fill', cText3)
     .attr('text-anchor', 'middle')
     .attr('dy', (d) => -(d.kind === 'entity' ? 14 : Math.max(6, Math.sqrt(d.link_count + 1) * 5) + 6))
 
@@ -292,7 +299,7 @@ const renderGraph = () => {
     .join('text')
     .text((d: any) => d.label)
     .attr('font-size', 9)
-    .attr('fill', '#7dd3fc')
+    .attr('fill', cPrimary)
     .attr('text-anchor', 'middle')
     .attr('pointer-events', 'none')
     .attr('opacity', 0.85)
@@ -404,49 +411,54 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .graph-page {
-  height: 100vh;
+  height: 100%;
   display: flex;
   flex-direction: column;
-  background: #0f172a;
+  background: var(--surface);
 }
 .graph-header {
-  background: #1e293b;
-  border-bottom: 1px solid #334155;
+  flex: 0 0 auto;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
   padding: 12px 24px;
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 .graph-stats {
   display: flex;
-  gap: 24px;
+  gap: 20px;
   font-size: 13px;
-  color: #94a3b8;
+  color: var(--text-2);
 }
 .graph-controls {
   display: flex;
   gap: 8px;
   align-items: center;
+  flex-wrap: wrap;
 }
 .graph-container {
   flex: 1;
   position: relative;
   overflow: hidden;
+  background: var(--surface);
 }
 .node-tooltip {
   position: fixed;
-  background: #1e293b;
-  border: 1px solid #334155;
-  border-radius: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
   padding: 10px 14px;
-  box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+  box-shadow: var(--shadow);
   font-size: 13px;
   z-index: 100;
   pointer-events: none;
-  color: #e2e8f0;
+  color: var(--text);
 }
 .tooltip-type {
-  color: #7dd3fc;
+  color: var(--primary);
   font-size: 12px;
   margin-top: 2px;
 }
