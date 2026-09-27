@@ -28,6 +28,18 @@
           </div>
         </template>
 
+        <template v-if="recentPages.length">
+          <div class="side-section">
+            <span class="side-section-label">最近访问</span>
+          </div>
+          <div class="fav-list">
+            <div v-for="r in recentPages" :key="r.id" class="page-item" @click="openPageById(r.id)">
+              <span class="page-dot"></span>
+              <span class="page-title">{{ r.title }}</span>
+            </div>
+          </div>
+        </template>
+
         <template v-if="templates.length">
           <div class="side-section">
             <span class="side-section-label">模板</span>
@@ -1259,6 +1271,15 @@ const setIcon = (emoji: string) => {
 
 // ---------------- Notion 风格增强: 收藏 / 快速切换 / 大纲 / 页面菜单 / 回收站 ----------------
 const favPages = ref<{ id: string; title: string }[]>(JSON.parse(localStorage.getItem('rag-fav-pages') || '[]'))
+const recentPages = ref<{ id: string; title: string }[]>(JSON.parse(localStorage.getItem('rag-recent-pages') || '[]'))
+const pushRecent = () => {
+  const p = currentPage.value
+  if (!p || !p.id) return
+  const title = p.title && p.title !== '加载中...' ? p.title : ''
+  if (!title) return
+  recentPages.value = [{ id: p.id, title }, ...recentPages.value.filter(r => r.id !== p.id)].slice(0, 10)
+  localStorage.setItem('rag-recent-pages', JSON.stringify(recentPages.value))
+}
 const trashPages = ref<{ id: string; title: string; notebook_id: string | null; deleted_at: string }[]>([])
 const trashOpen = ref(false)
 const quickOpen = ref(false)
@@ -1297,7 +1318,10 @@ watch(() => currentPage.value?.id, (id) => {
   pageSmall.value = localStorage.getItem('rag-page-small-' + id) === '1'
   loadBacklinks(id)
   loadComments(id)
+  pushRecent()
 })
+
+watch(() => currentPage.value?.title, () => pushRecent())
 
 const toggleWide = () => {
   if (!currentPage.value) return

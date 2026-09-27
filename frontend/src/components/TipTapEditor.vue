@@ -101,9 +101,12 @@
     <div
       v-if="editor && handle.visible"
       class="block-handle"
-      :style="{ top: handle.y + 'px', left: (handle.x - 34) + 'px' }"
+      :style="{ top: handle.y + 'px', left: (handle.x - 56) + 'px' }"
       @mouseenter="handle.visible = true"
     >
+      <button class="handle-btn add" title="在下方插入块" @click.stop="insertParagraphAfter">
+        <Plus :size="15" />
+      </button>
       <button
         class="handle-btn"
         title="拖动排序 / 点击菜单"
@@ -1763,13 +1766,15 @@ onBeforeUnmount(() => {
   height: 26px;
   border: none;
   background: transparent;
-  color: #cbd0d8;
+  color: var(--text-3);
   border-radius: 6px;
   cursor: grab;
 }
 
-.block-handle .handle-btn:hover { background: #eef1f5; color: #6b7280; }
+.block-handle .handle-btn:hover { background: var(--surface-2); color: var(--text-2); }
 .block-handle .handle-btn:active { cursor: grabbing; }
+.block-handle .handle-btn.add { cursor: pointer; }
+.block-handle .handle-btn.add:active { cursor: pointer; }
 
 .block-menu {
   position: fixed;

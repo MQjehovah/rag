@@ -4,8 +4,8 @@
     <div class="login-card">
       <div class="login-logo">
         <img class="login-logo-img" :src="logoUrl" alt="Rosiwit" />
-        <h1>Notes RAG</h1>
-        <p class="login-subtitle">企业智能知识库</p>
+        <h1>企业知识库</h1>
+        <p class="login-subtitle">RAG · 企业智能知识库</p>
       </div>
       <el-form @submit.prevent="handleLogin" class="login-form">
         <el-form-item>
@@ -85,102 +85,78 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #0f172a;
+  background: var(--bg);
   position: relative;
   overflow: hidden;
 }
-.login-bg {
-  position: absolute;
-  inset: 0;
-  background:
-    radial-gradient(ellipse 80% 60% at 50% 0%, rgba(56,189,248,0.15), transparent),
-    radial-gradient(ellipse 60% 40% at 80% 80%, rgba(99,102,241,0.1), transparent);
-}
+.login-bg { display: none; }
 .login-card {
-  width: 420px;
-  padding: 48px 40px;
-  background: rgba(30, 41, 59, 0.8);
-  backdrop-filter: blur(20px);
-  border-radius: 20px;
-  border: 1px solid rgba(255,255,255,0.08);
-  box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-  position: relative;
-  z-index: 1;
+  width: 400px;
+  padding: 40px 36px;
+  background: var(--surface);
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
 }
 .login-logo {
   text-align: center;
-  margin-bottom: 36px;
+  margin-bottom: 28px;
 }
 .login-logo-img {
-  width: 52px;
-  height: 52px;
+  width: 48px;
+  height: 48px;
   display: block;
   object-fit: contain;
-  border-radius: 14px;
-  margin: 0 auto 16px;
-  box-shadow: 0 8px 24px rgba(56,189,248,0.25);
+  border-radius: 10px;
+  margin: 0 auto 14px;
 }
 .login-logo h1 {
-  color: #f1f5f9;
-  font-size: 28px;
+  color: var(--text);
+  font-size: 22px;
   font-weight: 700;
-  letter-spacing: -0.5px;
+  letter-spacing: -0.3px;
 }
 .login-subtitle {
-  color: #64748b;
-  font-size: 14px;
-  margin-top: 6px;
+  color: var(--text-3);
+  font-size: 13px;
+  margin-top: 4px;
 }
 .login-form :deep(.el-input__wrapper) {
-  background: rgba(15, 23, 42, 0.6);
-  border: 1px solid rgba(255,255,255,0.08);
+  background: var(--surface);
+  border: 1px solid var(--border);
   box-shadow: none;
-  border-radius: 10px;
+  border-radius: 8px;
 }
 .login-form :deep(.el-input__wrapper:hover),
 .login-form :deep(.el-input__wrapper.is-focus) {
-  border-color: rgba(56,189,248,0.4);
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-weak);
 }
 .login-form :deep(.el-input__inner) {
-  color: #e2e8f0;
+  color: var(--text);
 }
 .login-form :deep(.el-input__inner::placeholder) {
-  color: #475569;
+  color: var(--text-3);
 }
 .login-btn {
   width: 100%;
-  height: 44px;
-  border-radius: 10px;
-  font-size: 15px;
+  height: 42px;
+  border-radius: 8px;
+  font-size: 14px;
   font-weight: 600;
-  background: linear-gradient(135deg, #38bdf8, #6366f1);
-  border: none;
-  letter-spacing: 4px;
-}
-.login-btn:hover {
-  opacity: 0.9;
 }
 .sso-btn {
-  margin-top: 12px;
+  margin-top: 10px;
   margin-left: 0;
   width: 100%;
-  height: 44px;
-  border-radius: 10px;
-  font-size: 15px;
-  background: rgba(15, 23, 42, 0.6);
-  border: 1px solid rgba(255,255,255,0.12);
-  color: #cbd5e1;
-  letter-spacing: 1px;
-}
-.sso-btn:hover {
-  border-color: rgba(56,189,248,0.4);
-  color: #e2e8f0;
-  background: rgba(15, 23, 42, 0.8);
+  height: 42px;
+  border-radius: 8px;
+  font-size: 14px;
 }
 .error-text {
-  color: #f87171;
+  color: var(--danger);
   text-align: center;
-  margin-top: 16px;
+  margin-top: 14px;
   font-size: 13px;
 }
 </style>
