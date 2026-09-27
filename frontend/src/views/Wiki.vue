@@ -144,10 +144,11 @@ import { signImageElement, signRenderedImages } from '../utils/imageSign'
 import { useAuthStore } from '../stores/auth'
 import MarkdownIt from 'markdown-it'
 import taskLists from 'markdown-it-task-lists'
+import DOMPurify from 'dompurify'
 import hljs from 'highlight.js'
 
 const md = new MarkdownIt({
-  html: false,
+  html: true,
   linkify: true,
   typographer: true,
   highlight(str: string, lang: string) {
@@ -309,11 +310,14 @@ const renderContent = (text: string) => {
   const withLinks = text.replace(/\[\[([^\]]+)\]\]/g, (_, title: string) => {
     const id = titleToId.value[title]
     if (id) {
-      return `<a class="wiki-link" href="javascript:void(0)" data-id="${id}">${title}</a>`
+      return `<span class="wiki-link" data-id="${id}">${title}</span>`
     }
     return `<strong>${title}</strong>`
   })
-  return md.render(withLinks)
+  // 笔记可含 HTML(如提示框/下划线/高亮),渲染前统一做白名单净化,防止 XSS
+  return DOMPurify.sanitize(md.render(withLinks), {
+    ADD_ATTR: ['data-id', 'data-callout', 'target'],
+  })
 }
 
 const handleContentClick = (e: MouseEvent) => {
@@ -656,6 +660,23 @@ onBeforeUnmount(() => {
   padding: 1px 3px;
   border-radius: 3px;
 }
+.wiki-body :deep(u) {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.wiki-body :deep(.callout) {
+  border-radius: 10px;
+  padding: 12px 16px;
+  margin: 14px 0;
+  border-left: 4px solid #3b82f6;
+  background: #eff6ff;
+}
+.wiki-body :deep(.callout > *:first-child) { margin-top: 0; }
+.wiki-body :deep(.callout > *:last-child) { margin-bottom: 0; }
+.wiki-body :deep(.callout-tip) { border-left-color: #8b5cf6; background: #f5f3ff; }
+.wiki-body :deep(.callout-success) { border-left-color: #10b981; background: #ecfdf5; }
+.wiki-body :deep(.callout-warn) { border-left-color: #f59e0b; background: #fffbeb; }
+.wiki-body :deep(.callout-danger) { border-left-color: #ef4444; background: #fef2f2; }
 .wiki-link {
   color: #2563eb;
   text-decoration: none;

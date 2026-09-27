@@ -234,6 +234,7 @@ import xml from 'highlight.js/lib/languages/xml'
 import css from 'highlight.js/lib/languages/css'
 import markdown from 'highlight.js/lib/languages/markdown'
 import CodeBlockComponent from './CodeBlockComponent.vue'
+import { Callout } from './editorExt'
 import { Markdown } from 'tiptap-markdown'
 import mermaid from 'mermaid'
 import http from '../api/http'
@@ -315,6 +316,10 @@ const SLASH_ITEMS: SlashItem[] = [
   { title: '代码块', desc: '带语法高亮的代码', icon: '</>', keywords: ['code', '代码'], action: (e, r) => { e.chain().focus().deleteRange(r).toggleCodeBlock().run() } },
   { title: '表格', desc: '3×3 表格', icon: '▦', keywords: ['table', '表格'], action: (e, r) => { e.chain().focus().deleteRange(r).insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run() } },
   { title: '分割线', desc: '水平分隔线', icon: '―', keywords: ['hr', 'divider', '分割', '横线'], action: (e, r) => { e.chain().focus().deleteRange(r).setHorizontalRule().run() } },
+  { title: '提示框', desc: '信息提示块', icon: '💡', keywords: ['callout', 'info', '提示', '信息', '框'], action: (e, r) => { e.chain().focus().deleteRange(r).insertContent({ type: 'callout', attrs: { type: 'info' }, content: [{ type: 'paragraph' }] }).run() } },
+  { title: '成功框', desc: '成功/完成提示块', icon: '✅', keywords: ['success', '成功', '完成', '框'], action: (e, r) => { e.chain().focus().deleteRange(r).insertContent({ type: 'callout', attrs: { type: 'success' }, content: [{ type: 'paragraph' }] }).run() } },
+  { title: '警告框', desc: '警告/注意提示块', icon: '⚠️', keywords: ['warn', 'warning', '警告', '注意', '框'], action: (e, r) => { e.chain().focus().deleteRange(r).insertContent({ type: 'callout', attrs: { type: 'warn' }, content: [{ type: 'paragraph' }] }).run() } },
+  { title: '危险框', desc: '严重风险提示块', icon: '⛔', keywords: ['danger', 'error', '危险', '错误', '框'], action: (e, r) => { e.chain().focus().deleteRange(r).insertContent({ type: 'callout', attrs: { type: 'danger' }, content: [{ type: 'paragraph' }] }).run() } },
   { title: '图片', desc: '上传或插入图片', icon: '▧', keywords: ['image', 'img', '图片', '照片'], action: (e, r) => { e.chain().focus().deleteRange(r).run(); handleImageUpload() } },
   { title: '图表', desc: 'Mermaid 流程图/时序图', icon: '◈', keywords: ['mermaid', 'chart', 'diagram', '图表', '流程图'], action: (e, r) => { e.chain().focus().deleteRange(r).run(); insertMermaid() } },
 ]
@@ -439,6 +444,7 @@ const editor = useEditor({
     TextAlign.configure({ types: ['heading', 'paragraph'] }),
     Typography,
     CharacterCount,
+    Callout,
     SlashCommand,
     Markdown.configure({ html: true, breaks: true, linkify: true }),
   ],
@@ -1295,6 +1301,20 @@ onBeforeUnmount(() => {
   background: #f8fafc;
   border-radius: 0 6px 6px 0;
 }
+
+.editor-content :deep(.ProseMirror .callout) {
+  border-radius: 10px;
+  padding: 12px 16px;
+  margin: 14px 0;
+  border-left: 4px solid #3b82f6;
+  background: #eff6ff;
+}
+.editor-content :deep(.ProseMirror .callout > *:first-child) { margin-top: 0; }
+.editor-content :deep(.ProseMirror .callout > *:last-child) { margin-bottom: 0; }
+.editor-content :deep(.ProseMirror .callout-tip) { border-left-color: #8b5cf6; background: #f5f3ff; }
+.editor-content :deep(.ProseMirror .callout-success) { border-left-color: #10b981; background: #ecfdf5; }
+.editor-content :deep(.ProseMirror .callout-warn) { border-left-color: #f59e0b; background: #fffbeb; }
+.editor-content :deep(.ProseMirror .callout-danger) { border-left-color: #ef4444; background: #fef2f2; }
 
 .editor-content :deep(.ProseMirror img) {
   max-width: 100%;
