@@ -1,7 +1,7 @@
 import asyncio
 import json
 
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
 from typing import List, Dict, Any
@@ -16,6 +16,7 @@ from app.core.entity_graph import EntityGraphStore
 from app.core.graphrag import rebuild_communities, sync_image_assets
 from app.api.deps import get_db
 from app.core.jwt_utils import get_current_user
+from app.core.security import has_permission, require_permission
 from app.config import settings
 
 router = APIRouter(prefix="/api/graph", tags=["知识图谱"])
@@ -23,7 +24,7 @@ router = APIRouter(prefix="/api/graph", tags=["知识图谱"])
 logger = logging.getLogger(__name__)
 
 def _get_visible_pages(db, current_user):
-    if "__local_admin__" in current_user["groups"]:
+    if has_permission(current_user, "graph.manage"):
         return db.query(Page).all()
     visible_nb_ids = db.query(Notebook.id).filter(
         or_(Notebook.group_id.in_(current_user["groups"]), Notebook.group_id.is_(None))
@@ -245,8 +246,7 @@ def get_graph_stats(db: Session = Depends(get_db), current_user=Depends(get_curr
 
 @router.post("/rebuild")
 def rebuild_graph(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
-    if "__local_admin__" not in current_user["groups"]:
-        raise HTTPException(status_code=403, detail="仅管理员可执行")
+    require_permission(current_user, "graph.manage")
     pages = _get_visible_pages(db, current_user)
     if not pages:
         return {"message": "没有笔记，跳过构建"}
@@ -258,8 +258,7 @@ def rebuild_graph(db: Session = Depends(get_db), current_user=Depends(get_curren
 
 @router.post("/rebuild-entities")
 async def rebuild_entities(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
-    if "__local_admin__" not in current_user["groups"]:
-        raise HTTPException(status_code=403, detail="仅管理员可执行")
+    require_permission(current_user, "graph.manage")
 
     pages = _get_visible_pages(db, current_user)
     store = EntityGraphStore(db)
@@ -350,8 +349,7 @@ async def _run_graphrag():
 
 @router.post("/rebuild-communities")
 async def rebuild_communities_endpoint(current_user=Depends(get_current_user)):
-    if "__local_admin__" not in current_user["groups"]:
-        raise HTTPException(status_code=403, detail="仅管理员可执行")
+    require_permission(current_user, "graph.manage")
     global _graphrag_task
     if _graphrag_status.get("running"):
         return {"started": False, "running": True, "message": "社区重建已在运行"}
@@ -369,8 +367,7 @@ def community_status(current_user=Depends(get_current_user)):
 
 @router.post("/rebuild-images")
 def rebuild_images_endpoint(current_user=Depends(get_current_user)):
-    if "__local_admin__" not in current_user["groups"]:
-        raise HTTPException(status_code=403, detail="仅管理员可执行")
+    require_permission(current_user, "graph.manage")
     engine = get_engine(settings.database_url)
     init_db(engine)
     n = sync_image_assets(engine)

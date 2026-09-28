@@ -11,6 +11,7 @@ from app.core.hybrid import HybridIndex
 from app.core.dingtalk import DingTalkClient
 from app.api.deps import get_db
 from app.core.jwt_utils import get_current_user
+from app.core.security import has_permission
 from app.config import settings
 
 router = APIRouter(prefix="/api/dingtalk", tags=["钉钉同步"])
@@ -241,7 +242,7 @@ def start_sync_selected(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    if "__local_admin__" not in current_user["groups"]:
+    if not has_permission(current_user, "*"):
         raise HTTPException(status_code=403, detail="仅管理员可执行")
     if SYNC_STATUS["running"]:
         raise HTTPException(status_code=409, detail="同步正在进行中")
@@ -273,7 +274,7 @@ def start_sync(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    if "__local_admin__" not in current_user["groups"]:
+    if not has_permission(current_user, "*"):
         raise HTTPException(status_code=403, detail="仅管理员可执行")
     if SYNC_STATUS["running"]:
         raise HTTPException(status_code=409, detail="同步正在进行中")

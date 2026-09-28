@@ -12,6 +12,7 @@ from app.api.deps import get_db
 from app.config import settings
 from app.core.jwt_utils import get_current_user
 from app.core.pipeline import run_pipeline, preview_pipeline
+from app.core.security import has_permission, require_permission
 from app.models.database import (
     Notebook,
     Pipeline,
@@ -31,7 +32,7 @@ _tasks: Dict[str, asyncio.Task] = {}
 
 
 def _is_admin(current_user) -> bool:
-    return "__local_admin__" in current_user["groups"]
+    return has_permission(current_user, "pipeline.manage")
 
 
 def _visible(pipeline: Pipeline, current_user) -> bool:
@@ -76,12 +77,14 @@ def _to_response(pipeline: Pipeline, db: Session) -> PipelineResponse:
 
 @router.get("", response_model=List[PipelineResponse])
 def list_pipelines(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    require_permission(current_user, "pipeline.manage")
     rows = db.query(Pipeline).order_by(Pipeline.updated_at.desc()).all()
     return [_to_response(p, db) for p in rows if _visible(p, current_user)]
 
 
 @router.post("", response_model=PipelineResponse)
 def create_pipeline(data: PipelineCreate, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    require_permission(current_user, "pipeline.manage")
     group_id = data.group_id
     if group_id and group_id not in current_user["groups"] and not _is_admin(current_user):
         group_id = current_user["groups"][0] if current_user["groups"] else None
@@ -115,6 +118,7 @@ def create_pipeline(data: PipelineCreate, db: Session = Depends(get_db), current
 @router.get("/compile-templates")
 def compile_templates(current_user=Depends(get_current_user)):
     """内置编译规则(提示词/输出模板) + 通用规则 + 固定骨架，供前端预填/编辑模板。"""
+    require_permission(current_user, "pipeline.manage")
     from app.core.wiki import COMMON_RULES, INGEST_PROMPT, KIND_PROMPTS, KIND_TEMPLATES
     kinds = {
         k: {"prompt": KIND_PROMPTS.get(k, ""), "template": KIND_TEMPLATES.get(k, "")}
@@ -132,11 +136,13 @@ def _get_or_404(pipeline_id: str, db: Session, current_user) -> Pipeline:
 
 @router.get("/{pipeline_id}", response_model=PipelineResponse)
 def get_pipeline(pipeline_id: str, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    require_permission(current_user, "pipeline.manage")
     return _to_response(_get_or_404(pipeline_id, db, current_user), db)
 
 
 @router.put("/{pipeline_id}", response_model=PipelineResponse)
 def update_pipeline(pipeline_id: str, data: PipelineUpdate, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    require_permission(current_user, "pipeline.manage")
     pipeline = _get_or_404(pipeline_id, db, current_user)
     if data.name is not None:
         pipeline.name = data.name
@@ -177,6 +183,7 @@ def update_pipeline(pipeline_id: str, data: PipelineUpdate, db: Session = Depend
 
 @router.delete("/{pipeline_id}")
 def delete_pipeline(pipeline_id: str, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    require_permission(current_user, "pipeline.manage")
     pipeline = _get_or_404(pipeline_id, db, current_user)
     if not _is_admin(current_user) and pipeline.group_id and pipeline.group_id not in current_user["groups"]:
         raise HTTPException(status_code=403, detail="无权删除该管道")
@@ -187,6 +194,7 @@ def delete_pipeline(pipeline_id: str, db: Session = Depends(get_db), current_use
 
 @router.post("/{pipeline_id}/run")
 async def run_pipeline_endpoint(pipeline_id: str, mode: str = "incremental", db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    require_permission(current_user, "pipeline.manage")
     pipeline = _get_or_404(pipeline_id, db, current_user)
     if _status.get(pipeline.id, {}).get("running"):
         return {"started": False, "running": True, "message": "该管道正在运行"}
@@ -199,12 +207,14 @@ async def run_pipeline_endpoint(pipeline_id: str, mode: str = "incremental", db:
 
 @router.get("/{pipeline_id}/status")
 def pipeline_status(pipeline_id: str, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    require_permission(current_user, "pipeline.manage")
     _get_or_404(pipeline_id, db, current_user)
     return _status.get(pipeline_id, {"running": False, "processed": 0, "total": 0, "changed": 0, "message": ""})
 
 
 @router.get("/{pipeline_id}/runs")
 def pipeline_runs(pipeline_id: str, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    require_permission(current_user, "pipeline.manage")
     _get_or_404(pipeline_id, db, current_user)
     rows = (
         db.query(PipelineRun)
@@ -231,6 +241,7 @@ def pipeline_runs(pipeline_id: str, db: Session = Depends(get_db), current_user=
 
 @router.post("/{pipeline_id}/preview")
 async def pipeline_preview(pipeline_id: str, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    require_permission(current_user, "pipeline.manage")
     _get_or_404(pipeline_id, db, current_user)
     engine = get_engine(settings.database_url)
     return await preview_pipeline(engine, pipeline_id)
@@ -238,6 +249,7 @@ async def pipeline_preview(pipeline_id: str, db: Session = Depends(get_db), curr
 
 @router.get("/{pipeline_id}/pages")
 def pipeline_pages(pipeline_id: str, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    require_permission(current_user, "pipeline.manage")
     _get_or_404(pipeline_id, db, current_user)
     rows = (
         db.query(WikiPage)

@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.core.jwt_utils import get_current_user
+from app.core.security import require_permission
 from app.sources import SOURCES
 
 router = APIRouter(prefix="/api/sources", tags=["数据源"])
@@ -26,6 +27,7 @@ def _status(key: str) -> Dict[str, Any]:
 
 @router.get("")
 def list_sources(current_user=Depends(get_current_user)):
+    require_permission(current_user, "sources.manage")
     return {
         "sources": [
             {
@@ -43,8 +45,7 @@ def list_sources(current_user=Depends(get_current_user)):
 
 @router.post("/{key}/test")
 async def test_source(key: str, current_user=Depends(get_current_user)):
-    if "__local_admin__" not in current_user["groups"]:
-        raise HTTPException(status_code=403, detail="仅管理员可执行")
+    require_permission(current_user, "sources.manage")
     src = SOURCES.get(key)
     if not src:
         raise HTTPException(status_code=404, detail="数据源不存在")
@@ -54,8 +55,7 @@ async def test_source(key: str, current_user=Depends(get_current_user)):
 
 @router.post("/{key}/sync")
 async def sync_source(key: str, body: SyncRequest = None, current_user=Depends(get_current_user)):
-    if "__local_admin__" not in current_user["groups"]:
-        raise HTTPException(status_code=403, detail="仅管理员可执行")
+    require_permission(current_user, "sources.manage")
     src = SOURCES.get(key)
     if not src:
         raise HTTPException(status_code=404, detail="数据源不存在")
@@ -72,8 +72,7 @@ async def sync_source(key: str, body: SyncRequest = None, current_user=Depends(g
 
 @router.post("/{key}/cancel")
 async def cancel_source(key: str, current_user=Depends(get_current_user)):
-    if "__local_admin__" not in current_user["groups"]:
-        raise HTTPException(status_code=403, detail="仅管理员可执行")
+    require_permission(current_user, "sources.manage")
     task = _tasks.get(key)
     st = _status(key)
     if not task or not st.get("running"):

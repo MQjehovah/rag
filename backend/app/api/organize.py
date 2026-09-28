@@ -13,6 +13,7 @@ from app.config import settings
 from app.models.database import Page, Notebook, get_session, get_engine, init_db
 from app.api.deps import get_db
 from app.core.jwt_utils import get_current_user
+from app.core.security import has_permission
 
 router = APIRouter(prefix="/api/organize", tags=["自动整理"])
 
@@ -207,7 +208,7 @@ async def run_organize(db: Session) -> Generator[str, None, None]:
 
 @router.post("")
 async def organize(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
-    if "__local_admin__" not in current_user["groups"]:
+    if not has_permission(current_user, "*"):
         raise HTTPException(status_code=403, detail="仅管理员可执行自动整理")
 
     async def generate():

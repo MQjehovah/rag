@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_db
 from app.config import settings
 from app.core.jwt_utils import get_current_user
+from app.core.security import has_permission, require_permission
 from app.models.database import (
     EmbeddingProfile,
     Notebook,
@@ -34,12 +35,11 @@ _reindex_task: asyncio.Task | None = None
 
 
 def _is_admin(current_user) -> bool:
-    return "__local_admin__" in current_user["groups"]
+    return has_permission(current_user, "embedding.manage")
 
 
 def _require_admin(current_user) -> None:
-    if not _is_admin(current_user):
-        raise HTTPException(status_code=403, detail="仅管理员可执行")
+    require_permission(current_user, "embedding.manage")
 
 
 @router.get("/profiles", response_model=List[EmbeddingProfileResponse])

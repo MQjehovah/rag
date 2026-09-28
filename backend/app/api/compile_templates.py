@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
 from app.core.jwt_utils import get_current_user
+from app.core.security import require_permission
 from app.models.database import CompileTemplate
 from app.models.schema import (
     CompileTemplateCreate,
@@ -18,11 +19,13 @@ router = APIRouter(prefix="/api/compile-templates", tags=["编译模板"])
 
 @router.get("", response_model=list[CompileTemplateResponse])
 def list_templates(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    require_permission(current_user, "pipeline.manage")
     return db.query(CompileTemplate).order_by(CompileTemplate.created_at.asc()).all()
 
 
 @router.post("", response_model=CompileTemplateResponse)
 def create_template(data: CompileTemplateCreate, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    require_permission(current_user, "pipeline.manage")
     name = (data.name or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="模板名称不能为空")
@@ -50,11 +53,13 @@ def _get_or_404(template_id: str, db: Session) -> CompileTemplate:
 
 @router.get("/{template_id}", response_model=CompileTemplateResponse)
 def get_template(template_id: str, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    require_permission(current_user, "pipeline.manage")
     return _get_or_404(template_id, db)
 
 
 @router.put("/{template_id}", response_model=CompileTemplateResponse)
 def update_template(template_id: str, data: CompileTemplateUpdate, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    require_permission(current_user, "pipeline.manage")
     t = _get_or_404(template_id, db)
     for field in ("name", "description", "compiler_kind", "prompt", "rules", "template", "group_id"):
         value = getattr(data, field)
@@ -67,6 +72,7 @@ def update_template(template_id: str, data: CompileTemplateUpdate, db: Session =
 
 @router.delete("/{template_id}")
 def delete_template(template_id: str, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    require_permission(current_user, "pipeline.manage")
     t = _get_or_404(template_id, db)
     db.delete(t)
     db.commit()

@@ -8,6 +8,7 @@ from app.api.deps import get_db
 from app.config import settings
 from app.core.jira import sync_jira
 from app.core.jwt_utils import get_current_user
+from app.core.security import has_permission
 from app.models.database import JiraIssue, Page
 
 router = APIRouter(prefix="/api/jira", tags=["Jira"])
@@ -38,7 +39,7 @@ def jira_stats(db: Session = Depends(get_db), current_user=Depends(get_current_u
 
 @router.post("/sync")
 async def jira_sync(current_user=Depends(get_current_user)):
-    if "__local_admin__" not in current_user["groups"]:
+    if not has_permission(current_user, "*"):
         raise HTTPException(status_code=403, detail="仅管理员可执行")
     if not settings.jira_enabled or not settings.jira_url:
         raise HTTPException(status_code=400, detail="Jira 未配置")

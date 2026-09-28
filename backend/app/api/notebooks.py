@@ -10,6 +10,7 @@ from app.models.schema import NotebookCreate, NotebookUpdate, NotebookMove, Note
 from app.core.rag import VectorStore
 from app.api.deps import get_db
 from app.core.jwt_utils import get_current_user
+from app.core.security import has_permission
 from app.config import settings
 
 router = APIRouter(prefix="/api/notebooks", tags=["笔记本"])
@@ -42,7 +43,7 @@ def create_notebook(data: NotebookCreate, db: Session = Depends(get_db), current
 @router.get("", response_model=NotebookListResponse)
 def list_notebooks(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     query = db.query(Notebook)
-    if "__local_admin__" not in current_user["groups"]:
+    if not has_permission(current_user, "notebook.manage"):
         query = query.filter((Notebook.group_id.in_(current_user["groups"])) | (Notebook.group_id.is_(None)))
     notebooks = query.order_by(Notebook.position.asc(), Notebook.created_at.asc()).all()
 
@@ -58,7 +59,7 @@ def get_notebook(notebook_id: str, db: Session = Depends(get_db), current_user=D
     notebook = db.query(Notebook).filter(Notebook.id == notebook_id).first()
     if not notebook:
         raise HTTPException(status_code=404, detail="笔记本不存在")
-    if "__local_admin__" not in current_user["groups"]:
+    if not has_permission(current_user, "notebook.manage"):
         if notebook.group_id and notebook.group_id not in current_user["groups"]:
             raise HTTPException(status_code=403, detail="无权访问该笔记本")
     return notebook
@@ -68,7 +69,7 @@ def update_notebook(notebook_id: str, data: NotebookUpdate, db: Session = Depend
     notebook = db.query(Notebook).filter(Notebook.id == notebook_id).first()
     if not notebook:
         raise HTTPException(status_code=404, detail="笔记本不存在")
-    if "__local_admin__" not in current_user["groups"]:
+    if not has_permission(current_user, "notebook.manage"):
         if notebook.group_id and notebook.group_id not in current_user["groups"]:
             raise HTTPException(status_code=403, detail="无权访问该笔记本")
     if data.name is not None:
@@ -94,7 +95,7 @@ def move_notebook(notebook_id: str, data: NotebookMove, db: Session = Depends(ge
     notebook = db.query(Notebook).filter(Notebook.id == notebook_id).first()
     if not notebook:
         raise HTTPException(status_code=404, detail="笔记本不存在")
-    if "__local_admin__" not in current_user["groups"]:
+    if not has_permission(current_user, "notebook.manage"):
         if notebook.group_id and notebook.group_id not in current_user["groups"]:
             raise HTTPException(status_code=403, detail="无权访问该笔记本")
     if data.section is not None:
@@ -115,7 +116,7 @@ def delete_notebook(notebook_id: str, db: Session = Depends(get_db), current_use
     notebook = db.query(Notebook).filter(Notebook.id == notebook_id).first()
     if not notebook:
         raise HTTPException(status_code=404, detail="笔记本不存在")
-    if "__local_admin__" not in current_user["groups"]:
+    if not has_permission(current_user, "notebook.manage"):
         if notebook.group_id and notebook.group_id not in current_user["groups"]:
             raise HTTPException(status_code=403, detail="无权访问该笔记本")
 

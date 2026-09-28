@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_db
 from app.api.search_common import get_visible_page_ids, visible_wiki_filter
 from app.core.jwt_utils import get_current_user
+from app.core.security import has_permission, require_permission
 from app.core.rag import EmbeddingService
 from app.core.wiki import build_wiki, ensure_default_space, refresh_stale_wiki, resolve_space_id
 from app.core.wiki_embedding import embed_wiki_pages
@@ -80,7 +81,7 @@ class WikiPageMove(BaseModel):
 
 
 def _space_visible(space: WikiSpace, current_user) -> bool:
-    if "__local_admin__" in current_user["groups"]:
+    if has_permission(current_user, "wiki.admin"):
         return True
     return space.group_id is None or space.group_id in current_user["groups"]
 
@@ -114,6 +115,7 @@ def list_spaces(db: Session = Depends(get_db), current_user=Depends(get_current_
 
 @router.post("/spaces")
 def create_space(data: SpaceCreate, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    require_permission(current_user, "wiki.admin")
     name = (data.name or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="空间名称不能为空")
@@ -132,6 +134,7 @@ def create_space(data: SpaceCreate, db: Session = Depends(get_db), current_user=
 
 @router.put("/spaces/{space_id}")
 def update_space(space_id: str, data: SpaceUpdate, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    require_permission(current_user, "wiki.admin")
     space = db.query(WikiSpace).filter(WikiSpace.id == space_id).first()
     if not space or not _space_visible(space, current_user):
         raise HTTPException(status_code=404, detail="空间不存在")
@@ -147,6 +150,7 @@ def update_space(space_id: str, data: SpaceUpdate, db: Session = Depends(get_db)
 
 @router.delete("/spaces/{space_id}")
 def delete_space(space_id: str, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    require_permission(current_user, "wiki.admin")
     space = db.query(WikiSpace).filter(WikiSpace.id == space_id).first()
     if not space or not _space_visible(space, current_user):
         raise HTTPException(status_code=404, detail="空间不存在")
@@ -381,8 +385,7 @@ def set_wiki_group(
     current_user=Depends(get_current_user),
 ):
     """人工指定 wiki 页面的归属组;仅管理员。None 表示公共。"""
-    if "__local_admin__" not in current_user["groups"]:
-        raise HTTPException(status_code=403, detail="仅管理员可执行")
+    require_permission(current_user, "wiki.admin")
     page = db.query(WikiPage).filter(WikiPage.id == page_id).first()
     if not page:
         raise HTTPException(status_code=404, detail="Wiki 页面不存在")
@@ -393,8 +396,7 @@ def set_wiki_group(
 
 @router.post("/rebuild")
 async def rebuild_wiki(current_user=Depends(get_current_user)):
-    if "__local_admin__" not in current_user["groups"]:
-        raise HTTPException(status_code=403, detail="仅管理员可执行")
+    require_permission(current_user, "wiki.admin")
     global _wiki_task
     if _wiki_status.get("running"):
         return {"started": False, "running": True, "message": "Wiki 编译已在运行"}
@@ -409,8 +411,7 @@ async def reindex_wiki_embeddings(
     current_user=Depends(get_current_user),
 ):
     """管理员为存量 wiki 页补齐缺失向量(幂等)。"""
-    if "__local_admin__" not in current_user["groups"]:
-        raise HTTPException(status_code=403, detail="仅管理员可执行")
+    require_permission(current_user, "wiki.admin")
     return await embed_wiki_pages(db.get_bind())
 
 
@@ -418,8 +419,7 @@ async def reindex_wiki_embeddings(
 async def refresh_stale_endpoint(current_user=Depends(get_current_user)):
     """Differentiated rebuild: only re-distill pages whose source notes
     changed since they were last compiled."""
-    if "__local_admin__" not in current_user["groups"]:
-        raise HTTPException(status_code=403, detail="仅管理员可执行")
+    require_permission(current_user, "wiki.admin")
     global _wiki_task
     if _wiki_status.get("running"):
         return {"started": False, "running": True, "message": "已有编译任务在运行"}

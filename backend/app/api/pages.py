@@ -18,6 +18,7 @@ from app.core.hybrid import HybridIndex
 from app.core.entity_graph import EntityGraphStore
 from app.api.deps import get_db
 from app.core.jwt_utils import get_current_user
+from app.core.security import has_permission
 from app.config import settings
 
 router = APIRouter(prefix="/api/pages", tags=["笔记"])
@@ -121,7 +122,7 @@ async def background_index_page(page_id: str):
         await emb_svc.close()
 
 def _check_page_access(page, current_user, db):
-    if "__local_admin__" in current_user["groups"]:
+    if has_permission(current_user, "page.manage"):
         return
     if page.notebook_id:
         nb = db.query(Notebook).filter(Notebook.id == page.notebook_id).first()
@@ -129,7 +130,7 @@ def _check_page_access(page, current_user, db):
             raise HTTPException(status_code=403, detail="无权访问该笔记")
 
 def _check_page_access_by_nb(notebook_id, current_user, db):
-    if "__local_admin__" in current_user["groups"]:
+    if has_permission(current_user, "page.manage"):
         return
     if notebook_id:
         row = db.execute(
@@ -143,7 +144,7 @@ def _check_page_access_by_nb(notebook_id, current_user, db):
 def create_page(data: PageCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     if data.notebook_id:
         nb = db.query(Notebook).filter(Notebook.id == data.notebook_id).first()
-        if nb and "__local_admin__" not in current_user["groups"]:
+        if nb and not has_permission(current_user, "page.manage"):
             if nb.group_id and nb.group_id not in current_user["groups"]:
                 raise HTTPException(status_code=403, detail="无权在该笔记本创建笔记")
     parent_id = data.parent_id
@@ -185,7 +186,7 @@ def list_pages(
         query = query.filter(Page.notebook_id == notebook_id)
     if tag:
         query = query.filter(Page.keywords.like(f"%{tag}%"))
-    if "__local_admin__" not in current_user["groups"]:
+    if not has_permission(current_user, "page.manage"):
         visible_nb_ids = db.query(Notebook.id).filter(
             or_(Notebook.group_id.in_(current_user["groups"]), Notebook.group_id.is_(None))
         ).subquery()
@@ -215,7 +216,7 @@ def list_pages(
 @router.get("/tags")
 def get_tags(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     """Aggregate note keywords into a tag cloud (visible to the user)."""
-    if "__local_admin__" in current_user["groups"]:
+    if has_permission(current_user, "page.manage"):
         rows = db.query(Page.keywords).filter(Page.deleted_at.is_(None)).all()
     else:
         visible_nb_ids = db.query(Notebook.id).filter(
@@ -242,7 +243,7 @@ def page_tree(notebook_id: str, db: Session = Depends(get_db), current_user=Depe
     nb = db.query(Notebook).filter(Notebook.id == notebook_id).first()
     if not nb:
         raise HTTPException(status_code=404, detail="笔记本不存在")
-    if "__local_admin__" not in current_user["groups"] and nb.group_id and nb.group_id not in current_user["groups"]:
+    if not has_permission(current_user, "page.manage") and nb.group_id and nb.group_id not in current_user["groups"]:
         raise HTTPException(status_code=403, detail="无权访问该笔记本")
     rows = db.query(Page.id, Page.title, Page.parent_id, Page.position, Page.view_type, Page.status, Page.updated_at).filter(
         Page.notebook_id == notebook_id,
@@ -267,7 +268,7 @@ def page_tree(notebook_id: str, db: Session = Depends(get_db), current_user=Depe
 def list_trash(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     """回收站: 已软删除的页面(按用户可见范围)。"""
     q = db.query(Page.id, Page.title, Page.notebook_id, Page.deleted_at).filter(Page.deleted_at.isnot(None))
-    if "__local_admin__" not in current_user["groups"]:
+    if not has_permission(current_user, "page.manage"):
         visible_nb_ids = db.query(Notebook.id).filter(
             or_(Notebook.group_id.in_(current_user["groups"]), Notebook.group_id.is_(None))
         ).subquery()
@@ -322,7 +323,7 @@ def page_backlinks(page_id: str, db: Session = Depends(get_db), current_user=Dep
         Page.id != page.id,
         Page.content.like(pattern),
     )
-    if "__local_admin__" not in current_user["groups"]:
+    if not has_permission(current_user, "page.manage"):
         visible_nb_ids = db.query(Notebook.id).filter(
             or_(Notebook.group_id.in_(current_user["groups"]), Notebook.group_id.is_(None))
         ).subquery()
@@ -475,7 +476,7 @@ def delete_comment(page_id: str, comment_id: str, db: Session = Depends(get_db),
     c = db.query(PageComment).filter(PageComment.id == comment_id, PageComment.page_id == page_id).first()
     if not c:
         raise HTTPException(status_code=404, detail="评论不存在")
-    if "__local_admin__" not in current_user["groups"] and c.author_id != (current_user.get("id") if isinstance(current_user, dict) else None):
+    if not has_permission(current_user, "*") and c.author_id != (current_user.get("id") if isinstance(current_user, dict) else None):
         raise HTTPException(status_code=403, detail="只能删除自己的评论")
     db.delete(c)
     db.commit()
@@ -695,7 +696,7 @@ async def index_page(page_id: str, db: Session = Depends(get_db), current_user=D
 
 @router.post("/reindex-all")
 async def reindex_all(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
-    if "__local_admin__" not in current_user["groups"]:
+    if not has_permission(current_user, "page.manage"):
         raise HTTPException(status_code=403, detail="仅管理员可执行")
 
     pages = db.query(Page).filter(
