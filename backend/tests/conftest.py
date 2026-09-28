@@ -143,7 +143,7 @@ def as_user(api_client):
         user = {
             "id": overrides.pop("id", "u-1"),
             "username": overrides.pop("username", "10086"),
-            "display_name": "测试用户",
+            "name": "测试用户",
             "email": "",
             "is_local": False,
             "is_active": True,

@@ -539,7 +539,7 @@ async function ensureUsers() {
   if (userLoaded) return
   try {
     const res = await http.get('/api/auth/users')
-    userList = (res.data || []).map((u: any) => ({ id: u.id, name: u.display_name || u.username }))
+    userList = (res.data || []).map((u: any) => ({ id: u.id, name: u.name || u.username }))
     userLoaded = true
   } catch { /* ignore */ }
 }

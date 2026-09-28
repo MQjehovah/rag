@@ -78,7 +78,7 @@ def _members_out(db: Session, name: str) -> list[dict]:
     return [
         {
             "id": u.id, "username": u.username,
-            "display_name": u.display_name, "is_local": bool(u.is_local),
+            "name": u.name or "", "is_local": bool(u.is_local),
         }
         for u in rows
     ]

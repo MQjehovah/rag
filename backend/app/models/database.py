@@ -292,7 +292,10 @@ class User(Base):
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     username = Column(String(255), unique=True, nullable=False)
     email = Column(String(255), default="")
-    display_name = Column(String(255), default="")
+    name = Column(String(255), default="")
+    # 工号(SSO sub);历史上 username 即工号,故迁移时按 username 回填
+    work_id = Column(String(64), default="", index=True)
+    phone = Column(String(32), default="")
     is_local = Column(Boolean, default=False)
     password_hash = Column(String(255), default="")
     is_active = Column(Boolean, default=True)
@@ -547,8 +550,46 @@ def _backfill_text_defaults(engine):
         logger.warning("回填文本列默认值失败", exc_info=True)
 
 
+def run_user_column_migrations(engine):
+    """users 表幂等迁移(PG): display_name→name, 补 work_id(按 username 回填工号)与 phone(无回填)。
+
+    SQLite(测试/本地)直接跳过。必须在 _migrate_schema 之前调用, 否则它会
+    先把缺失的 name 列以空值补上, 导致 RENAME 因目标列已存在而被跳过、旧数据丢失。
+    """
+    if engine.dialect.name != "postgresql":
+        return
+    with engine.begin() as conn:
+        # 多 worker 并发启动时串行化迁移, 避免同时 ALTER 互相打断
+        conn.execute(sqlalchemy_text("SELECT pg_advisory_xact_lock(839201002)"))
+        cols = {
+            row[0]
+            for row in conn.execute(sqlalchemy_text(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name='users' AND table_schema = current_schema()"
+            )).fetchall()
+        }
+        if "name" not in cols and "display_name" in cols:
+            conn.execute(sqlalchemy_text("ALTER TABLE users RENAME COLUMN display_name TO name"))
+        if "work_id" not in cols:
+            conn.execute(sqlalchemy_text(
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS work_id VARCHAR(64) DEFAULT ''"
+            ))
+            # 旧数据 username 即工号: 仅加列当次回填, 不覆盖后续人工清空
+            conn.execute(sqlalchemy_text(
+                "UPDATE users SET work_id = username WHERE work_id = '' OR work_id IS NULL"
+            ))
+        if "phone" not in cols:
+            conn.execute(sqlalchemy_text(
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(32) DEFAULT ''"
+            ))
+        conn.execute(sqlalchemy_text(
+            "CREATE INDEX IF NOT EXISTS ix_users_work_id ON users(work_id)"
+        ))
+
+
 def init_db(engine):
     Base.metadata.create_all(engine)
+    run_user_column_migrations(engine)
     _migrate_schema(engine)
     _backfill_text_defaults(engine)
     _ensure_wiki_group_index(engine)

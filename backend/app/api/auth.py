@@ -102,7 +102,7 @@ def login(data: LoginRequest, db: Session = Depends(get_db)):
             id=str(uuid.uuid4()),
             username=data.username,
             email=ldap_result.get("email", ""),
-            display_name=ldap_result.get("display_name", data.username),
+            name=ldap_result.get("name", data.username),
             is_local=False,
             is_active=True,
         )
@@ -111,7 +111,7 @@ def login(data: LoginRequest, db: Session = Depends(get_db)):
         db.refresh(user)
     else:
         user.email = ldap_result.get("email", user.email)
-        user.display_name = ldap_result.get("display_name", user.display_name)
+        user.name = ldap_result.get("name", user.name)
         db.commit()
 
     groups = ldap_result.get("groups", [])
@@ -137,7 +137,7 @@ def list_users(current_user=Depends(get_current_user), db: Session = Depends(get
     """用户列表(用于 @ 提及)。"""
     rows = db.query(User).order_by(User.username.asc()).limit(500).all()
     return [
-        {"id": u.id, "username": u.username, "display_name": u.display_name or u.username}
+        {"id": u.id, "username": u.username, "name": u.name or u.username}
         for u in rows
     ]
 

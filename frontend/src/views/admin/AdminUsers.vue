@@ -20,7 +20,7 @@
           <div class="panel-tools">
             <el-input
               v-model="searchInput"
-              placeholder="搜索用户名 / 显示名 / 邮箱"
+              placeholder="搜索用户名 / 姓名 / 邮箱"
               clearable
               class="search"
               @keyup.enter="search"
@@ -43,8 +43,8 @@
             </template>
           </el-table-column>
 
-          <el-table-column label="显示名" min-width="130">
-            <template #default="{ row }">{{ row.display_name || '—' }}</template>
+          <el-table-column label="姓名" min-width="130">
+            <template #default="{ row }">{{ row.name || '—' }}</template>
           </el-table-column>
 
           <el-table-column label="邮箱" min-width="180" show-overflow-tooltip>
@@ -180,8 +180,8 @@
         <el-form-item label="密码">
           <el-input v-model="createForm.password" type="password" show-password maxlength="128" placeholder="初始密码" />
         </el-form-item>
-        <el-form-item label="显示名">
-          <el-input v-model="createForm.display_name" maxlength="64" placeholder="可选" />
+        <el-form-item label="姓名">
+          <el-input v-model="createForm.name" maxlength="64" placeholder="可选" />
         </el-form-item>
         <el-form-item label="邮箱">
           <el-input v-model="createForm.email" maxlength="128" placeholder="可选" />
@@ -239,8 +239,8 @@
         <el-form-item label="用户名">
           <el-input :model-value="editTarget?.username || ''" disabled />
         </el-form-item>
-        <el-form-item label="显示名">
-          <el-input v-model="editForm.display_name" maxlength="64" placeholder="可选" />
+        <el-form-item label="姓名">
+          <el-input v-model="editForm.name" maxlength="64" placeholder="可选" />
         </el-form-item>
         <el-form-item label="邮箱">
           <el-input v-model="editForm.email" maxlength="128" placeholder="可选" />
@@ -336,7 +336,7 @@ interface UserRow {
   id: string
   username: string
   email: string
-  display_name: string
+  name: string
   is_local: boolean
   is_active: boolean
   roles: RoleBrief[]
@@ -374,7 +374,7 @@ const createOpen = ref(false)
 const createForm = reactive({
   username: '',
   password: '',
-  display_name: '',
+  name: '',
   email: '',
   roles: [] as string[],
   groups: [] as string[],
@@ -382,7 +382,7 @@ const createForm = reactive({
 
 const editOpen = ref(false)
 const editTarget = ref<UserRow | null>(null)
-const editForm = reactive({ display_name: '', email: '' })
+const editForm = reactive({ name: '', email: '' })
 
 const rolesOpen = ref(false)
 const rolesTarget = ref<UserRow | null>(null)
@@ -424,7 +424,7 @@ function visibleGroups(u: UserRow): string[] {
 
 function targetLabel(u: UserRow | null): string {
   if (!u) return ''
-  return u.display_name ? `${u.display_name}（${u.username}）` : u.username
+  return u.name ? `${u.name}（${u.username}）` : u.username
 }
 
 async function load() {
@@ -483,7 +483,7 @@ function openCreate() {
   Object.assign(createForm, {
     username: '',
     password: '',
-    display_name: '',
+    name: '',
     email: '',
     roles: [],
     groups: [],
@@ -506,7 +506,7 @@ async function saveCreate() {
     await http.post('/api/admin/users', {
       username,
       password: createForm.password,
-      display_name: createForm.display_name.trim(),
+      name: createForm.name.trim(),
       email: createForm.email.trim(),
       roles: createForm.roles,
       groups: createForm.groups,
@@ -524,7 +524,7 @@ async function saveCreate() {
 function openEdit(u: UserRow) {
   if (!u.is_local) return
   editTarget.value = u
-  editForm.display_name = u.display_name
+  editForm.name = u.name
   editForm.email = u.email
   editOpen.value = true
 }
@@ -535,7 +535,7 @@ async function saveEdit() {
   if (!beginSaving(key)) return
   try {
     await http.put(`/api/admin/users/${editTarget.value.id}`, {
-      display_name: editForm.display_name.trim(),
+      name: editForm.name.trim(),
       email: editForm.email.trim(),
     })
     editOpen.value = false

@@ -305,7 +305,9 @@ class UserResponse(BaseModel):
     id: str
     username: str
     email: str = ""
-    display_name: str = ""
+    name: str = ""
+    work_id: str = ""
+    phone: str = ""
     is_local: bool = False
     groups: List[str] = []
     is_active: bool = True

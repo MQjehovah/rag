@@ -75,7 +75,7 @@ def test_payload_shape_and_backward_compat(tmp_path):
         user = _user_with_roles(db, role_perms=[["sources.manage"]])
         payload = build_user_payload(db, user)
         assert "permissions" in payload and "roles" in payload
-        for k in ("id", "username", "email", "display_name", "is_local", "is_active", "groups"):
+        for k in ("id", "username", "email", "name", "work_id", "phone", "is_local", "is_active", "groups"):
             assert k in payload
     finally:
         db.close()

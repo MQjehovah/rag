@@ -56,7 +56,7 @@ def test_get_current_user_sso_provisions_and_does_not_duplicate(sso_env, db):
     payload = get_current_user(credentials=_bearer(token), db=db)
 
     assert payload["username"] == SSO_EMP_NO
-    assert payload["display_name"] == "测试用户"
+    assert payload["name"] == "测试用户"
     assert payload["is_local"] is False
     assert payload["is_active"] is True
     assert sorted(payload["groups"]) == sorted(SSO_GROUPS)
@@ -106,7 +106,7 @@ def test_get_current_user_hs256_local_user_still_works(db):
     user = User(
         id=str(uuid.uuid4()),
         username="admin",
-        display_name="Admin",
+        name="Admin",
         is_local=True,
         is_active=True,
     )
@@ -156,7 +156,7 @@ def test_get_current_user_sso_keeps_groups_when_no_groups_claim(sso_env, db):
         id=str(uuid.uuid4()),
         username=SSO_EMP_NO,
         email="old@example.com",
-        display_name="旧名字",
+        name="旧名字",
         is_local=False,
         is_active=True,
     )
@@ -183,7 +183,7 @@ def test_get_current_user_sso_matches_existing_account_by_email(db, sso_env):
         id=str(uuid.uuid4()),
         username="jimingqing",  # 系统自建账号: username 不是工号
         email="jimingqing@xzrobot.com",
-        display_name="旧名字",
+        name="旧名字",
         is_local=False,
         is_active=True,
     )
@@ -197,7 +197,7 @@ def test_get_current_user_sso_matches_existing_account_by_email(db, sso_env):
 
     assert payload["id"] == existing.id
     assert payload["username"] == "jimingqing"
-    assert payload["display_name"] == "季明清"
+    assert payload["name"] == "季明清"
     assert db.query(User).filter(User.email == "jimingqing@xzrobot.com").count() == 1
 
 

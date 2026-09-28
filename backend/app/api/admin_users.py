@@ -31,14 +31,14 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 class UserCreate(BaseModel):
     username: str
     password: str
-    display_name: str = ""
+    name: str = ""
     email: str = ""
     roles: list[str] = []
     groups: list[str] = []
 
 
 class UserUpdate(BaseModel):
-    display_name: str | None = None
+    name: str | None = None
     email: str | None = None
     is_active: bool | None = None
 
@@ -116,7 +116,7 @@ def _user_out_data(user: User, roles: list[dict], groups: list[str]) -> dict:
         "id": user.id,
         "username": user.username,
         "email": user.email,
-        "display_name": user.display_name,
+        "name": user.name or "",
         "is_local": bool(user.is_local),
         "is_active": bool(user.is_active),
         "roles": roles,
@@ -185,7 +185,7 @@ def list_users(
         like = f"%{keyword}%"
         q = q.filter(or_(
             User.username.like(like),
-            User.display_name.like(like),
+            User.name.like(like),
             User.email.like(like),
         ))
     total = q.count()
@@ -231,7 +231,7 @@ def create_user(body: UserCreate, current_user=Depends(get_current_user), db: Se
     _register_groups(db, groups)
     user = User(
         id=str(uuid.uuid4()), username=username, email=body.email.strip(),
-        display_name=body.display_name.strip(),
+        name=body.name.strip(),
         is_local=True, is_active=True, password_hash=pwd_context.hash(body.password),
     )
     db.add(user)
@@ -260,8 +260,8 @@ def update_user(
     if body.is_active is False and user_id == current_user.get("id"):
         raise HTTPException(status_code=400, detail="不能禁用自己")
     user = _get_user_or_404(user_id, db)
-    if body.display_name is not None:
-        user.display_name = body.display_name.strip()
+    if body.name is not None:
+        user.name = body.name.strip()
     if body.email is not None:
         user.email = body.email.strip()
     if body.is_active is False:

@@ -8,7 +8,11 @@ interface User {
   id: string
   username: string
   email: string
-  display_name: string
+  name: string
+  work_id?: string
+  phone?: string
+  /** 旧 payload 字段(兼容历史残留数据);新代码一律读 name */
+  display_name?: string
   is_local: boolean
   groups: string[]
   roles?: { name: string; display_name: string }[]

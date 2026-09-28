@@ -243,7 +243,7 @@
               <el-option
                 v-for="u in aclUserOptions"
                 :key="u.id"
-                :label="`${u.display_name || u.username}（${u.username}）`"
+                :label="`${u.name || u.username}（${u.username}）`"
                 :value="u.id"
               />
             </el-select>
@@ -321,7 +321,7 @@ const savingSpace = ref(false)
 const spaceEditDialog = ref(false)
 const savingSpaceEdit = ref(false)
 const editSpaceForm = ref<{ id: string; name: string; icon: string; description: string; visibility: Visibility; acl_users: string[]; acl_groups: string[]; isDefault: boolean }>({ id: '', name: '', icon: '', description: '', visibility: 'dept', acl_users: [], acl_groups: [], isDefault: false })
-const aclUserOptions = ref<{ id: string; username: string; display_name: string }[]>([])
+const aclUserOptions = ref<{ id: string; username: string; name: string }[]>([])
 const aclGroupOptions = ref<string[]>([])
 const total = ref(0)
 const running = ref(false)

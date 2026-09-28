@@ -521,7 +521,7 @@
               <el-option
                 v-for="u in aclUserOptions"
                 :key="u.id"
-                :label="`${u.display_name || u.username}（${u.username}）`"
+                :label="`${u.name || u.username}（${u.username}）`"
                 :value="u.id"
               />
             </el-select>
@@ -738,7 +738,7 @@ function colorFor(name: string) {
 }
 const collab = computed(() => {
   if (!collabEnabled.value || !currentPage.value) return null
-  const name = auth.user?.display_name || auth.user?.username || '匿名'
+  const name = auth.user?.name || auth.user?.display_name || auth.user?.username || '匿名'
   return { url: wsBase.value, room: `page-${currentPage.value.id}`, user: { name, color: colorFor(name) } }
 })
 
@@ -818,7 +818,7 @@ const notebookForm = reactive({
 })
 // 管理员(notebook.manage)可配置资源级追加授权
 const canManageNotebook = computed(() => auth.hasPerm(PERM.notebook))
-const aclUserOptions = ref<{ id: string; username: string; display_name: string }[]>([])
+const aclUserOptions = ref<{ id: string; username: string; name: string }[]>([])
 const aclGroupOptions = ref<string[]>([])
 const loadAclOptions = async () => {
   if (!canManageNotebook.value) return

@@ -54,7 +54,7 @@ def as_perm(api_client):
         user = {
             "id": user_id,
             "username": "perm",
-            "display_name": "自定义用户",
+            "name": "自定义用户",
             "email": "",
             "is_local": False,
             "is_active": True,

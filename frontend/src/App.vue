@@ -170,7 +170,7 @@ const visibleGroups = computed(() =>
 
 const showNav = computed(() => route.path !== '/login' && !route.path.startsWith('/share'))
 const isLoggedIn = computed(() => authStore.isLoggedIn)
-const userName = computed(() => authStore.user?.display_name || authStore.user?.username || '')
+const userName = computed(() => authStore.user?.name || authStore.user?.display_name || authStore.user?.username || '')
 const initial = computed(() => (userName.value || '?')[0])
 
 const collapsed = ref(localStorage.getItem('rag-rail-collapsed') === '1')

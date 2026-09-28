@@ -5,7 +5,7 @@ from app.models.database import Role, User, UserGroup, UserRole, get_session
 
 def _user(db, username, is_local=False, active=True, groups=()):
     u = User(id=f"u-{username}", username=username, is_local=is_local, is_active=active,
-             password_hash="", display_name=username)
+             password_hash="", name=username)
     db.add(u)
     for g in groups:
         db.add(UserGroup(id=f"g-{username}-{g}", user_id=u.id, group_name=g))
@@ -22,7 +22,7 @@ def _grant_admin(db, user_id):
 def test_list_and_create_local_user(api_client, api_engine, as_user):
     as_user(["__local_admin__"])
     res = api_client.post("/api/admin/users", json={
-        "username": "lisi", "password": "Passw0rd!", "display_name": "李四",
+        "username": "lisi", "password": "Passw0rd!", "name": "李四",
         "email": "lisi@example.com", "roles": [], "groups": ["研发部"],
     })
     assert res.status_code == 200
@@ -34,7 +34,7 @@ def test_list_and_create_local_user(api_client, api_engine, as_user):
     login = api_client.post("/api/auth/login", json={"username": "lisi", "password": "Passw0rd!"})
     assert login.status_code == 200
     assert api_client.post("/api/admin/users", json={
-        "username": "lisi", "password": "x", "display_name": "x",
+        "username": "lisi", "password": "x", "name": "x",
     }).status_code == 409
 
 
@@ -45,11 +45,11 @@ def test_create_user_rejects_blank_password_and_strips_fields(api_client, as_use
     }).status_code == 400
     res = api_client.post("/api/admin/users", json={
         "username": "  spaced  ", "password": "Passw0rd!",
-        "display_name": " 名字 ", "email": " e@example.com ",
+        "name": " 名字 ", "email": " e@example.com ",
     })
     assert res.status_code == 200
     assert res.json()["username"] == "spaced"
-    assert res.json()["display_name"] == "名字"
+    assert res.json()["name"] == "名字"
     assert res.json()["email"] == "e@example.com"
 
 
@@ -61,21 +61,21 @@ def test_update_user_strips_profile_fields(api_client, api_engine, as_user):
         db.close()
     as_user(["__local_admin__"])
     res = api_client.put("/api/admin/users/u-profile", json={
-        "display_name": " 新名字 ", "email": " new@example.com ",
+        "name": " 新名字 ", "email": " new@example.com ",
     })
     assert res.status_code == 200
-    assert res.json()["display_name"] == "新名字"
+    assert res.json()["name"] == "新名字"
     assert res.json()["email"] == "new@example.com"
     listed = api_client.get("/api/admin/users?query=profile").json()
     item = next(u for u in listed["items"] if u["username"] == "profile")
-    assert item["display_name"] == "新名字"
+    assert item["name"] == "新名字"
     assert item["email"] == "new@example.com"
 
 
 def test_disable_user_blocks_login_and_token(api_client, api_engine, as_user):
     as_user(["__local_admin__"])
     uid = api_client.post("/api/admin/users", json={
-        "username": "wangwu", "password": "Passw0rd!", "display_name": "王五",
+        "username": "wangwu", "password": "Passw0rd!", "name": "王五",
     }).json()["id"]
     assert api_client.put(f"/api/admin/users/{uid}", json={"is_active": False}).status_code == 200
     assert api_client.post("/api/auth/login", json={"username": "wangwu", "password": "Passw0rd!"}).status_code == 403
@@ -229,7 +229,7 @@ def test_group_manage_can_read_users_but_not_write(api_client, api_engine, as_us
     as_user([], permissions=["group.manage"])
     assert api_client.get("/api/admin/users?query=target").status_code == 200
     assert api_client.put(
-        "/api/admin/users/u-target", json={"display_name": "改名"}
+        "/api/admin/users/u-target", json={"name": "改名"}
     ).status_code == 403
     assert api_client.post(
         "/api/admin/users", json={"username": "new", "password": "Passw0rd!"}

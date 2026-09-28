@@ -113,8 +113,8 @@
           <el-table-column label="用户" min-width="180">
             <template #default="{ row }">
               <div class="cell-line">
-                <span class="cell-title">{{ row.display_name || row.username }}</span>
-                <span v-if="row.display_name" class="username-sub">{{ row.username }}</span>
+                <span class="cell-title">{{ row.name || row.username }}</span>
+                <span v-if="row.name" class="username-sub">{{ row.username }}</span>
               </div>
             </template>
           </el-table-column>
@@ -212,7 +212,7 @@ interface GroupRow {
 interface MemberRow {
   id: string
   username: string
-  display_name: string
+  name: string
   is_local: boolean
 }
 
@@ -293,7 +293,7 @@ function isRowBusy(id: string): boolean {
 }
 
 function userLabel(u: MemberRow): string {
-  return u.display_name ? `${u.display_name}(${u.username})` : u.username
+  return u.name ? `${u.name}(${u.username})` : u.username
 }
 
 async function load() {

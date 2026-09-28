@@ -46,7 +46,7 @@ class LDAPAuthService:
             user_entry = conn.entries[0]
             user_dn = user_entry.entry_dn
             email = str(user_entry.mail.value) if hasattr(user_entry, "mail") and user_entry.mail.value else ""
-            display_name = (
+            name = (
                 str(user_entry.displayName.value)
                 if hasattr(user_entry, "displayName") and user_entry.displayName.value
                 else str(user_entry.cn.value)
@@ -70,7 +70,7 @@ class LDAPAuthService:
             return {
                 "username": username,
                 "email": email,
-                "display_name": display_name,
+                "name": name,
                 "groups": groups,
             }
         except LDAPException as e:

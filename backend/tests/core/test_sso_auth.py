@@ -183,7 +183,7 @@ def test_oidc_callback_provisions_user_with_admin_group(api_client, sso_env, mon
     db = get_session(api_engine)
     try:
         user = db.query(User).filter(User.username == "10086").first()
-        assert user is not None and user.display_name == "张三"
+        assert user is not None and user.name == "张三"
         groups = [g.group_name for g in db.query(UserGroup).filter(UserGroup.user_id == user.id).all()]
     finally:
         db.close()

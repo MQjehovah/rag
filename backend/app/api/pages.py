@@ -418,7 +418,12 @@ def _comment_user(db: Session, current_user) -> tuple:
     uid = current_user.get("id") if isinstance(current_user, dict) else None
     name = ""
     if isinstance(current_user, dict):
-        name = current_user.get("display_name") or current_user.get("username") or ""
+        name = (
+            current_user.get("name")
+            or current_user.get("display_name")
+            or current_user.get("username")
+            or ""
+        )
     return (uid or ""), name
 
 
@@ -549,7 +554,12 @@ def update_page(page_id: str, data: PageUpdate, background_tasks: BackgroundTask
         ):
             editor_name = ""
             if isinstance(current_user, dict):
-                editor_name = current_user.get("display_name") or current_user.get("username") or ""
+                editor_name = (
+                    current_user.get("name")
+                    or current_user.get("display_name")
+                    or current_user.get("username")
+                    or ""
+                )
             db.add(PageRevision(
                 id=str(uuid.uuid4()),
                 page_id=page.id,

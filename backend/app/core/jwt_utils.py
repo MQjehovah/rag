@@ -98,7 +98,7 @@ def _resolve_sso_user(db: Session, claims: dict) -> dict:
             id=str(uuid.uuid4()),
             username=username,
             email=claims.get("email", ""),
-            display_name=claims.get("name", username),
+            name=claims.get("name", username),
             is_local=False,
             is_active=True,
         )
@@ -136,10 +136,10 @@ def _write_back_claims(db: Session, user: User, claims: dict) -> None:
     避免每个 SSO 请求都产生无谓 commit。
     """
     email = claims.get("email", user.email)
-    display_name = claims.get("name", user.display_name)
-    if email != user.email or display_name != user.display_name:
+    name = claims.get("name", user.name)
+    if email != user.email or name != user.name:
         user.email = email
-        user.display_name = display_name
+        user.name = name
         db.commit()
 
 
