@@ -106,3 +106,21 @@ def test_wildcard_permission_rejected(api_client, as_user):
     listed = api_client.get("/api/admin/roles").json()["items"]
     target = next(r for r in listed if r["id"] == role_id)
     assert target["permissions"] == ["sources.manage"]
+
+
+def test_user_manage_can_read_roles_but_not_edit(api_client, as_user):
+    """用户管理页的角色下拉依赖:user.manage 可只读角色列表;权限目录与写端点仍限 role.manage。"""
+    as_user([], permissions=["user.manage"])
+    assert api_client.get("/api/admin/roles").status_code == 200
+    assert api_client.get("/api/admin/permissions").status_code == 403
+    assert api_client.post("/api/admin/roles", json={
+        "name": "nope", "display_name": "越权", "permissions": [],
+    }).status_code == 403
+    # role.manage 原行为不变
+    as_user([], permissions=["role.manage"])
+    assert api_client.get("/api/admin/roles").status_code == 200
+    # 无相关权限 → 403 且 detail 可读
+    as_user([])
+    res = api_client.get("/api/admin/roles")
+    assert res.status_code == 403
+    assert "role.manage" in res.json()["detail"]

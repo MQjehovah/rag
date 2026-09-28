@@ -63,7 +63,7 @@ def test_members_local_only(api_client, api_engine, as_user):
     ("PUT", "/api/admin/groups/{gid}/members", {"add": [], "remove": []}),
 ])
 def test_groups_require_group_manage(api_client, as_user, method, path_tpl, body):
-    """五个端点均须 group.manage:无权限一律 403(操作对象为已建组)。"""
+    """五个端点无权限一律 403(操作对象为已建组);GET /groups 另有 user.manage 只读放行。"""
     as_user(["__local_admin__"])
     gid = api_client.post("/api/admin/groups", json={"name": "无权组"}).json()["id"]
     as_user([])
@@ -219,3 +219,18 @@ def test_unknown_group_404(api_client, as_user):
         "/api/admin/groups/nope/members", json={"add": [], "remove": []}
     ).status_code == 404
     assert api_client.delete("/api/admin/groups/nope").status_code == 404
+
+
+def test_user_manage_can_read_groups_but_not_edit(api_client, as_user):
+    """用户管理页的组下拉依赖:user.manage 可只读组列表;组管理写端点仍限 group.manage。"""
+    as_user([], permissions=["user.manage"])
+    assert api_client.get("/api/admin/groups").status_code == 200
+    assert api_client.post("/api/admin/groups", json={"name": "越权组"}).status_code == 403
+    # group.manage 原行为不变
+    as_user([], permissions=["group.manage"])
+    assert api_client.get("/api/admin/groups").status_code == 200
+    # 无相关权限 → 403 且 detail 可读
+    as_user([])
+    res = api_client.get("/api/admin/groups")
+    assert res.status_code == 403
+    assert "group.manage" in res.json()["detail"]
