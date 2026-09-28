@@ -85,4 +85,5 @@ async def cancel_source(key: str, current_user=Depends(get_current_user)):
 
 @router.get("/{key}/status")
 def source_status(key: str, current_user=Depends(get_current_user)):
+    # 读接口有意保持登录可读:与 /api/jira/status、/api/dingtalk/status 一致
     return _status(key)

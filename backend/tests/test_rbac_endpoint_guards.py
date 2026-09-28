@@ -106,6 +106,27 @@ def test_custom_role_permission_grants_single_module(api_client, as_perm):
     # 读接口保持登录可见,不随"数据与管道"权限收紧
     assert api_client.get("/api/embeddings/profiles").status_code == 200
 
+    # 反向对照:pipeline.manage 只放行管道/模板域,不放行数据源
+    as_perm(["pipeline.manage"])
+    assert api_client.get("/api/pipelines").status_code == 200
+    assert api_client.get("/api/compile-templates").status_code == 200
+    assert api_client.get("/api/sources").status_code == 403
+
+
+def test_compile_template_write_requires_pipeline_manage(api_client, as_perm):
+    body = {"name": "t1", "compiler_kind": "wiki"}
+    as_perm([])
+    assert api_client.post("/api/compile-templates", json=body).status_code == 403
+    as_perm(["pipeline.manage"])
+    assert api_client.post("/api/compile-templates", json=body).status_code == 200
+
+
+def test_wiki_admin_endpoints_require_wiki_admin(api_client, as_perm):
+    as_perm([])
+    assert api_client.post("/api/wiki/rebuild").status_code == 403
+    assert api_client.post("/api/wiki/reindex-embeddings").status_code == 403
+    assert api_client.post("/api/wiki/refresh-stale").status_code == 403
+
 
 def test_notebook_manage_grants_cross_group_but_keeps_member_access(api_client, api_engine, as_perm):
     """notebook.manage 是组可见域的旁路:普通成员组内 CRUD 保留,管理者跨组。"""

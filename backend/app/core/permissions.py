@@ -1,7 +1,7 @@
 """权限键目录(v1 模块级):键 → 名称/说明;前端角色编辑页按 group 展示。"""
 PERMISSION_CATALOG = [
     {"group": "数据与管道", "items": [
-        {"key": "sources.manage", "name": "数据源管理", "desc": "数据源增删改与 Jira 同步"},
+        {"key": "sources.manage", "name": "数据源管理", "desc": "数据源增删改与状态查看"},
         {"key": "pipeline.manage", "name": "编译管道与模板", "desc": "管道/模板增删改与运行"},
         {"key": "embedding.manage", "name": "嵌入模型管理", "desc": "嵌入档案增删改与重建索引"},
         {"key": "graph.manage", "name": "知识图谱管理", "desc": "图谱浏览与重建/社区摘要"},
