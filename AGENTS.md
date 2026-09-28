@@ -91,12 +91,15 @@ The frontend nginx proxies `/api/collab` → `rag-collab:1234` with `Upgrade`; t
 - **Frontend `npm run build`** runs `vue-tsc` first — type errors block the build. `noUnusedLocals`/`noUnusedParameters` are on.
 - **Reranker is optional** — empty `RERANKER_API_URL` skips reranking.
 - **Embeddings depend on Xinference** (host `34:9997`) having `bge-large-zh-v1.5` (1024-d) **launched**; the gateway (`34:3100/v1/embeddings`) proxies to it. Xinference **loses launched models on restart** → embeddings return `400 Model not found in the model list`. Relaunch from local files: `docker exec xinference xinference launch --model-name bge-large-zh-v1.5 --model-type embedding --model-uid bge-large-zh-v1.5 --model-path /data/models/bge-large-zh-v1.5` (files at host `~/models/bge-large-zh-v1.5`, mounted `/data/models`). A self-heal cron on 34 (`*/5 * * * * /home/xzrobot/apps/ensure-embed.sh`) relaunches if missing. Note: `backend/.env`'s `LLM_API_KEY` is stale; compose injects the valid gateway key.
-- **SSO 双轨**: 资源轨(`SSO_ISSUER`/`SSO_AUDIENCE`/`SSO_JWKS_URI`)校验别的系统(dashboard)传来的 token;
+- **SSO 双轨**: 资源轨(`SSO_ISSUER`/`SSO_AUDIENCE`/`SSO_JWKS_URI`)校验下游链路传来的用户 token
+  (**受众 2026-09-29 收窄为 `gateway`**; 代码保留逗号多值能力, 过渡期曾配 `gateway,dashboard-gateway`);
   登录轨(`SSO_CLIENT_ID`/`SSO_CLIENT_SECRET`/`SSO_REDIRECT_URI`/`SSO_REDIRECT_TARGET`)提供浏览器授权码流程
   (`GET /api/auth/sso/start` + `GET /api/auth/oidc/callback`,前端登录页按钮「企业 SSO 登录」)。
-  回调拿到的 id_token `aud` 是本系统自己的 client_id,与资源轨受众不同,故 `verify_sso_token(token, audience=...)`
-  支持显式覆盖。SSO 只签发 `roles`(无 `groups`),`_normalize_claims_groups` 同时采纳两者,且 `roles` 含 `admin`
-  时补内部管理员标记 `__local_admin__`(全库管理端点均按该组名判定)。
+  资源轨校验强制 token 带 `aud`(无 aud 拒绝)且须命中所配受众; 回调拿到的 id_token `aud` 是本系统自己的 client_id,
+  与资源轨受众不同,故 `verify_sso_token(token, audience=...)` 支持显式覆盖。SSO 只签发 `roles`(无 `groups`),
+  `_normalize_claims_groups` 同时采纳两者,且 `roles` 含 `admin` 时补内部管理员标记 `__local_admin__`(全库管理端点均按该组名判定)。
+  **用户资料随登录回写(SSO 权威源, 空 claim 不覆盖)**: `users.name`(姓名)/`work_id`(工号=sub)/`phone`(mobile)/`email`;
+  部门/角色沿用既有语义(再经 `_normalize_claims_groups` 落 `user_groups`, 不新增 User 列)。
 - **子路径部署**: 对外 `https://ai.xzrobot.com/rag/...` 由 45 的 nginx **剥掉 `/rag` 前缀**再转发到 34:8092,
   故前端 nginx 只需处理根路径的 `/api`(不需要子路径规则);`PUBLIC_BASE_PATH=/rag` 仅用于生成对外绝对 URL。
   **重建 backend 后必须一并重启/重建 frontend**(其 nginx 会缓存 backend 容器 IP)。
