@@ -1261,13 +1261,14 @@ const setIcon = (emoji: string) => {
 
 // ---------------- Notion 风格增强: 收藏 / 快速切换 / 大纲 / 页面菜单 / 回收站 ----------------
 const favPages = ref<{ id: string; title: string }[]>(JSON.parse(localStorage.getItem('rag-fav-pages') || '[]'))
-const recentPages = ref<{ id: string; title: string }[]>(JSON.parse(localStorage.getItem('rag-recent-pages') || '[]'))
+const storedRecent = JSON.parse(localStorage.getItem('rag-recent-pages') || '[]')
+const recentPages = ref<{ id: string; title: string }[]>(Array.isArray(storedRecent) ? storedRecent.slice(0, 5) : [])
 const pushRecent = () => {
   const p = currentPage.value
   if (!p || !p.id) return
   const title = p.title && p.title !== '加载中...' ? p.title : ''
   if (!title) return
-  recentPages.value = [{ id: p.id, title }, ...recentPages.value.filter(r => r.id !== p.id)].slice(0, 10)
+  recentPages.value = [{ id: p.id, title }, ...recentPages.value.filter(r => r.id !== p.id)].slice(0, 5)
   localStorage.setItem('rag-recent-pages', JSON.stringify(recentPages.value))
 }
 const trashPages = ref<{ id: string; title: string; notebook_id: string | null; deleted_at: string }[]>([])
@@ -2477,7 +2478,7 @@ html, body, #app { height: 100%; }
 
 /* 页面主体(无卡片,全宽白纸) */
 .editor-wrapper {
-  max-width: 780px;
+  max-width: 900px;
   margin: 0 auto;
   background: transparent;
   border: none;
