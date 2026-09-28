@@ -88,12 +88,15 @@ def api_engine(tmp_path):
     """每测试一个独立 SQLite 临时库。
 
     api_client 与测试的种子数据共用同一 engine/文件，测试可直接 get_session
-    写入行，端点读到的就是同一份数据。
+    写入行，端点读到的就是同一份数据。init_db 后跑 seed_rbac，与真实启动
+    (auth.startup: init_db + seed_rbac) 一致，测试库同样含内置 admin 角色。
     """
+    from app.core.rbac_seed import seed_rbac
     from app.models.database import get_engine, init_db
 
     engine = get_engine(f"sqlite:///{tmp_path / 'api.db'}")
     init_db(engine)
+    seed_rbac(engine)
     yield engine
     engine.dispose()
 

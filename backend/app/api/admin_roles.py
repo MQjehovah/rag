@@ -11,7 +11,6 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_db
 from app.core.jwt_utils import get_current_user
 from app.core.permissions import PERMISSION_CATALOG, VALID_PERMISSION_KEYS
-from app.core.rbac_seed import _ensure_admin_role
 from app.core.security import parse_permissions, require_permission
 from app.models.database import Role, UserRole
 
@@ -56,8 +55,6 @@ def list_permissions(current_user=Depends(get_current_user)):
 @router.get("/roles")
 def list_roles(current_user=Depends(get_current_user), db: Session = Depends(get_db)):
     require_permission(current_user, "role.manage")
-    # 兜底:旧库/测试库未跑启动 seed 时懒补内置角色(幂等),保证列表含内置项
-    _ensure_admin_role(db)
     roles = db.query(Role).order_by(Role.is_system.desc(), Role.name.asc()).all()
     counts = dict(
         db.query(UserRole.role_id, func.count(UserRole.id))

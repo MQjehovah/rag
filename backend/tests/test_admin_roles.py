@@ -1,5 +1,4 @@
 """角色管理 API:CRUD、内置保护、使用人数、权限校验。"""
-import json
 
 
 def test_permissions_catalog_requires_role_manage(api_client, as_user):
