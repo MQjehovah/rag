@@ -189,7 +189,7 @@ def list_pages(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    cols = (Page.id, Page.title, Page.notebook_id, Page.parent_id, Page.position, Page.created_at, Page.updated_at)
+    cols = (Page.id, Page.title, Page.notebook_id, Page.parent_id, Page.position, Page.created_at, Page.updated_at, Page.icon)
     query = db.query(*cols).filter(Page.deleted_at.is_(None))
     if unassigned:
         query = query.filter(Page.notebook_id.is_(None))
@@ -210,6 +210,7 @@ def list_pages(
             notebook_id=r.notebook_id,
             parent_id=r.parent_id,
             position=r.position or 0,
+            icon=r.icon or "",
             created_at=r.created_at,
             updated_at=r.updated_at,
         ) for r in rows],
@@ -248,7 +249,7 @@ def page_tree(notebook_id: str, db: Session = Depends(get_db), current_user=Depe
         raise HTTPException(status_code=404, detail="笔记本不存在")
     if not has_permission(current_user, "page.manage") and not resource_visible_db(db, current_user, ACL_NOTEBOOK, nb):
         raise HTTPException(status_code=403, detail="无权访问该笔记本")
-    rows = db.query(Page.id, Page.title, Page.parent_id, Page.position, Page.view_type, Page.status, Page.updated_at).filter(
+    rows = db.query(Page.id, Page.title, Page.parent_id, Page.position, Page.view_type, Page.status, Page.updated_at, Page.icon).filter(
         Page.notebook_id == notebook_id,
         Page.deleted_at.is_(None),
     ).order_by(Page.position.asc(), Page.created_at.asc()).all()
@@ -262,6 +263,7 @@ def page_tree(notebook_id: str, db: Session = Depends(get_db), current_user=Depe
                 "view_type": r[4] or "doc",
                 "status": r[5] or "",
                 "updated_at": r[6],
+                "icon": r[7] or "",
             }
             for r in rows
         ]

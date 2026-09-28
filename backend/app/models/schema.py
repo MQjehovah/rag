@@ -242,6 +242,7 @@ class PageListItem(BaseModel):
     notebook_id: Optional[str] = None
     parent_id: Optional[str] = None
     position: int = 0
+    icon: Optional[str] = ''
     created_at: datetime
     updated_at: datetime
 

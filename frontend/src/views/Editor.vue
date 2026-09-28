@@ -25,7 +25,7 @@
           </div>
           <div class="fav-list">
             <div v-for="r in recentPages" :key="r.id" class="page-item" @click="openPageById(r.id)">
-              <span class="page-dot"></span>
+              <span class="page-icon">{{ r.icon || '📄' }}</span>
               <span class="page-title">{{ r.title }}</span>
             </div>
           </div>
@@ -78,7 +78,7 @@
               @click="selectPage(page)"
             >
               <div class="page-info">
-                <span class="page-dot"></span>
+                <span class="page-icon">{{ page.icon || '📄' }}</span>
                 <span class="page-title">{{ page.title || '无标题' }}</span>
               </div>
             </div>
@@ -113,6 +113,7 @@
                 <el-button size="small" text>⋮</el-button>
                 <template #dropdown>
                   <el-dropdown-menu>
+                    <el-dropdown-item command="newPage">新建笔记</el-dropdown-item>
                     <el-dropdown-item command="settings">设置</el-dropdown-item>
                     <el-dropdown-item command="delete" divided>删除</el-dropdown-item>
                   </el-dropdown-menu>
@@ -147,7 +148,7 @@
                     @click.stop="toggleCollapse(row.page.id)"
                   >›</span>
                   <span v-else class="page-chevron placeholder"></span>
-                  <span class="page-dot"></span>
+                  <span class="page-icon">{{ row.page.icon || '📄' }}</span>
                   <span class="page-title">{{ row.page.title || '无标题' }}</span>
                 </div>
                 <el-dropdown trigger="click" @command="(cmd: string) => handlePageCmd(cmd, row.page)">
@@ -160,9 +161,6 @@
                     </el-dropdown-menu>
                   </template>
                 </el-dropdown>
-              </div>
-              <div class="add-page" @click="createPage()">
-                <span>＋ 添加笔记</span>
               </div>
             </div>
             </div>
@@ -769,6 +767,7 @@ interface PageListItem {
   position?: number
   view_type?: string
   status?: string
+  icon?: string
   updated_at: string
 }
 
@@ -1183,6 +1182,14 @@ const handleCreateNotebook = async () => {
 }
 
 const handleNotebookCmd = async (cmd: string, nb: Notebook) => {
+  if (cmd === 'newPage') {
+    if (currentNotebook.value?.id !== nb.id) {
+      currentNotebook.value = nb
+      await loadTree()
+    }
+    await createPage()
+    return
+  }
   if (cmd === 'settings') {
     openNotebookSettings(nb)
     return
@@ -1369,13 +1376,13 @@ const setIcon = (emoji: string) => {
 // ---------------- Notion 风格增强: 收藏 / 快速切换 / 大纲 / 页面菜单 / 回收站 ----------------
 const favPages = ref<{ id: string; title: string }[]>(JSON.parse(localStorage.getItem('rag-fav-pages') || '[]'))
 const storedRecent = JSON.parse(localStorage.getItem('rag-recent-pages') || '[]')
-const recentPages = ref<{ id: string; title: string }[]>(Array.isArray(storedRecent) ? storedRecent.slice(0, 5) : [])
+const recentPages = ref<{ id: string; title: string; icon?: string }[]>(Array.isArray(storedRecent) ? storedRecent.slice(0, 5) : [])
 const pushRecent = () => {
   const p = currentPage.value
   if (!p || !p.id) return
   const title = p.title && p.title !== '加载中...' ? p.title : ''
   if (!title) return
-  recentPages.value = [{ id: p.id, title }, ...recentPages.value.filter(r => r.id !== p.id)].slice(0, 5)
+  recentPages.value = [{ id: p.id, title, icon: p.icon || '' }, ...recentPages.value.filter(r => r.id !== p.id)].slice(0, 5)
   localStorage.setItem('rag-recent-pages', JSON.stringify(recentPages.value))
 }
 const trashPages = ref<{ id: string; title: string; notebook_id: string | null; deleted_at: string }[]>([])
@@ -2192,18 +2199,9 @@ html, body, #app { height: 100%; }
   font-size: 13px;
   color: #475569;
 }
-.page-item.active .page-title { color: #1e40af; font-weight: 500; }
+.page-item.active .page-title { color: #1e40af; font-weight: 400; }
 .page-menu-btn { opacity: 0; padding: 0 4px; }
 .page-item:hover .page-menu-btn { opacity: 1; }
-.add-page {
-  padding: 7px 12px;
-  color: #3b82f6;
-  cursor: pointer;
-  font-size: 13px;
-  border-radius: 6px;
-  transition: background 0.15s;
-}
-.add-page:hover { background: #eff6ff; }
 .empty-tip { text-align: center; color: #94a3b8; padding: 30px 20px; font-size: 13px; }
 .muted-hint { color: #909399; font-size: 12px; margin-top: 4px; line-height: 1.5; }
 .main-content { flex: 1; padding: 24px 40px; overflow-y: auto; }
@@ -2428,14 +2426,8 @@ html, body, #app { height: 100%; }
 }
 .page-item:hover { background: var(--surface-2, #f2f4f9); }
 .page-item.active { background: var(--primary-weak, #eef0ff); }
-.page-item.active .page-title { color: var(--primary, #4f46e5); font-weight: 600; }
+.page-item.active .page-title { color: var(--primary, #4f46e5); font-weight: 400; }
 .page-title { font-size: 13px; color: var(--text-2, #59616f); }
-.add-page {
-  margin-top: 2px;
-  color: var(--primary, #4f46e5);
-  font-weight: 500;
-}
-.add-page:hover { background: var(--primary-weak, #eef0ff); }
 /* ================= Notion 风格 ================= */
 .app-container { background: #fff; }
 .app-body { height: 100%; }
@@ -2512,21 +2504,10 @@ html, body, #app { height: 100%; }
 .page-item:hover { background: #ebebe9; }
 .page-item.active { background: #e8e8e6; }
 .page-info { gap: 0; }
-.page-icon { display: none; }
-.page-dot {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: #c9c9c5;
-  margin: 0 9px 0 6px;
-  flex: 0 0 auto;
-}
-.page-item.active .page-dot { background: #37352f; }
-.page-title { font-size: 14px; color: #37352f; }
-.page-item.active .page-title { color: #37352f; font-weight: 500; }
+.page-icon { margin: 0 7px 0 4px; font-size: 13px; flex: none; }
+.page-title { font-size: 14px; color: #37352f; font-weight: 400; }
+.page-item.active .page-title { color: #37352f; font-weight: 400; }
 .page-menu-btn { color: #b9b9b6; }
-.add-page { color: #9b9a97; font-size: 13px; }
-.add-page:hover { background: #ebebe9; color: #37352f; }
 .empty-tip { color: #9b9a97; padding: 24px 16px; }
 
 /* 主区 */
