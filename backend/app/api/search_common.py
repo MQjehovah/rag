@@ -17,7 +17,8 @@ def visible_wiki_filter(current_user):
     """
     if has_permission(current_user, "*"):
         return true()
-    return or_(WikiPage.group_id.is_(None), WikiPage.group_id.in_(current_user["groups"]))
+    groups = (current_user or {}).get("groups") or []
+    return or_(WikiPage.group_id.is_(None), WikiPage.group_id.in_(groups))
 
 
 def get_visible_page_ids(db: Session, current_user) -> Set[str]:
@@ -25,8 +26,9 @@ def get_visible_page_ids(db: Session, current_user) -> Set[str]:
     base = db.query(Page.id).filter(Page.deleted_at.is_(None))
     if has_permission(current_user, "*"):
         return set(p[0] for p in base.all())
+    groups = (current_user or {}).get("groups") or []
     visible_nb_ids = db.query(Notebook.id).filter(
-        or_(Notebook.group_id.in_(current_user["groups"]), Notebook.group_id.is_(None))
+        or_(Notebook.group_id.in_(groups), Notebook.group_id.is_(None))
     ).subquery()
     return set(
         p[0]

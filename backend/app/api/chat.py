@@ -199,7 +199,7 @@ async def _agentic_search_notes(
         try:
             emb = await pipeline.embedding_svc.encode(query)
             # 只检索用户可见页面所属实体的社区，避免越权读取他组知识
-            # 管理员可见全部:直接跳过过滤(与改动前行为一致,且避免超大 IN 列表)
+            # 有 * 权限(含 __local_admin__ 桥接等效)可见全部:直接跳过过滤(避免超大 IN 列表)
             if has_permission(current_user, "*"):
                 visible_ids = None
             else:

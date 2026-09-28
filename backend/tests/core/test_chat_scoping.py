@@ -154,6 +154,20 @@ async def test_agentic_search_admin_skips_community_filter(api_engine, as_user, 
 
 
 @pytest.mark.asyncio
+async def test_agentic_search_star_permission_skips_community_filter(api_engine, monkeypatch):
+    """显式 * 权限(无 __local_admin__ 标记)同样跳过社区过滤——判定只看权限。"""
+    db = _seed(api_engine)
+    try:
+        user = {"groups": ["研发部"], "permissions": ["*"]}
+        captured, coro = _run_community_fallback(monkeypatch, db, user)
+        notes = await coro
+        assert notes == []
+        assert captured["visible_page_ids"] is None
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
 async def test_agentic_search_group_user_filters_communities(api_engine, as_user, monkeypatch):
     """普通用户社区检索仍传入其可见页面集合。"""
     db = _seed(api_engine)
