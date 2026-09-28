@@ -3,18 +3,9 @@
     <div class="app-body">
       <!-- 侧边栏 -->
       <aside class="sidebar" :style="{ width: sidebarCollapsed ? '0px' : sidebarWidth + 'px' }">
-        <div class="ws-head">
-          <span class="ws-badge">R</span>
-          <span class="ws-name">我的笔记</span>
-          <button class="icon-btn" title="收起侧边栏" @click="sidebarCollapsed = true">«</button>
-        </div>
-
         <div class="side-search">
           <el-input v-model="searchQuery" placeholder="搜索笔记..." clearable @keyup.enter="doSearch" />
         </div>
-        <button class="side-quick" @click="openQuick">
-          <span>快速查找</span><kbd>Ctrl K</kbd>
-        </button>
 
         <template v-if="favPages.length">
           <div class="side-section">
@@ -651,35 +642,11 @@
         </div>
       </div>
     </el-dialog>
-
-    <!-- 快速切换 (Ctrl+K) -->
-    <div v-if="quickOpen" class="quick-overlay" @click.self="quickOpen = false">
-      <div class="quick-box">
-        <input
-          ref="quickInput"
-          v-model="quickQuery"
-          class="quick-input"
-          placeholder="搜索页面…（↑↓ 选择，回车打开，Esc 关闭）"
-          @keydown="onQuickKey"
-        />
-        <div class="quick-list">
-          <div
-            v-for="(p, i) in quickResults"
-            :key="p.id"
-            class="quick-item"
-            :class="{ active: i === quickIndex }"
-            @mouseenter="quickIndex = i"
-            @click="quickPick(p)"
-          >{{ p.title }}</div>
-          <div v-if="!quickResults.length" class="muted-hint" style="padding: 10px 14px">无匹配页面</div>
-        </div>
-      </div>
-    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
+import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElNotification, ElMessageBox } from 'element-plus'
 import type { UploadFile as ElUploadFile } from 'element-plus'
@@ -1305,11 +1272,6 @@ const pushRecent = () => {
 }
 const trashPages = ref<{ id: string; title: string; notebook_id: string | null; deleted_at: string }[]>([])
 const trashOpen = ref(false)
-const quickOpen = ref(false)
-const quickQuery = ref('')
-const quickIndex = ref(0)
-const quickPages = ref<{ id: string; title: string }[]>([])
-const quickInput = ref<HTMLInputElement | null>(null)
 const outlineOpen = ref(false)
 const pageWide = ref(false)
 const pageSmall = ref(false)
@@ -1436,13 +1398,6 @@ const purgeTrash = async (id: string, title: string) => {
   } catch { ElMessage.error('删除失败') }
 }
 
-// 快速切换(Ctrl+K)
-const quickResults = computed(() => {
-  const q = quickQuery.value.trim().toLowerCase()
-  const arr = quickPages.value
-  if (!q) return arr.slice(0, 40)
-  return arr.filter(p => (p.title || '').toLowerCase().includes(q)).slice(0, 40)
-})
 const onPageMenu = (cmd: string) => {
   if (cmd === 'fav') toggleFav()
   else if (cmd === 'link') copyLink()
@@ -1522,30 +1477,6 @@ const restoreRevision = async (id: string) => {
     historyOpen.value = false
     ElMessage.success('已恢复该版本')
   } catch { ElMessage.error('恢复失败') }
-}
-
-const openQuick = async () => {
-  quickOpen.value = true
-  quickQuery.value = ''
-  quickIndex.value = 0
-  nextTick(() => quickInput.value?.focus())
-  if (!quickPages.value.length) {
-    try {
-      const res = await http.get('/api/pages', { params: { page: 1, page_size: 500 } })
-      quickPages.value = (res.data.items || []).map((p: any) => ({ id: p.id, title: p.title || '无标题' }))
-    } catch { /* ignore */ }
-  }
-}
-const quickPick = async (p: { id: string }) => {
-  quickOpen.value = false
-  await openPageById(p.id)
-}
-const onQuickKey = (e: KeyboardEvent) => {
-  const list = quickResults.value
-  if (e.key === 'ArrowDown') { e.preventDefault(); quickIndex.value = Math.min(quickIndex.value + 1, list.length - 1) }
-  else if (e.key === 'ArrowUp') { e.preventDefault(); quickIndex.value = Math.max(quickIndex.value - 1, 0) }
-  else if (e.key === 'Enter') { e.preventDefault(); if (list[quickIndex.value]) quickPick(list[quickIndex.value]) }
-  else if (e.key === 'Escape') { quickOpen.value = false }
 }
 
 // 大纲(从正文标题提取)
@@ -1971,7 +1902,6 @@ const handleKeydown = (e: KeyboardEvent) => {
     sidebarCollapsed.value = !sidebarCollapsed.value
   }
   if (e.key === 'Escape') {
-    if (quickOpen.value) { quickOpen.value = false; return }
     if (iconPickerVisible.value || coverPickerVisible.value) {
       iconPickerVisible.value = false
       coverPickerVisible.value = false
@@ -2410,26 +2340,6 @@ html, body, #app { height: 100%; }
   border-right: none;
   overflow: hidden;
 }
-.ws-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 12px 10px 10px;
-}
-.ws-badge {
-  width: 24px;
-  height: 24px;
-  border-radius: 6px;
-  background: var(--text);
-  color: var(--bg);
-  font-size: 12px;
-  font-weight: 700;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 auto;
-}
-.ws-name { font-weight: 600; font-size: 14px; color: #37352f; flex: 1; }
 .icon-btn {
   border: none;
   background: transparent;
@@ -2446,7 +2356,7 @@ html, body, #app { height: 100%; }
 }
 .icon-btn:hover { background: #ebebe9; color: #37352f; }
 .icon-btn.expand { margin-right: 4px; }
-.side-search { padding: 0 10px 8px; }
+.side-search { padding: 12px 10px 8px; }
 .side-search :deep(.el-input__wrapper) {
   background: #fff;
   border: 1px solid #e9e9e7;
@@ -2771,30 +2681,6 @@ html, body, #app { height: 100%; }
 .page-chevron:not(.placeholder):hover { background: #e3e3e0; color: #37352f; }
 .page-chevron.placeholder { visibility: hidden; }
 
-/* 快速查找 / 收藏 / 回收站 */
-.side-quick {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin: 0 10px 6px;
-  padding: 6px 10px;
-  border: 1px solid #ececea;
-  background: #fff;
-  color: #9b9a97;
-  border-radius: 6px;
-  font-size: 13px;
-  cursor: pointer;
-}
-.side-quick:hover { background: #f1f1ef; color: #37352f; }
-.side-quick kbd {
-  font-size: 10px;
-  background: #f1f1ef;
-  border: 1px solid #e3e3e0;
-  border-bottom-width: 2px;
-  border-radius: 4px;
-  padding: 1px 5px;
-  color: #9b9a97;
-}
 .fav-list { padding: 0 8px 6px; }
 .page-item.fav { padding: 5px 8px; }
 .fav-star { color: #f59e0b; margin-right: 7px; font-size: 12px; }
@@ -2859,47 +2745,6 @@ html, body, #app { height: 100%; }
 .editor-wrapper.wide { max-width: 100%; padding-left: 64px; padding-right: 64px; }
 .editor-wrapper.wide .page-cover { margin-left: -64px; margin-right: -64px; }
 .editor-wrapper.small .editor-content .ProseMirror { font-size: 15px; }
-
-/* 快速切换面板 */
-.quick-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(15, 23, 42, 0.28);
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
-  z-index: 2000;
-  padding-top: 12vh;
-}
-.quick-box {
-  width: 560px;
-  max-width: 92vw;
-  background: #fff;
-  border-radius: 14px;
-  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.25);
-  overflow: hidden;
-}
-.quick-input {
-  width: 100%;
-  border: none;
-  outline: none;
-  padding: 16px 18px;
-  font-size: 16px;
-  color: #1f2430;
-  border-bottom: 1px solid #f0f0ef;
-}
-.quick-list { max-height: 52vh; overflow-y: auto; padding: 6px; }
-.quick-item {
-  padding: 9px 12px;
-  border-radius: 8px;
-  font-size: 14px;
-  color: #37352f;
-  cursor: pointer;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.quick-item.active { background: var(--primary-weak); color: var(--primary); }
 
 /* 反向链接 */
 .link-panel-head {
