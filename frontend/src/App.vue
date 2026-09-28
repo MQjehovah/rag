@@ -4,7 +4,9 @@
       <aside class="rail">
         <div class="rail-head">
           <button class="ws-btn" :title="collapsed ? '展开导航' : '企业知识库'" @click="collapsed && toggleCollapse()">
-            <span class="ws-emoji">🏢</span>
+            <span class="ws-logo">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" /><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" /></svg>
+            </span>
             <span class="ws-name">企业知识库</span>
             <svg class="ws-chevron" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6" /></svg>
           </button>
@@ -253,7 +255,18 @@ body {
   color: var(--text);
 }
 .ws-btn:hover { background: var(--surface-hover); }
-.ws-emoji { font-size: 17px; flex: 0 0 auto; }
+.ws-logo {
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+  border-radius: 7px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  background: linear-gradient(135deg, #3b82f6, #6366f1);
+  box-shadow: 0 1px 3px rgba(59, 130, 246, 0.35);
+}
 .ws-name { flex: 1; text-align: left; font-weight: 600; font-size: 14px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ws-chevron { color: var(--text-3); flex: 0 0 auto; }
 .rail-collapse {

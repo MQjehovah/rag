@@ -114,8 +114,34 @@ html.dark ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.18); bac
 .el-button, .el-input__wrapper, .el-dropdown-menu__item { transition: background-color 0.15s, color 0.15s, border-color 0.15s; }
 
 /* ==========================================================================
-   企业级通用组件
+   企业级布局骨架（全宽 · 大气）
    ========================================================================== */
+.page-shell { height: 100%; overflow-y: auto; background: var(--bg); }
+
+.page-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 28px 40px 22px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+.ph-main { min-width: 0; }
+.ph-eyebrow {
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--primary);
+  margin-bottom: 8px;
+}
+.page-title { margin: 0; font-size: 26px; font-weight: 700; letter-spacing: -0.02em; color: var(--text); line-height: 1.15; }
+.page-desc { margin: 9px 0 0; font-size: 13.5px; color: var(--text-3); line-height: 1.5; max-width: 760px; }
+.ph-actions { display: flex; align-items: center; gap: 26px; flex: 0 0 auto; }
+
+.page-body { padding: 26px 40px 64px; }
+
 .icon-badge {
   width: 40px;
   height: 40px;
@@ -139,6 +165,13 @@ html.dark ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.18); bac
 .status-dot.err { background: var(--danger); }
 @keyframes dotPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 
+/* 统计条 */
+.stat-row { display: flex; align-items: center; gap: 26px; }
+.stat-item { display: flex; flex-direction: column; gap: 3px; }
+.stat-num { font-size: 22px; font-weight: 700; color: var(--text); line-height: 1.1; letter-spacing: -0.01em; }
+.stat-label { font-size: 12px; color: var(--text-3); }
+
+/* 面板 */
 .panel {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -150,20 +183,16 @@ html.dark ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.18); bac
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 14px 18px;
+  padding: 16px 20px;
   border-bottom: 1px solid var(--border);
 }
-
-/* 统计条 */
-.stat-row { display: flex; gap: 22px; align-items: center; }
-.stat-item { display: flex; align-items: baseline; gap: 6px; }
-.stat-num { font-size: 18px; font-weight: 700; color: var(--text); }
-.stat-label { font-size: 12px; color: var(--text-3); }
+.panel-title { font-size: 15px; font-weight: 600; color: var(--text); }
+.panel-tools { display: flex; align-items: center; gap: 10px; }
 
 /* 表格现代化 */
-.el-table { font-size: 13.5px; --el-table-header-bg-color: var(--surface-2); }
-.el-table th.el-table__cell { font-weight: 600; color: var(--text-2); }
-.el-table td.el-table__cell, .el-table th.el-table__cell { padding: 11px 0; }
+.el-table { font-size: 13.5px; --el-table-header-bg-color: var(--surface); --el-table-border-color: var(--border); }
+.el-table th.el-table__cell { font-weight: 600; color: var(--text-3); font-size: 12px; letter-spacing: 0.02em; background: var(--surface); }
+.el-table td.el-table__cell, .el-table th.el-table__cell { padding: 14px 0; }
 .el-table .el-table__cell { border-bottom: 1px solid var(--border) !important; }
 .el-table__inner-wrapper::before { display: none; }
 .el-table__row:hover > td.el-table__cell { background: var(--surface-2) !important; }

@@ -1,11 +1,12 @@
 <template>
-  <div class="sources-page">
-    <header class="page-head">
-      <div>
-        <h2>数据源</h2>
-        <p class="page-sub">企业系统作为插件接入：拉取原始内容 → 形成笔记 → 编译进知识库。</p>
+  <div class="page-shell">
+    <header class="page-header">
+      <div class="ph-main">
+        <div class="ph-eyebrow">数据与管道</div>
+        <h1 class="page-title">数据源</h1>
+        <p class="page-desc">企业系统作为插件接入：拉取原始内容 → 形成笔记 → 编译进知识库。</p>
       </div>
-      <div class="head-right">
+      <div class="ph-actions">
         <div class="stat-row">
           <div class="stat-item"><span class="stat-num">{{ sources.length }}</span><span class="stat-label">已接入</span></div>
           <div class="stat-item"><span class="stat-num">{{ enabledCount }}</span><span class="stat-label">已启用</span></div>
@@ -17,6 +18,7 @@
       </div>
     </header>
 
+    <div class="page-body">
     <div v-if="loading && !sources.length" class="hint">正在加载数据源…</div>
     <div v-else-if="!sources.length" class="hint">暂无已接入的数据源</div>
 
@@ -75,6 +77,7 @@
           </div>
         </div>
       </article>
+    </div>
     </div>
   </div>
 </template>
@@ -189,44 +192,22 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-.sources-page {
-  padding: 32px 40px 64px;
-  max-width: 1180px;
-  margin: 0 auto;
-  height: 100%;
-  overflow-y: auto;
-}
-
-/* ---- 页头 ---- */
-.page-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-end;
-  gap: 16px;
-  padding-bottom: 18px;
-  margin-bottom: 22px;
-  border-bottom: 1px solid var(--border);
-}
-.page-head h2 { margin: 0; font-size: 20px; font-weight: 650; letter-spacing: -0.01em; color: var(--text); }
-.page-sub { margin: 5px 0 0; font-size: 13px; color: var(--text-3); }
-.head-right { display: flex; align-items: center; gap: 24px; }
 .btn-refresh { display: inline-flex; align-items: center; gap: 6px; }
-
 .hint { color: var(--text-3); padding: 48px; text-align: center; font-size: 13px; }
 
 /* ---- 卡片栅格 ---- */
 .grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
-  gap: 16px;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 18px;
 }
 .src {
   display: flex;
   flex-direction: column;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  padding: 18px;
+  border-radius: 12px;
+  padding: 20px;
   box-shadow: var(--shadow-sm);
   transition: border-color 0.15s, box-shadow 0.15s, transform 0.15s;
 }

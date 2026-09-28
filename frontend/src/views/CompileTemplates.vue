@@ -1,15 +1,19 @@
 <template>
-  <div class="page">
-    <header class="page-head">
-      <div>
-        <h2>编译模板</h2>
-        <p class="page-sub">可单独维护的编译规则（提示词 / 规则 / 输出模板）；新建编译管道时选择模板即可复用。</p>
+  <div class="page-shell">
+    <header class="page-header">
+      <div class="ph-main">
+        <div class="ph-eyebrow">数据与管道</div>
+        <h1 class="page-title">编译模板</h1>
+        <p class="page-desc">可单独维护的编译规则（提示词 / 规则 / 输出模板）；新建编译管道时选择模板即可复用。</p>
       </div>
-      <el-button type="primary" class="btn-new" @click="openCreate">
-        <el-icon><Plus /></el-icon><span>新建模板</span>
-      </el-button>
+      <div class="ph-actions">
+        <el-button type="primary" class="btn-new" @click="openCreate">
+          <el-icon><Plus /></el-icon><span>新建模板</span>
+        </el-button>
+      </div>
     </header>
 
+    <div class="page-body">
     <div class="panel">
       <div class="panel-head">
         <div class="panel-title">模板列表</div>
@@ -59,6 +63,7 @@
           </div>
         </template>
       </el-table>
+    </div>
     </div>
 
     <!-- 查看 -->
@@ -255,23 +260,7 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.page { padding: 32px 40px 64px; height: 100%; overflow: auto; max-width: 1180px; margin: 0 auto; }
-
-.page-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-end;
-  gap: 16px;
-  padding-bottom: 18px;
-  margin-bottom: 20px;
-  border-bottom: 1px solid var(--border);
-}
-.page-head h2 { margin: 0; font-size: 20px; font-weight: 650; letter-spacing: -0.01em; color: var(--text); }
-.page-sub { margin: 5px 0 0; font-size: 13px; color: var(--text-3); }
 .btn-new { display: inline-flex; align-items: center; gap: 6px; }
-
-.panel-title { font-size: 14px; font-weight: 600; color: var(--text); }
-.panel-tools { display: flex; align-items: center; gap: 10px; }
 .search :deep(.el-input__wrapper) { box-shadow: 0 0 0 1px var(--border) inset; }
 
 .cell-title { font-size: 13.5px; font-weight: 550; color: var(--text); }

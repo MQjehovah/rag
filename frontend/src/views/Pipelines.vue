@@ -1,22 +1,25 @@
 <template>
-  <div class="page">
-    <header class="page-head">
-      <div>
-        <h2>编译管道</h2>
-        <p class="page-sub">把笔记本里的笔记编译成知识库页面：知识蒸馏 / 接口文档 / 文档合集 / 变更记录 / 自定义。</p>
+  <div class="page-shell">
+    <header class="page-header">
+      <div class="ph-main">
+        <div class="ph-eyebrow">数据与管道</div>
+        <h1 class="page-title">编译管道</h1>
+        <p class="page-desc">把笔记本里的笔记编译成知识库页面：知识蒸馏 / 接口文档 / 文档合集 / 变更记录 / 自定义。</p>
       </div>
-      <el-button type="primary" class="btn-new" @click="openCreate">
-        <el-icon><Plus /></el-icon><span>新建管道</span>
-      </el-button>
+      <div class="ph-actions">
+        <div class="stat-row">
+          <div class="stat-item"><span class="stat-num">{{ pipelines.length }}</span><span class="stat-label">管道</span></div>
+          <div class="stat-item"><span class="stat-num">{{ enabledCount }}</span><span class="stat-label">已启用</span></div>
+          <div class="stat-item"><span class="stat-num">{{ autoCount }}</span><span class="stat-label">自动触发</span></div>
+          <div class="stat-item"><span class="stat-num">{{ runningCount }}</span><span class="stat-label">运行中</span></div>
+        </div>
+        <el-button type="primary" class="btn-new" @click="openCreate">
+          <el-icon><Plus /></el-icon><span>新建管道</span>
+        </el-button>
+      </div>
     </header>
 
-    <div class="stat-row">
-      <div class="stat-item"><span class="stat-num">{{ pipelines.length }}</span><span class="stat-label">管道</span></div>
-      <div class="stat-item"><span class="stat-num">{{ enabledCount }}</span><span class="stat-label">已启用</span></div>
-      <div class="stat-item"><span class="stat-num">{{ autoCount }}</span><span class="stat-label">自动触发</span></div>
-      <div class="stat-item"><span class="stat-num">{{ runningCount }}</span><span class="stat-label">运行中</span></div>
-    </div>
-
+    <div class="page-body">
     <div class="panel">
       <div class="panel-head">
         <div class="panel-title">管道列表</div>
@@ -113,6 +116,7 @@
 
     <div v-if="runBanner" class="run-banner">
       <i class="status-dot run" /><span>{{ runBanner }}</span>
+    </div>
     </div>
 
     <!-- 新建 / 编辑 -->
@@ -640,25 +644,7 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-.page { padding: 32px 40px 64px; height: 100%; overflow: auto; max-width: 1180px; margin: 0 auto; }
-
-.page-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-end;
-  gap: 16px;
-  padding-bottom: 18px;
-  margin-bottom: 20px;
-  border-bottom: 1px solid var(--border);
-}
-.page-head h2 { margin: 0; font-size: 20px; font-weight: 650; letter-spacing: -0.01em; color: var(--text); }
-.page-sub { margin: 5px 0 0; font-size: 13px; color: var(--text-3); }
 .btn-new { display: inline-flex; align-items: center; gap: 6px; }
-
-.stat-row { margin-bottom: 18px; }
-
-.panel-title { font-size: 14px; font-weight: 600; color: var(--text); }
-.panel-tools { display: flex; align-items: center; gap: 10px; }
 .search :deep(.el-input__wrapper) { box-shadow: 0 0 0 1px var(--border) inset; }
 
 .cell-line { display: flex; align-items: center; gap: 8px; }
