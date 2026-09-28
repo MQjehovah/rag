@@ -40,6 +40,7 @@ const router = createRouter({
     { path: '/pipelines', component: Pipelines, meta: { perm: PERM.pipeline } },
     { path: '/templates', component: CompileTemplates, meta: { perm: PERM.pipeline } },
     { path: '/embeddings', component: Embeddings, meta: { perm: PERM.embedding } },
+    { path: '/admin/users', component: () => import('./views/admin/AdminUsers.vue'), meta: { perm: PERM.user } },
     { path: '/admin/roles', component: () => import('./views/admin/AdminRoles.vue'), meta: { perm: PERM.role } },
   ]
 })
