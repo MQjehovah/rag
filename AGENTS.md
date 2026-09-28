@@ -82,7 +82,7 @@ The frontend nginx proxies `/api/collab` → `rag-collab:1234` with `Upgrade`; t
 ## Key Gotchas
 
 - **Production runs PostgreSQL**: `docker compose --profile pg ...`. The `db` service maps host port `5433` (5432 on the host is used by another service); containers talk to `db:5432` internally. Old SQLite fallback still works for local dev.
-- **LLM endpoints**: embeddings/rerank go through the company gateway (`EMBEDDING_API_URL`/`RERANKER_API_URL`); chat/JSON via `LLM_BASE_URL` (e.g. `https://ai.rosiwit.com/v1`) + `LLM_MODEL` (a reasoning model like `deepseek-v4-flash`). Reasoning models need generous timeouts.
+- **LLM endpoints**: embeddings/rerank go through the company gateway (`EMBEDDING_API_URL`/`RERANKER_API_URL`); chat/JSON via `LLM_BASE_URL` (e.g. `https://ai.xzrobot.com/gateway/api/v1`) + `LLM_MODEL` (a reasoning model like `deepseek-v4-flash`). Reasoning models need generous timeouts.
 - **Image proxy**: `/api/upload/images/proxy?url=...` fetches external images without a Referer header (bypasses OSS referer checks) and caches to `data/image_cache`. External image URLs in chat sources are normalized to this proxy unless on the safe-host list.
 - **Wiki rebuild is incremental and idempotent**: re-running `POST /api/wiki/rebuild` ingests all notes against existing pages; update ops get a merge pass so human edits are preserved. `POST /api/graph/rebuild-communities` first completes entity extraction, then rebuilds community summaries.
 - **Vite dev port is 3000**, proxies `/api` → `http://localhost:8000`.
