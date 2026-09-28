@@ -9,6 +9,8 @@ from datetime import datetime
 import logging
 from collections import Counter
 
+from app.core.security import has_permission
+
 logger = logging.getLogger(__name__)
 
 from app.models.database import Page, Notebook, PageChunk, PageRevision, PageComment, User, get_engine
@@ -18,7 +20,6 @@ from app.core.hybrid import HybridIndex
 from app.core.entity_graph import EntityGraphStore
 from app.api.deps import get_db
 from app.core.jwt_utils import get_current_user
-from app.core.security import has_permission
 from app.config import settings
 
 router = APIRouter(prefix="/api/pages", tags=["笔记"])
