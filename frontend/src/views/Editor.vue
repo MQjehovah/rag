@@ -25,7 +25,7 @@
           </div>
           <div class="fav-list">
             <div v-for="r in recentPages" :key="r.id" class="page-item" @click="openPageById(r.id)">
-              <span class="page-icon">{{ r.icon || '📄' }}</span>
+              <span class="page-ico">{{ r.icon || '📄' }}</span>
               <span class="page-title">{{ r.title }}</span>
             </div>
           </div>
@@ -78,7 +78,7 @@
               @click="selectPage(page)"
             >
               <div class="page-info">
-                <span class="page-icon">{{ page.icon || '📄' }}</span>
+                <span class="page-ico">{{ page.icon || '📄' }}</span>
                 <span class="page-title">{{ page.title || '无标题' }}</span>
               </div>
             </div>
@@ -148,7 +148,7 @@
                     @click.stop="toggleCollapse(row.page.id)"
                   >›</span>
                   <span v-else class="page-chevron placeholder"></span>
-                  <span class="page-icon">{{ row.page.icon || '📄' }}</span>
+                  <span class="page-ico">{{ row.page.icon || '📄' }}</span>
                   <span class="page-title">{{ row.page.title || '无标题' }}</span>
                 </div>
                 <el-dropdown trigger="click" @command="(cmd: string) => handlePageCmd(cmd, row.page)">
@@ -2210,7 +2210,7 @@ html, body, #app { height: 100%; }
 .page-item:hover { background: #f1f5f9; }
 .page-item.active { background: #eff6ff; }
 .page-info { display: flex; align-items: center; flex: 1; min-width: 0; }
-.page-icon { margin-right: 6px; font-size: 13px; }
+.page-ico { margin-right: 6px; font-size: 12px; }
 .page-title {
   flex: 1;
   overflow: hidden;
@@ -2524,7 +2524,7 @@ html, body, #app { height: 100%; }
 .page-item:hover { background: #ebebe9; }
 .page-item.active { background: #e8e8e6; }
 .page-info { gap: 0; }
-.page-icon { margin: 0 7px 0 4px; font-size: 13px; flex: none; }
+.page-ico { margin: 0 6px 0 3px; font-size: 12px; line-height: 1.1; flex: none; }
 .page-title { font-size: 14px; color: #37352f; font-weight: 400; }
 .page-item.active .page-title { color: #37352f; font-weight: 400; }
 .load-more {
