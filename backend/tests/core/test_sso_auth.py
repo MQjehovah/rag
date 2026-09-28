@@ -149,6 +149,53 @@ def test_verify_sso_token_accepts_explicit_audience_override(sso_env):
     assert verify_sso_token(token, audience="rag")["sub"] == "10086"
 
 
+# ---- 资源轨多受众(gateway,dashboard-gateway 过渡) ----
+
+
+def test_verify_sso_token_accepts_multi_audience_config(sso_env, monkeypatch):
+    """sso_audience 逗号多值: aud 命中任一即通过(带空白也归一)。"""
+    key, _ = sso_env
+    monkeypatch.setattr(settings, "sso_audience", "gateway, dashboard-gateway")
+    token = sign_token(valid_claims(aud="dashboard-gateway"), key)
+    assert verify_sso_token(token)["sub"] == "10086"
+
+
+def test_verify_sso_token_rejects_audience_outside_multi_config(sso_env, monkeypatch):
+    key, _ = sso_env
+    monkeypatch.setattr(settings, "sso_audience", "gateway,dashboard-gateway")
+    token = sign_token(valid_claims(aud="someone-else"), key)
+    with pytest.raises(SsoAuthError):
+        verify_sso_token(token)
+
+
+def test_verify_sso_token_accepts_list_aud_claim(sso_env, monkeypatch):
+    """token 的 aud claim 是列表时, 命中任一期望值即通过。"""
+    key, _ = sso_env
+    monkeypatch.setattr(settings, "sso_audience", "gateway")
+    token = sign_token(valid_claims(aud=["other-app", "gateway"]), key)
+    assert verify_sso_token(token)["sub"] == "10086"
+
+
+def test_explicit_audience_takes_priority_over_multi_config(sso_env, monkeypatch):
+    """显式 audience(登录回调的 client_id)优先且为单值, 不回退到多值配置。"""
+    key, _ = sso_env
+    monkeypatch.setattr(settings, "sso_audience", "gateway,dashboard-gateway")
+    token = sign_token(valid_claims(aud="rag"), key)
+    assert verify_sso_token(token, audience="rag")["sub"] == "10086"
+    token_other = sign_token(valid_claims(aud="gateway"), key)
+    with pytest.raises(SsoAuthError):
+        verify_sso_token(token_other, audience="rag")
+
+
+def test_verify_sso_token_fails_closed_without_audience_config(sso_env, monkeypatch):
+    """显式与配置都为空: 不跳过受众校验, fail-closed 拒绝。"""
+    key, _ = sso_env
+    monkeypatch.setattr(settings, "sso_audience", " , ")
+    token = sign_token(valid_claims(), key)
+    with pytest.raises(SsoAuthError, match="audience"):
+        verify_sso_token(token)
+
+
 # ---- 回调端点:建号 / 组映射 / 错误分支 ----
 
 
