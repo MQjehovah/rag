@@ -12,7 +12,7 @@ PERMISSION_CATALOG = [
         {"key": "page.manage", "name": "全库页面管理", "desc": "管理他人页面/回收站清理"},
     ]},
     {"group": "系统管理", "items": [
-        {"key": "user.manage", "name": "用户管理", "desc": "用户列表/新建/禁用/角色与组分配"},
+        {"key": "user.manage", "name": "用户管理", "desc": "用户列表/新建/禁用/角色与组分配；可授予任意角色/重置任意本地账号密码，等效高权"},
         {"key": "role.manage", "name": "角色管理", "desc": "角色与权限键配置"},
         {"key": "group.manage", "name": "组管理", "desc": "组注册表与成员管理"},
     ]},

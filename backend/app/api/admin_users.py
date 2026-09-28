@@ -3,9 +3,10 @@
 规则:
 - 新建仅本地账号(username/password 必填,密码 bcrypt 落库)
 - POST /password 仅本地账号可重置
-- PUT /roles 按角色 name 全量替换;不能移除自己的管理员角色
+- PUT /roles 按角色 name 全量替换(自己/他人均守护最后管理员来源)
 - PUT /groups 仅本地账号可改(SSO/LDAP 用户组由登录同步维护),__local_admin__ 标记行保留
-- 自我保护:不能禁用自己;不能禁用系统内最后一个在用的管理员
+- 自我保护:不能禁用自己;不能移除自己最后一个管理员来源(角色 or __local_admin__)
+- user.manage 等效高权:可授予任意角色/重置任意本地账号密码,授予需谨慎
 """
 import uuid
 
@@ -101,13 +102,16 @@ def _is_admin_capable(db: Session, user_id: str) -> bool:
 
 
 def _count_active_admin_capable(db: Session) -> int:
-    """系统内仍启用且具备管理员能力的用户数(用户量小,逐行判定可接受)。"""
+    """系统内仍启用且具备管理员能力的用户数(用户量小,逐行判定可接受)。
+
+    check-then-act 存在并发窗口(两名管理员同时互相降级/禁用可能同时通过校验);
+    低并发管理场景可接受,如需强一致可在事务内用 PG with_for_update() 锁行。
+    """
     active_ids = [uid for (uid,) in db.query(User.id).filter(User.is_active.is_(True)).all()]
     return sum(1 for uid in active_ids if _is_admin_capable(db, uid))
 
 
-def _user_out(db: Session, user: User) -> dict:
-    groups = _group_names(db, user.id)
+def _user_out_data(user: User, roles: list[dict], groups: list[str]) -> dict:
     return {
         "id": user.id,
         "username": user.username,
@@ -115,10 +119,15 @@ def _user_out(db: Session, user: User) -> dict:
         "display_name": user.display_name,
         "is_local": bool(user.is_local),
         "is_active": bool(user.is_active),
-        "roles": _role_infos(db, user.id),
+        "roles": roles,
         "groups": groups,
-        "is_sso_admin": INTERNAL_ADMIN_GROUP in groups,
+        "is_marked_admin": INTERNAL_ADMIN_GROUP in groups,
     }
+
+
+def _user_out(db: Session, user: User) -> dict:
+    """单用户组装;列表路径用 _user_out_data + 批量查询避免 N+1。"""
+    return _user_out_data(user, _role_infos(db, user.id), _group_names(db, user.id))
 
 
 def _clean_group_names(names: list[str]) -> list[str]:
@@ -179,14 +188,39 @@ def list_users(
         ))
     total = q.count()
     users = q.order_by(User.username.asc()).offset((page - 1) * page_size).limit(page_size).all()
-    return {"items": [_user_out(db, u) for u in users], "total": total}
+    # 先取本页 ids,再 2 条批量查询组装,避免逐用户 N+1
+    ids = [u.id for u in users]
+    role_map: dict[str, list[dict]] = {uid: [] for uid in ids}
+    group_map: dict[str, list[str]] = {uid: [] for uid in ids}
+    if ids:
+        rows = (
+            db.query(UserRole.user_id, Role.name, Role.display_name)
+            .join(Role, Role.id == UserRole.role_id)
+            .filter(UserRole.user_id.in_(ids))
+            .order_by(Role.name.asc())
+            .all()
+        )
+        for uid, name, display_name in rows:
+            role_map[uid].append({"name": name, "display_name": display_name})
+        rows = (
+            db.query(UserGroup.user_id, UserGroup.group_name)
+            .filter(UserGroup.user_id.in_(ids))
+            .order_by(UserGroup.group_name.asc())
+            .all()
+        )
+        for uid, name in rows:
+            group_map[uid].append(name)
+    return {
+        "items": [_user_out_data(u, role_map[u.id], group_map[u.id]) for u in users],
+        "total": total,
+    }
 
 
 @router.post("/users")
 def create_user(body: UserCreate, current_user=Depends(get_current_user), db: Session = Depends(get_db)):
     require_permission(current_user, "user.manage")
     username = body.username.strip()
-    if not username or not body.password:
+    if not username or not body.password.strip():
         raise HTTPException(status_code=400, detail="username/password 必填")
     if db.query(User).filter(User.username == username).first() is not None:
         raise HTTPException(status_code=409, detail="用户名已存在")
@@ -194,7 +228,8 @@ def create_user(body: UserCreate, current_user=Depends(get_current_user), db: Se
     groups = _clean_group_names(body.groups)
     _register_groups(db, groups)
     user = User(
-        id=str(uuid.uuid4()), username=username, email=body.email, display_name=body.display_name,
+        id=str(uuid.uuid4()), username=username, email=body.email.strip(),
+        display_name=body.display_name.strip(),
         is_local=True, is_active=True, password_hash=pwd_context.hash(body.password),
     )
     db.add(user)
@@ -248,8 +283,9 @@ def reset_password(
     user = _get_user_or_404(user_id, db)
     if not user.is_local:
         raise HTTPException(status_code=400, detail="仅本地账号可重置密码")
-    if not body.password:
+    if not body.password.strip():
         raise HTTPException(status_code=400, detail="密码不能为空")
+    # 改密不会吊销已签发的 JWT(jwt_expire_minutes 默认 720 分钟);需立即失效请改用禁用账号
     user.password_hash = pwd_context.hash(body.password)
     db.commit()
     return {"ok": True}
@@ -263,13 +299,23 @@ def set_roles(
     db: Session = Depends(get_db),
 ):
     require_permission(current_user, "user.manage")
-    roles = _resolve_roles(db, body.roles)
-    # 自我保护先于 404:当前用户即使库中查不到,也不能通过 API 移除自己的管理员角色
-    if user_id == current_user.get("id") and not any(
-        "*" in parse_permissions(r.permissions) for r in roles
-    ):
-        raise HTTPException(status_code=400, detail="不能移除自己的管理员角色")
     user = _get_user_or_404(user_id, db)
+    roles = _resolve_roles(db, body.roles)
+    has_marker = INTERNAL_ADMIN_GROUP in _group_names(db, user.id)
+    keeps_star = any("*" in parse_permissions(r.permissions) for r in roles)
+    if user.id == current_user.get("id"):
+        # 自我保护:移除自己最后一个管理员来源(无标记且新角色无 * 且当前确为管理员)才拦
+        if not has_marker and not keeps_star and _is_admin_capable(db, user.id):
+            raise HTTPException(status_code=400, detail="不能移除自己的管理员角色")
+    elif (
+        user.is_active
+        and not has_marker
+        and not keeps_star
+        and _is_admin_capable(db, user.id)
+        and _count_active_admin_capable(db) == 1
+    ):
+        # 他人:不能把系统内唯一在用的管理员降级(与禁用保护对称)
+        raise HTTPException(status_code=400, detail="不能移除最后一个管理员")
     db.query(UserRole).filter(UserRole.user_id == user.id).delete()
     for role in roles:
         db.add(UserRole(id=str(uuid.uuid4()), user_id=user.id, role_id=role.id))
