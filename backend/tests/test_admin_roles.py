@@ -54,6 +54,10 @@ def test_update_role_partial_preserves_permissions(api_client, as_user):
     assert res.status_code == 200
     assert res.json()["display_name"] == "改个名"
     assert res.json()["permissions"] == ["sources.manage"]
+    # 显式传空列表 → 清空权限(与缺省 None 的部分更新语义区分)
+    res = api_client.put(f"/api/admin/roles/{role_id}", json={"permissions": []})
+    assert res.status_code == 200
+    assert res.json()["permissions"] == []
 
 
 def test_builtin_admin_role_readonly(api_client, as_user):
