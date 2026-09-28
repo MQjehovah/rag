@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
-from app.api import pages, search, upload, notebooks, graph, auth, dingtalk, chat, organize, wiki, jira, sources, pipelines, embeddings, public, compile_templates, admin_roles, admin_users
+from app.api import pages, search, upload, notebooks, graph, auth, dingtalk, chat, organize, wiki, jira, sources, pipelines, embeddings, public, compile_templates, admin_roles, admin_users, admin_groups
 
 app = FastAPI(
     title="Notes RAG System",
@@ -36,6 +36,7 @@ app.include_router(embeddings.router)
 app.include_router(compile_templates.router)
 app.include_router(admin_roles.router)
 app.include_router(admin_users.router)
+app.include_router(admin_groups.router)
 app.include_router(public.router)
 
 
