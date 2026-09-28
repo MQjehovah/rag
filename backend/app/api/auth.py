@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException, Depends, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 from passlib.context import CryptContext
+import logging
 import urllib.parse
 import uuid
 
@@ -12,10 +13,12 @@ from app.api.deps import get_db
 from app.core import sso_auth
 from app.core.jwt_utils import create_access_token, get_current_user, _resolve_sso_user
 from app.core.user_utils import sync_user_groups
-from app.core.rbac_seed import seed_rbac
+from app.core.rbac_seed import seed_rbac, INTERNAL_ADMIN_GROUP
 from app.config import settings
 
 router = APIRouter(prefix="/api/auth", tags=["认证"])
+
+logger = logging.getLogger(__name__)
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -38,12 +41,11 @@ def _create_local_admin(db: Session):
         is_active=True,
     )
     db.add(admin)
-    db.add(UserGroup(id=str(uuid.uuid4()), user_id=admin.id, group_name="__local_admin__"))
+    db.add(UserGroup(id=str(uuid.uuid4()), user_id=admin.id, group_name=INTERNAL_ADMIN_GROUP))
     db.commit()
 
     if not settings.local_admin_password:
-        import logging
-        logging.getLogger(__name__).warning(
+        logger.warning(
             f"Local admin created — username: {settings.local_admin_username}, password: {password}"
         )
 
@@ -57,7 +59,11 @@ def startup():
         _create_local_admin(db)
     finally:
         db.close()
-    seed_rbac(engine)
+    try:
+        seed_rbac(engine)
+    except Exception:
+        # seed 不是启动前提,失败不阻断(参考 database.py 的失败不阻断模式)
+        logger.warning("RBAC seed 失败", exc_info=True)
 
 
 @router.post("/login", response_model=LoginResponse)

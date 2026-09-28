@@ -116,6 +116,7 @@ groups      id, name(unique), source('local'|'ldap'|'sso'), created_at
 ## 兼容与迁移
 
 - 新表随 `init_db` 自动创建；启动幂等 seed（admin 角色、组注册表回填、本地管理员补角色）
+- 管理员角色的自动补授是**单向**的：`__local_admin__` 标记消失不会自动回收已授予的 admin 角色，需在用户管理界面手动收回
 - 现有 SSO/LDAP 管理员：登录时仍生成 `__local_admin__` → 等效 `*`；用户管理页显示「SSO 管理员」徽标（不可移除）
 - 所有既有接口入参不变；`/api/auth/me` 只增字段
 - 前端旧缓存 token 无需失效（权限每请求解析）
