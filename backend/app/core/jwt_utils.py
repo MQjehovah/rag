@@ -78,8 +78,9 @@ def _resolve_hs256_user(db: Session, payload: dict) -> dict:
 def _resolve_sso_user(db: Session, claims: dict) -> dict:
     """SSO 轨:按 username=工号 查/建 User。
 
-    已禁用 -> 403;已有用户把 email/name 回写为 claims 值(SSO 为权威源,
-    缺失字段保持原值,与 LDAP login 分支一致);有 groups 声明才同步。
+    已禁用 -> 403;新建账号按 claims 填充 name(空回退工号)/work_id/phone/email;
+    已有账号按 SSO 权威源回写 name/phone(非空才写)/work_id(恒对齐 sub),
+    email 保持原语义;有 groups 声明才同步。
     """
     username = str(claims["sub"])
     raw_email = (claims.get("email") or "").strip() or None
@@ -98,7 +99,9 @@ def _resolve_sso_user(db: Session, claims: dict) -> dict:
             id=str(uuid.uuid4()),
             username=username,
             email=claims.get("email", ""),
-            name=claims.get("name", username),
+            name=(claims.get("name") or "").strip() or username,
+            work_id=username,
+            phone=(claims.get("mobile") or "").strip(),
             is_local=False,
             is_active=True,
         )
@@ -122,24 +125,38 @@ def _resolve_sso_user(db: Session, claims: dict) -> dict:
             detail="用户已禁用",
         )
 
-    _write_back_claims(db, user, claims)
+    _write_back_claims(db, user, claims, username)
     groups = _normalize_claims_groups(claims)
     if groups:
         sync_user_groups(db, user, groups, source="sso")
     return build_user_payload(db, user)
 
 
-def _write_back_claims(db: Session, user: User, claims: dict) -> None:
-    """把 claims 的 email/name 回写到已有用户,缺失字段保持原值。
+def _write_back_claims(db: Session, user: User, claims: dict, username: str) -> None:
+    """把 claims 的资料字段回写到已有用户:非空才写、变化才 commit。
 
-    新建用户建号时已按 claims 填充,此处通常为空操作;仅在有变化时提交,
-    避免每个 SSO 请求都产生无谓 commit。
+    - name/phone:claim 缺失或空白时保留库中原值(管理员手工维护的值不被清空);
+    - work_id:恒对齐 SSO sub(工号),为空或漂移都校正;
+    - email:保持原语义(claims 里有值即覆盖)。
+    新建用户建号时已按 claims 填充,此处通常为空操作,避免每个 SSO 请求都产生无谓 commit。
     """
     email = claims.get("email", user.email)
-    name = claims.get("name", user.name)
-    if email != user.email or name != user.name:
+    claim_name = (claims.get("name") or "").strip()
+    claim_phone = (claims.get("mobile") or "").strip()
+    changed = False
+    if email != user.email:
         user.email = email
-        user.name = name
+        changed = True
+    if claim_name and user.name != claim_name:
+        user.name = claim_name
+        changed = True
+    if claim_phone and (user.phone or "") != claim_phone:
+        user.phone = claim_phone
+        changed = True
+    if (user.work_id or "") != username:
+        user.work_id = username
+        changed = True
+    if changed:
         db.commit()
 
 
