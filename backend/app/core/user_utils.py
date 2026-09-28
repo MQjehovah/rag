@@ -5,6 +5,7 @@ import uuid
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.core.rbac_seed import INTERNAL_ADMIN_GROUP
 from app.core.security import parse_permissions
 from app.models.database import Role, User, UserGroup, UserRole
 
@@ -43,6 +44,9 @@ def build_user_payload(db: Session, user: User) -> dict:
         for p in parse_permissions(r.permissions):
             if p not in permissions:
                 permissions.append(p)
+    # 管理员标记组并入 "*",使前端 payload 自洽;判定侧 effective_permissions 仍兜底补
+    if INTERNAL_ADMIN_GROUP in current_groups and "*" not in permissions:
+        permissions.append("*")
     return {
         "id": user.id,
         "username": user.username,

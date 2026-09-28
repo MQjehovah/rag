@@ -62,6 +62,8 @@ def test_local_admin_marker_implies_star(tmp_path):
         user = _user_with_roles(db, groups=["__local_admin__"])
         payload = build_user_payload(db, user)
         assert has_permission(payload, "user.manage")
+        # 前端据此展示管理菜单:payload 本身即含 "*",不依赖判定侧补
+        assert "*" in payload["permissions"]
     finally:
         db.close()
 

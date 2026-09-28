@@ -45,6 +45,8 @@ const router = createRouter({
 router.beforeEach(async (to) => {
   const token = localStorage.getItem('rag_token')
   if (!token) return to.meta.public ? true : { path: '/login' }
+  // 公开页永远放行(带 stale token 也不拉 /me);401 统一由 http.ts 拦截器清理会话
+  if (to.meta.public) return true
   const auth = useAuthStore()
   if (!auth.user) {
     try { await auth.fetchMe() } catch { return { path: '/login' } }
