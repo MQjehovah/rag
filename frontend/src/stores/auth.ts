@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import axios from 'axios'
 import http from '../api/http'
+import type { PermissionKey } from '../constants/perms'
 
 interface User {
   id: string
@@ -22,7 +23,7 @@ export const useAuthStore = defineStore('auth', () => {
   const permissions = computed(() => user.value?.permissions || [])
 
   /** 是否拥有权限键（'*' 为内置管理员通配权限） */
-  function hasPerm(key: string): boolean {
+  function hasPerm(key: PermissionKey): boolean {
     const p = permissions.value
     return p.includes('*') || p.includes(key)
   }

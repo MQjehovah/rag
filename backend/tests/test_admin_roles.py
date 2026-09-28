@@ -87,3 +87,22 @@ def test_delete_role_in_use_rejected(api_client, api_engine, as_user):
     target = next(r for r in listed if r["id"] == role_id)
     assert target["user_count"] == 1
     assert api_client.delete(f"/api/admin/roles/{role_id}").status_code == 409
+
+
+def test_wildcard_permission_rejected(api_client, as_user):
+    """通配 * 仅内置 admin 持有;经 API 给自定义角色授予 * → 400,且不落库。"""
+    as_user(["__local_admin__"])
+    res = api_client.post("/api/admin/roles", json={
+        "name": "star", "display_name": "通配", "permissions": ["*"],
+    })
+    assert res.status_code == 400
+    assert res.json()["detail"] == "* 仅限内置管理员角色"
+
+    role_id = api_client.post("/api/admin/roles", json={
+        "name": "star-mix", "display_name": "混合", "permissions": ["sources.manage"],
+    }).json()["id"]
+    res = api_client.put(f"/api/admin/roles/{role_id}", json={"permissions": ["*", "sources.manage"]})
+    assert res.status_code == 400
+    listed = api_client.get("/api/admin/roles").json()["items"]
+    target = next(r for r in listed if r["id"] == role_id)
+    assert target["permissions"] == ["sources.manage"]

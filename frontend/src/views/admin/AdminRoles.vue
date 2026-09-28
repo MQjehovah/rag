@@ -95,7 +95,7 @@
           <el-input v-model="form.display_name" maxlength="64" placeholder="如：数据源运维" />
         </el-form-item>
         <el-form-item label="标识">
-          <el-input v-model="form.name" :disabled="!!editing" placeholder="如：source_ops" />
+          <el-input v-model="form.name" :disabled="!!editing" maxlength="64" placeholder="如：source_ops" />
           <div v-if="!editing" class="field-hint">唯一标识，用于 API 与用户绑定；创建后不可修改。</div>
         </el-form-item>
         <el-form-item label="权限">
@@ -105,10 +105,10 @@
                 <div class="perm-group-head">
                   <span class="perm-group-name">{{ g.group }}</span>
                   <span class="perm-group-count">{{ groupSelected(g) }}/{{ g.items.length }}</span>
-                  <el-button link size="small" @click="selectGroup(g)">全选本组</el-button>
-                  <el-button link size="small" @click="clearGroup(g)">清空</el-button>
+                  <el-button link size="small" :disabled="saving" @click="selectGroup(g)">全选本组</el-button>
+                  <el-button link size="small" :disabled="saving" @click="clearGroup(g)">清空</el-button>
                 </div>
-                <el-checkbox v-for="it in g.items" :key="it.key" :value="it.key" class="perm-item">
+                <el-checkbox v-for="it in g.items" :key="it.key" :value="it.key" :disabled="saving" class="perm-item">
                   <span class="perm-item-name">{{ it.name }}</span>
                   <span class="perm-item-desc">{{ it.desc }}</span>
                 </el-checkbox>
@@ -121,7 +121,7 @@
       </el-form>
       <template #footer>
         <el-button @click="dialog = false">取消</el-button>
-        <el-button type="primary" :loading="saving" @click="save">保存</el-button>
+        <el-button type="primary" :loading="saving" :disabled="saving || !catalog.length" @click="save">保存</el-button>
       </template>
     </el-dialog>
   </div>
@@ -155,6 +155,7 @@ const roles = ref<Role[]>([])
 const catalog = ref<PermissionGroup[]>([])
 const loading = ref(false)
 const loadError = ref(false)
+const loadedOnce = ref(false)
 const dialog = ref(false)
 const saving = ref(false)
 const editing = ref<Role | null>(null)
@@ -165,6 +166,8 @@ const permNameMap = computed(() => {
   for (const g of catalog.value) for (const it of g.items) map[it.key] = it.name
   return map
 })
+
+const catalogKeys = computed(() => new Set(Object.keys(permNameMap.value)))
 
 function permSummary(r: Role): string {
   if (r.permissions.includes('*')) return '全部权限'
@@ -197,7 +200,6 @@ function clearGroup(g: PermissionGroup) {
 
 async function load() {
   loading.value = true
-  loadError.value = false
   try {
     const [r, c] = await Promise.all([
       http.get('/api/admin/roles'),
@@ -205,10 +207,14 @@ async function load() {
     ])
     roles.value = r.data.items || []
     catalog.value = c.data || []
+    loadedOnce.value = true
+    loadError.value = false
   } catch (e: any) {
-    roles.value = []
-    catalog.value = []
-    loadError.value = true
+    if (!loadedOnce.value) {
+      roles.value = []
+      catalog.value = []
+      loadError.value = true
+    }
     ElMessage.error(e?.response?.data?.detail || '加载失败')
   } finally {
     loading.value = false
@@ -224,7 +230,11 @@ function openCreate() {
 function openEdit(r: Role) {
   if (r.is_system) return
   editing.value = r
-  Object.assign(form, { name: r.name, display_name: r.display_name, permissions: [...r.permissions] })
+  Object.assign(form, {
+    name: r.name,
+    display_name: r.display_name,
+    permissions: r.permissions.filter(k => catalogKeys.value.has(k)),
+  })
   dialog.value = true
 }
 

@@ -25,8 +25,10 @@ class RoleBody(BaseModel):
 
 
 def _validate_permissions(perms: list[str]) -> list[str]:
-    """校验权限键并去重保序:非 * 且不在目录内 → 400。"""
-    bad = [p for p in perms if p != "*" and p not in VALID_PERMISSION_KEYS]
+    """校验权限键并去重保序:通配 * 仅限内置管理员角色;未知键 → 400。"""
+    if "*" in perms:
+        raise HTTPException(status_code=400, detail="* 仅限内置管理员角色")
+    bad = [p for p in perms if p not in VALID_PERMISSION_KEYS]
     if bad:
         raise HTTPException(status_code=400, detail=f"未知权限键: {bad}")
     return list(dict.fromkeys(perms))

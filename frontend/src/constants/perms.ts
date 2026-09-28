@@ -1,3 +1,4 @@
+// 与后端权限目录同步维护: backend/app/core/permissions.py (PERMISSION_CATALOG)
 export const PERM = {
   sources: 'sources.manage',
   pipeline: 'pipeline.manage',
