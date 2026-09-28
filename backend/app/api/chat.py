@@ -20,6 +20,7 @@ from app.models.database import Notebook, Page
 from app.api.deps import get_db
 from app.api.search_common import get_visible_page_ids
 from app.core.jwt_utils import get_current_user
+from app.core.security import has_permission
 
 router = APIRouter(prefix="/api/chat", tags=["AI问答"])
 
@@ -199,7 +200,7 @@ async def _agentic_search_notes(
             emb = await pipeline.embedding_svc.encode(query)
             # 只检索用户可见页面所属实体的社区，避免越权读取他组知识
             # 管理员可见全部:直接跳过过滤(与改动前行为一致,且避免超大 IN 列表)
-            if "__local_admin__" in current_user["groups"]:
+            if has_permission(current_user, "*"):
                 visible_ids = None
             else:
                 visible_ids = get_visible_page_ids(db, current_user)
@@ -398,7 +399,7 @@ async def _call_llm_json(messages: list, context: str = "") -> dict:
 
 def _get_kb_context(db: Session, current_user) -> dict:
     """返回当前用户可见的笔记本与笔记，供知识整理提示词使用。"""
-    if "__local_admin__" in current_user["groups"]:
+    if has_permission(current_user, "*"):
         notebooks = db.query(Notebook).all()
         pages_q = db.query(Page.id, Page.title, Page.notebook_id)
     else:

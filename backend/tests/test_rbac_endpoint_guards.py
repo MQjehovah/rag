@@ -181,6 +181,38 @@ def test_comment_delete_ownership_bypass_stays_star_only(api_client, api_engine,
     assert api_client.delete("/api/pages/p-rd/comments/c-other").status_code == 200
 
 
+def _seed_wiki_pages(engine):
+    """三页 wiki:公共 / 研发部 / 财务部。"""
+    from app.models.database import WikiPage
+
+    db = get_session(engine)
+    try:
+        db.add_all([
+            WikiPage(id="wiki-pub", title="公共页", content="x", group_id=None),
+            WikiPage(id="wiki-rd", title="研发页", content="x", group_id="研发部"),
+            WikiPage(id="wiki-fin", title="财务页", content="x", group_id="财务部"),
+        ])
+        db.commit()
+    finally:
+        db.close()
+
+
+def _wiki_titles(client):
+    data = client.get("/api/wiki").json()
+    return {p["title"] for cat in data["categories"] for p in cat["pages"]}
+
+
+def test_wiki_visibility_follows_star_permission_not_group_marker(api_client, api_engine, as_perm):
+    """显式 * 权限(permissions=["*"],无 __local_admin__ 标记)在 wiki 列表同样全量可见。"""
+    _seed_wiki_pages(api_engine)
+
+    as_perm([], groups=["研发部"])
+    assert _wiki_titles(api_client) == {"公共页", "研发页"}
+
+    as_perm(["*"], groups=["研发部"])
+    assert _wiki_titles(api_client) == {"公共页", "研发页", "财务页"}
+
+
 def test_wiki_space_crud_requires_wiki_admin(api_client, as_perm):
     as_perm([])
     assert api_client.post("/api/wiki/spaces", json={"name": "新空间"}).status_code == 403

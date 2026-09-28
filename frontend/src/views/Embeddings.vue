@@ -101,6 +101,7 @@ import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import http from '../api/http'
 import { useAuthStore } from '../stores/auth'
+import { PERM } from '../constants/perms'
 
 interface Profile {
   id: string
@@ -113,7 +114,7 @@ interface Profile {
 }
 
 const auth = useAuthStore()
-const isAdmin = computed(() => (auth.user?.groups || []).includes('__local_admin__'))
+const isAdmin = computed(() => auth.hasPerm(PERM.embedding))
 const profiles = ref<Profile[]>([])
 const loading = ref(false)
 const dialog = ref(false)

@@ -224,6 +224,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import http from '../api/http'
 import { signImageElement, signRenderedImages } from '../utils/imageSign'
 import { useAuthStore } from '../stores/auth'
+import { PERM } from '../constants/perms'
 import MarkdownIt from 'markdown-it'
 import taskLists from 'markdown-it-task-lists'
 import DOMPurify from 'dompurify'
@@ -283,9 +284,7 @@ const groupInput = ref('')
 const savingGroup = ref(false)
 const bodyRef = ref<HTMLElement>()
 
-const isAdmin = computed(() =>
-  (authStore.user?.groups || []).includes('__local_admin__')
-)
+const isAdmin = computed(() => authStore.hasPerm(PERM.wiki))
 
 const titleToId = computed(() => {
   const map: Record<string, string> = {}

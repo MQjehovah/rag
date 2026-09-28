@@ -4,6 +4,7 @@ from sqlalchemy import or_, true
 from sqlalchemy import text as sql_text
 from sqlalchemy.orm import Session
 
+from app.core.security import has_permission
 from app.models.database import Notebook, Page, WikiPage
 
 
@@ -14,7 +15,7 @@ def visible_wiki_filter(current_user):
     本地管理员返回恒真条件(而非 None),这样调用方可以直接 filter(),
     不必记得判空——filter(None) 会退化成 WHERE NULL,静默返回 0 行。
     """
-    if "__local_admin__" in current_user["groups"]:
+    if has_permission(current_user, "*"):
         return true()
     return or_(WikiPage.group_id.is_(None), WikiPage.group_id.in_(current_user["groups"]))
 
@@ -22,7 +23,7 @@ def visible_wiki_filter(current_user):
 def get_visible_page_ids(db: Session, current_user) -> Set[str]:
     """Page ids the user may see (unassigned pages are public). Excludes trash."""
     base = db.query(Page.id).filter(Page.deleted_at.is_(None))
-    if "__local_admin__" in current_user["groups"]:
+    if has_permission(current_user, "*"):
         return set(p[0] for p in base.all())
     visible_nb_ids = db.query(Notebook.id).filter(
         or_(Notebook.group_id.in_(current_user["groups"]), Notebook.group_id.is_(None))

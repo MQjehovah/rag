@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 
 def _wiki_visible(page: WikiPage, current_user) -> bool:
-    if "__local_admin__" in current_user["groups"]:
+    if has_permission(current_user, "*"):
         return True
     return page.group_id is None or page.group_id in current_user["groups"]
 

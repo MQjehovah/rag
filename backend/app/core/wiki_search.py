@@ -11,6 +11,7 @@ import numpy as np
 from sqlalchemy import text
 
 from app.api.search_common import visible_wiki_filter
+from app.core.security import has_permission
 from app.models.database import WikiPage
 
 logger = logging.getLogger(__name__)
@@ -23,7 +24,7 @@ def _visibility_sql(current_user) -> Tuple[str, Dict[str, Any]]:
     两种实现的等价性由 tests/core/test_wiki_search.py 的等价性测试锁定。
     """
     groups = (current_user or {}).get("groups") or []
-    if "__local_admin__" in groups:
+    if has_permission(current_user or {}, "*"):
         return "1 = 1", {}
 
     params: Dict[str, Any] = {}
