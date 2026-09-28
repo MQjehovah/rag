@@ -9,11 +9,27 @@
           <span class="space-icon">📚</span>
           <span class="space-name">全部</span>
           <span class="space-count">{{ totalAll }}</span>
+          <el-dropdown v-if="isAdmin" trigger="click" @command="(cmd: string) => { if (cmd === 'create') spaceDialog = true }">
+            <button class="space-menu" title="空间操作" @click.stop>⋯</button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="create">新建空间</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
         </div>
         <div class="space-item" :class="{ active: activeSpace === 'default' }" @click="activeSpace = 'default'">
           <span class="space-icon">📄</span>
           <span class="space-name">默认空间</span>
           <span class="space-count">{{ defaultCount }}</span>
+          <el-dropdown v-if="isAdmin" trigger="click" @command="(cmd: string) => { if (cmd === 'edit' && defaultSpaceMeta) openSpaceSettings({ ...defaultSpaceMeta, is_default: true }) }">
+            <button class="space-menu" title="空间设置" @click.stop>⋯</button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="edit">编辑空间</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
         </div>
         <div
           v-for="s in spaces"
@@ -197,15 +213,17 @@
     <!-- 空间设置 -->
     <el-dialog v-model="spaceEditDialog" title="空间设置" width="440px">
       <el-form label-width="80px">
-        <el-form-item label="图标">
-          <el-input v-model="editSpaceForm.icon" maxlength="4" style="width: 100px" />
-        </el-form-item>
-        <el-form-item label="名称">
-          <el-input v-model="editSpaceForm.name" @keyup.enter="saveSpaceSettings" />
-        </el-form-item>
-        <el-form-item label="说明">
-          <el-input v-model="editSpaceForm.description" placeholder="可选" />
-        </el-form-item>
+        <template v-if="!editSpaceForm.isDefault">
+          <el-form-item label="图标">
+            <el-input v-model="editSpaceForm.icon" maxlength="4" style="width: 100px" />
+          </el-form-item>
+          <el-form-item label="名称">
+            <el-input v-model="editSpaceForm.name" @keyup.enter="saveSpaceSettings" />
+          </el-form-item>
+          <el-form-item label="说明">
+            <el-input v-model="editSpaceForm.description" placeholder="可选" />
+          </el-form-item>
+        </template>
         <el-form-item label="可见性">
           <el-select v-model="editSpaceForm.visibility" style="width: 100%">
             <el-option label="仅本人可见" value="self" />
@@ -295,12 +313,14 @@ const categories = ref<{ name: string; pages: WikiPageListItem[] }[]>([])
 const spaces = ref<{ id: string; name: string; icon: string; description: string; count: number; visibility?: Visibility; owner_id?: string | null; acl_users?: string[]; acl_groups?: string[] }[]>([])
 const activeSpace = ref<string>('')   // '' 全部 | 'default' 默认空间 | 空间 id
 const defaultCount = ref(0)
+/** 默认空间元数据(后端随 spaces 返回; 供默认空间的编辑入口预填 可见性/ACL) */
+const defaultSpaceMeta = ref<{ id: string; name: string; icon: string; description: string; visibility?: Visibility; acl_users?: string[]; acl_groups?: string[] } | null>(null)
 const spaceDialog = ref(false)
 const newSpace = ref<{ name: string; icon: string; description: string; visibility: Visibility }>({ name: '', icon: '🗂️', description: '', visibility: 'dept' })
 const savingSpace = ref(false)
 const spaceEditDialog = ref(false)
 const savingSpaceEdit = ref(false)
-const editSpaceForm = ref<{ id: string; name: string; icon: string; description: string; visibility: Visibility; acl_users: string[]; acl_groups: string[] }>({ id: '', name: '', icon: '', description: '', visibility: 'dept', acl_users: [], acl_groups: [] })
+const editSpaceForm = ref<{ id: string; name: string; icon: string; description: string; visibility: Visibility; acl_users: string[]; acl_groups: string[]; isDefault: boolean }>({ id: '', name: '', icon: '', description: '', visibility: 'dept', acl_users: [], acl_groups: [], isDefault: false })
 const aclUserOptions = ref<{ id: string; username: string; display_name: string }[]>([])
 const aclGroupOptions = ref<string[]>([])
 const total = ref(0)
@@ -351,6 +371,7 @@ const loadSpaces = async () => {
     const res = await http.get('/api/wiki/spaces')
     spaces.value = res.data.spaces || []
     defaultCount.value = res.data.default_count || 0
+    defaultSpaceMeta.value = res.data.default_space || null
     // 「全部」仅管理员可见: 普通用户默认落在「默认空间」, 不停留在跨空间聚合视图
     if (!isAdmin.value && activeSpace.value === '') activeSpace.value = 'default'
   } catch { /* ignore */ }
@@ -372,7 +393,7 @@ const createSpace = async () => {
   }
 }
 
-const openSpaceSettings = (s: { id: string; name: string; icon?: string; description?: string; visibility?: Visibility; acl_users?: string[]; acl_groups?: string[] }) => {
+const openSpaceSettings = (s: { id: string; name: string; icon?: string; description?: string; visibility?: Visibility; acl_users?: string[]; acl_groups?: string[]; is_default?: boolean }) => {
   editSpaceForm.value = {
     id: s.id,
     name: s.name,
@@ -381,6 +402,7 @@ const openSpaceSettings = (s: { id: string; name: string; icon?: string; descrip
     visibility: (s.visibility === 'self' || s.visibility === 'public') ? s.visibility : 'dept',
     acl_users: s.acl_users || [],
     acl_groups: s.acl_groups || [],
+    isDefault: !!s.is_default,
   }
   spaceEditDialog.value = true
   void loadAclOptions()
@@ -404,17 +426,22 @@ const loadAclOptions = async () => {
 }
 
 const saveSpaceSettings = async () => {
-  if (!editSpaceForm.value.name.trim()) { ElMessage.warning('请输入空间名称'); return }
+  const f = editSpaceForm.value
+  if (!f.isDefault && !f.name.trim()) { ElMessage.warning('请输入空间名称'); return }
   savingSpaceEdit.value = true
   try {
-    await http.put(`/api/wiki/spaces/${editSpaceForm.value.id}`, {
-      name: editSpaceForm.value.name,
-      icon: editSpaceForm.value.icon || '',
-      description: editSpaceForm.value.description,
-      visibility: editSpaceForm.value.visibility,
-      acl_users: editSpaceForm.value.acl_users,
-      acl_groups: editSpaceForm.value.acl_groups,
-    })
+    const payload: Record<string, unknown> = {
+      visibility: f.visibility,
+      acl_users: f.acl_users,
+      acl_groups: f.acl_groups,
+    }
+    if (!f.isDefault) {
+      // 默认空间仅允许调整可见性/ACL; 名称/图标/说明保持系统维护
+      payload.name = f.name
+      payload.icon = f.icon || ''
+      payload.description = f.description
+    }
+    await http.put(`/api/wiki/spaces/${f.id}`, payload)
     spaceEditDialog.value = false
     ElMessage.success('已保存')
     await loadSpaces()

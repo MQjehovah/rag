@@ -129,7 +129,8 @@ def _space_visible(db: Session, space: WikiSpace, current_user) -> bool:
 @router.get("/spaces")
 def list_spaces(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     spaces = db.query(WikiSpace).order_by(WikiSpace.position.asc(), WikiSpace.created_at.asc()).all()
-    default_id = ensure_default_space(db).id
+    default_space = ensure_default_space(db)
+    default_id = default_space.id
     spaces = [s for s in spaces if _space_visible(db, s, current_user) and s.id != default_id]
     # 计数(按空间)
     counts: Dict[str, int] = {}
@@ -150,10 +151,21 @@ def list_spaces(db: Session = Depends(get_db), current_user=Depends(get_current_
             "acl_groups": acl_groups,
             "count": counts.get(s.id, 0),
         })
+    d_users, d_groups = load_acl_lists(db, ACL_WIKI_SPACE, default_space.id)
     return {
         "spaces": out,
         "default_count": counts.get(default_id, 0) + counts.get("", 0),
         "total": sum(counts.values()),
+        # 默认空间元数据(供前端「默认空间」的编辑入口: 可见性/ACL)
+        "default_space": {
+            "id": default_space.id,
+            "name": default_space.name or "默认空间",
+            "icon": default_space.icon or "📄",
+            "description": default_space.description or "",
+            "visibility": default_space.visibility,
+            "acl_users": d_users,
+            "acl_groups": d_groups,
+        },
     }
 
 

@@ -593,3 +593,12 @@ def test_notebook_acl_sql_matches_python(api_engine, key):
         assert sql_ids == py_ids, key
     finally:
         db.close()
+
+def test_wiki_spaces_includes_default_space_meta(api_client, as_user):
+    """spaces 响应带默认空间元数据(前端「默认空间」编辑入口预填 可见性/ACL 用)。"""
+    as_user(["__local_admin__"])
+    res = api_client.get("/api/wiki/spaces")
+    assert res.status_code == 200
+    ds = res.json().get("default_space")
+    assert ds and ds.get("id")
+    assert "visibility" in ds and "acl_users" in ds and "acl_groups" in ds
