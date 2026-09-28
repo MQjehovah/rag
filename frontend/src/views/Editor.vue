@@ -123,7 +123,7 @@
 
             <div v-if="currentNotebook?.id === nb.id" class="page-list">
               <div
-                v-for="row in treeRows"
+                v-for="row in treeRowsVisible"
                 :key="row.page.id"
                 class="page-item"
                 :class="{
@@ -161,6 +161,9 @@
                     </el-dropdown-menu>
                   </template>
                 </el-dropdown>
+              </div>
+              <div v-if="treeRowsMore > 0" class="load-more" @click="renderLimit += TREE_RENDER_BATCH">
+                加载更多（还有 {{ treeRowsMore }} 条）
               </div>
             </div>
             </div>
@@ -789,6 +792,8 @@ interface Page {
 
 const notebooks = ref<Notebook[]>([])
 const treePages = ref<PageListItem[]>([])
+/** 页面树缓存(按笔记本): 展开/收起来回切换不重复请求; 任何增删改/排序后由 loadTree 刷新 */
+const treeCache = new Map<string, PageListItem[]>()
 const currentNotebook = ref<Notebook | null>(null)
 const currentPage = ref<Page | null>(null)
 const saveStatus = ref<'saved' | 'saving' | 'unsaved'>('saved')
@@ -954,7 +959,6 @@ const saveNotebookSettings = async () => {
   }
 }
 
-// 扁平化页面树: 生成 { page, depth } 列表供渲染与拖拽
 const treeRows = computed(() => {
   const items = treePages.value
   const byId = new Map<string, PageListItem>()
@@ -979,6 +983,12 @@ const treeRows = computed(() => {
   return rows
 })
 
+/** 渲染分批: 大树笔记本(如 255 篇)一次挂载全部行会卡顿 — 默认一批 100 条, 底部「加载更多」递增 */
+const TREE_RENDER_BATCH = 100
+const renderLimit = ref(TREE_RENDER_BATCH)
+const treeRowsVisible = computed(() => treeRows.value.slice(0, renderLimit.value))
+const treeRowsMore = computed(() => Math.max(0, treeRows.value.length - renderLimit.value))
+
 const toggleCollapse = (id: string) => {
   if (collapsedPages.value.includes(id)) {
     collapsedPages.value = collapsedPages.value.filter(x => x !== id)
@@ -989,9 +999,12 @@ const toggleCollapse = (id: string) => {
 
 const loadTree = async () => {
   if (!currentNotebook.value) { treePages.value = []; return }
+  const nbId = currentNotebook.value.id
   try {
-    const res = await http.get('/api/pages/tree', { params: { notebook_id: currentNotebook.value.id } })
-    treePages.value = res.data.items || []
+    const res = await http.get('/api/pages/tree', { params: { notebook_id: nbId } })
+    const items: PageListItem[] = res.data.items || []
+    treeCache.set(nbId, items)
+    treePages.value = items
   } catch {
     ElMessage.error('加载笔记失败')
   }
@@ -1004,7 +1017,13 @@ const selectNotebook = async (nb: Notebook) => {
     return
   }
   currentNotebook.value = nb
-  await loadTree()
+  renderLimit.value = TREE_RENDER_BATCH
+  const cached = treeCache.get(nb.id)
+  if (cached) {
+    treePages.value = cached          // 命中缓存: 展开不再重新请求(去掉「卡一下」的请求延迟)
+  } else {
+    await loadTree()
+  }
   if (treePages.value.length === 0) {
     await createPage()
   }
@@ -1203,6 +1222,7 @@ const handleNotebookCmd = async (cmd: string, nb: Notebook) => {
         treePages.value = []
         currentPage.value = null
       }
+      treeCache.delete(nb.id)
       loadNotebooks()
     } catch {
       ElMessage.error('删除失败')
@@ -2507,6 +2527,15 @@ html, body, #app { height: 100%; }
 .page-icon { margin: 0 7px 0 4px; font-size: 13px; flex: none; }
 .page-title { font-size: 14px; color: #37352f; font-weight: 400; }
 .page-item.active .page-title { color: #37352f; font-weight: 400; }
+.load-more {
+  padding: 5px 8px 5px 22px;
+  margin: 1px 0;
+  color: #787774;
+  font-size: 12.5px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.load-more:hover { background: #ebebe9; color: #37352f; }
 .page-menu-btn { color: #b9b9b6; }
 .empty-tip { color: #9b9a97; padding: 24px 16px; }
 
