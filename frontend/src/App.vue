@@ -110,13 +110,15 @@
 import { computed, ref, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from './stores/auth'
+import { PERM } from './constants/perms'
+import type { Permission } from './constants/perms'
 import http from './api/http'
 
 const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
 
-type NavItem = { path: string; label: string; svg: string; perm?: string }
+type NavItem = { path: string; label: string; svg: string; perm?: Permission }
 
 const navGroups: { label: string; items: NavItem[] }[] = [
   {
@@ -130,19 +132,19 @@ const navGroups: { label: string; items: NavItem[] }[] = [
   {
     label: '数据与管道',
     items: [
-      { path: '/sources', label: '数据源', perm: 'sources.manage', svg: '<path d="M9 2v6M15 2v6M6 8h12v4a6 6 0 0 1-12 0V8zM12 18v4"/>' },
-      { path: '/pipelines', label: '编译管道', perm: 'pipeline.manage', svg: '<circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M6 9v6M18 6a9 9 0 0 1-9 9"/>' },
-      { path: '/templates', label: '编译模板', perm: 'pipeline.manage', svg: '<path d="M4 4h16v4H4zM4 10h16v4H4zM4 16h10v4H4z"/>' },
-      { path: '/graph', label: '知识图谱', perm: 'graph.manage', svg: '<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="M8.6 10.7l6.8-4M8.6 13.3l6.8 4"/>' },
-      { path: '/embeddings', label: '嵌入模型', perm: 'embedding.manage', svg: '<rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 2v2M15 2v2M9 20v2M15 20v2M20 9h2M20 14h2M2 9h2M2 14h2"/>' },
+      { path: '/sources', label: '数据源', perm: PERM.sources, svg: '<path d="M9 2v6M15 2v6M6 8h12v4a6 6 0 0 1-12 0V8zM12 18v4"/>' },
+      { path: '/pipelines', label: '编译管道', perm: PERM.pipeline, svg: '<circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M6 9v6M18 6a9 9 0 0 1-9 9"/>' },
+      { path: '/templates', label: '编译模板', perm: PERM.pipeline, svg: '<path d="M4 4h16v4H4zM4 10h16v4H4zM4 16h10v4H4z"/>' },
+      { path: '/graph', label: '知识图谱', perm: PERM.graph, svg: '<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="M8.6 10.7l6.8-4M8.6 13.3l6.8 4"/>' },
+      { path: '/embeddings', label: '嵌入模型', perm: PERM.embedding, svg: '<rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 2v2M15 2v2M9 20v2M15 20v2M20 9h2M20 14h2M2 9h2M2 14h2"/>' },
     ],
   },
   {
     label: '系统管理',
     items: [
-      { path: '/admin/users', label: '用户管理', perm: 'user.manage', svg: '<path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>' },
-      { path: '/admin/roles', label: '角色权限', perm: 'role.manage', svg: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/>' },
-      { path: '/admin/groups', label: '组管理', perm: 'group.manage', svg: '<path d="M17 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2"/><circle cx="10" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>' },
+      { path: '/admin/users', label: '用户管理', perm: PERM.user, svg: '<path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>' },
+      { path: '/admin/roles', label: '角色权限', perm: PERM.role, svg: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/>' },
+      { path: '/admin/groups', label: '组管理', perm: PERM.group, svg: '<path d="M17 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2"/><circle cx="10" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>' },
     ],
   },
 ]

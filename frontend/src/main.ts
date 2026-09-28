@@ -24,6 +24,7 @@ import CompileTemplates from './views/CompileTemplates.vue'
 import Embeddings from './views/Embeddings.vue'
 import SharedPage from './views/SharedPage.vue'
 import { useAuthStore } from './stores/auth'
+import { PERM } from './constants/perms'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -32,13 +33,14 @@ const router = createRouter({
     { path: '/share/:token', component: SharedPage, meta: { public: true } },
     { path: '/', component: Chat },
     { path: '/notes', component: Editor },
-    { path: '/graph', component: KnowledgeGraph, meta: { perm: 'graph.manage' } },
+    { path: '/graph', component: KnowledgeGraph, meta: { perm: PERM.graph } },
     { path: '/wiki', component: Wiki },
     { path: '/wiki/:id', component: Wiki },
-    { path: '/sources', component: Sources, meta: { perm: 'sources.manage' } },
-    { path: '/pipelines', component: Pipelines, meta: { perm: 'pipeline.manage' } },
-    { path: '/templates', component: CompileTemplates, meta: { perm: 'pipeline.manage' } },
-    { path: '/embeddings', component: Embeddings, meta: { perm: 'embedding.manage' } },
+    { path: '/sources', component: Sources, meta: { perm: PERM.sources } },
+    { path: '/pipelines', component: Pipelines, meta: { perm: PERM.pipeline } },
+    { path: '/templates', component: CompileTemplates, meta: { perm: PERM.pipeline } },
+    { path: '/embeddings', component: Embeddings, meta: { perm: PERM.embedding } },
+    { path: '/admin/roles', component: () => import('./views/admin/AdminRoles.vue'), meta: { perm: PERM.role } },
   ]
 })
 
@@ -51,7 +53,7 @@ router.beforeEach(async (to) => {
   if (!auth.user) {
     try { await auth.fetchMe() } catch { return { path: '/login' } }
   }
-  const perm = to.meta.perm as string | undefined
+  const perm = to.meta.perm
   if (perm && !auth.hasPerm(perm)) return { path: '/' }
   return true
 })
