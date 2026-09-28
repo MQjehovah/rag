@@ -10,6 +10,8 @@ interface User {
   display_name: string
   is_local: boolean
   groups: string[]
+  roles?: { name: string; display_name: string }[]
+  permissions?: string[]
 }
 
 export const useAuthStore = defineStore('auth', () => {
@@ -17,6 +19,13 @@ export const useAuthStore = defineStore('auth', () => {
   const user = ref<User | null>(null)
 
   const isLoggedIn = computed(() => !!token.value)
+  const permissions = computed(() => user.value?.permissions || [])
+
+  /** 是否拥有权限键（'*' 为内置管理员通配权限） */
+  function hasPerm(key: string): boolean {
+    const p = permissions.value
+    return p.includes('*') || p.includes(key)
+  }
 
   async function login(username: string, password: string) {
     const res = await axios.post((import.meta.env.BASE_URL || '/').replace(/\/$/, '') + '/api/auth/login', { username, password })
@@ -48,10 +57,11 @@ export const useAuthStore = defineStore('auth', () => {
     try {
       const res = await http.get('/api/auth/me')
       user.value = res.data
-    } catch {
+    } catch (e) {
       logout()
+      throw e
     }
   }
 
-  return { token, user, isLoggedIn, login, loginWithSso, adoptSsoToken, logout, fetchMe }
+  return { token, user, isLoggedIn, permissions, hasPerm, login, loginWithSso, adoptSsoToken, logout, fetchMe }
 })

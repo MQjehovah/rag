@@ -23,6 +23,7 @@ import Pipelines from './views/Pipelines.vue'
 import CompileTemplates from './views/CompileTemplates.vue'
 import Embeddings from './views/Embeddings.vue'
 import SharedPage from './views/SharedPage.vue'
+import { useAuthStore } from './stores/auth'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -31,20 +32,25 @@ const router = createRouter({
     { path: '/share/:token', component: SharedPage, meta: { public: true } },
     { path: '/', component: Chat },
     { path: '/notes', component: Editor },
-    { path: '/graph', component: KnowledgeGraph },
+    { path: '/graph', component: KnowledgeGraph, meta: { perm: 'graph.manage' } },
     { path: '/wiki', component: Wiki },
     { path: '/wiki/:id', component: Wiki },
-    { path: '/sources', component: Sources },
-    { path: '/pipelines', component: Pipelines },
-    { path: '/templates', component: CompileTemplates },
-    { path: '/embeddings', component: Embeddings },
+    { path: '/sources', component: Sources, meta: { perm: 'sources.manage' } },
+    { path: '/pipelines', component: Pipelines, meta: { perm: 'pipeline.manage' } },
+    { path: '/templates', component: CompileTemplates, meta: { perm: 'pipeline.manage' } },
+    { path: '/embeddings', component: Embeddings, meta: { perm: 'embedding.manage' } },
   ]
 })
 
-router.beforeEach((to) => {
-  if (to.meta.public) return true
+router.beforeEach(async (to) => {
   const token = localStorage.getItem('rag_token')
-  if (!token) return { path: '/login' }
+  if (!token) return to.meta.public ? true : { path: '/login' }
+  const auth = useAuthStore()
+  if (!auth.user) {
+    try { await auth.fetchMe() } catch { return { path: '/login' } }
+  }
+  const perm = to.meta.perm as string | undefined
+  if (perm && !auth.hasPerm(perm)) return { path: '/' }
   return true
 })
 
