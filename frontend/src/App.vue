@@ -86,19 +86,31 @@
             ref="searchInput"
             v-model="searchQuery"
             class="qs-input"
-            placeholder="搜索页面…（↑↓ 选择，回车打开，Esc 关闭）"
+            :placeholder="searchMode === 'semantic' ? '语义检索…（回车搜索，↑↓ 选择，Esc 关闭）' : '按名称搜索页面…（↑↓ 选择，回车打开，Esc 关闭）'"
             @keydown="onSearchKey"
           />
+          <div class="qs-mode">
+            <el-radio-group v-model="searchMode" size="small" @change="onSearchModeChange">
+              <el-radio-button value="name">名称</el-radio-button>
+              <el-radio-button value="semantic">语义</el-radio-button>
+            </el-radio-group>
+            <span v-if="searchMode === 'semantic'" class="qs-mode-hint">回车进行语义检索</span>
+          </div>
           <div class="qs-list">
             <div
-              v-for="(p, i) in searchResults"
+              v-for="(p, i) in activeList"
               :key="p.id"
               class="qs-item"
               :class="{ active: i === searchIndex }"
               @mouseenter="searchIndex = i"
               @click="pickSearch(p)"
-            >{{ p.title }}</div>
-            <div v-if="!searchResults.length" class="qs-empty">无匹配页面</div>
+            >
+              <span class="qs-item-title">{{ p.title }}</span>
+              <span v-if="p.snippet" class="qs-item-sub">{{ p.snippet }}</span>
+            </div>
+            <div v-if="!activeList.length" class="qs-empty">
+              {{ searchMode === 'semantic' ? (searching ? '检索中…' : '无匹配页面（回车检索）') : '无匹配页面' }}
+            </div>
           </div>
         </div>
       </div>
@@ -109,6 +121,7 @@
 <script setup lang="ts">
 import { computed, ref, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
 import { useAuthStore } from './stores/auth'
 import { PERM } from './constants/perms'
 import type { Permission } from './constants/perms'
@@ -181,7 +194,7 @@ const handleLogout = () => {
   router.push('/login')
 }
 
-// ---- 全局搜索 ----
+// ---- 全局搜索 (Ctrl+K): 名称(默认,标题过滤) / 语义(服务端检索) ----
 const searchOpen = ref(false)
 const searchQuery = ref('')
 const searchIndex = ref(0)
@@ -189,16 +202,61 @@ const searchInput = ref<HTMLInputElement | null>(null)
 const searchAll = ref<{ id: string; title: string }[]>([])
 let searchLoaded = false
 
+/** 搜索模式: name=按页面名称(默认) | semantic=语义检索 */
+const searchMode = ref<'name' | 'semantic'>(localStorage.getItem('rag-search-mode') === 'semantic' ? 'semantic' : 'name')
+const semanticResults = ref<{ id: string; title: string; snippet: string }[]>([])
+const semanticQuery = ref('')
+const searching = ref(false)
+
 const searchResults = computed(() => {
   const q = searchQuery.value.trim().toLowerCase()
   if (!q) return searchAll.value.slice(0, 40)
   return searchAll.value.filter(p => p.title.toLowerCase().includes(q)).slice(0, 40)
 })
 
+/** 当前模式的展示列表(供键盘导航/渲染共用) */
+const activeList = computed<{ id: string; title: string; snippet?: string }[]>(() =>
+  searchMode.value === 'semantic'
+    ? (semanticQuery.value === searchQuery.value.trim() ? semanticResults.value : [])
+    : searchResults.value
+)
+
+const onSearchModeChange = () => {
+  localStorage.setItem('rag-search-mode', searchMode.value)
+  searchIndex.value = 0
+  semanticResults.value = []
+  semanticQuery.value = ''
+  nextTick(() => searchInput.value?.focus())
+}
+
+const runSemanticSearch = async () => {
+  const q = searchQuery.value.trim()
+  if (!q || searching.value) return
+  searching.value = true
+  try {
+    const res = await http.post('/api/search', { query: q, top_k: 10 })
+    semanticResults.value = (res.data.results || []).map((r: any) => ({
+      id: r.id,
+      title: r.title || '无标题',
+      snippet: String(r.content || '').replace(/\s+/g, ' ').slice(0, 80),
+    }))
+    semanticQuery.value = q
+    searchIndex.value = 0
+  } catch {
+    ElMessage.error('语义检索失败')
+    semanticResults.value = []
+    semanticQuery.value = q
+  } finally {
+    searching.value = false
+  }
+}
+
 const openSearch = async () => {
   searchOpen.value = true
   searchQuery.value = ''
   searchIndex.value = 0
+  semanticResults.value = []
+  semanticQuery.value = ''
   nextTick(() => searchInput.value?.focus())
   if (!searchLoaded) {
     try {
@@ -213,10 +271,17 @@ const pickSearch = (p: { id: string }) => {
   router.push({ path: '/notes', query: { page: p.id } })
 }
 const onSearchKey = (e: KeyboardEvent) => {
-  const list = searchResults.value
+  const list = activeList.value
   if (e.key === 'ArrowDown') { e.preventDefault(); searchIndex.value = Math.min(searchIndex.value + 1, list.length - 1) }
   else if (e.key === 'ArrowUp') { e.preventDefault(); searchIndex.value = Math.max(searchIndex.value - 1, 0) }
-  else if (e.key === 'Enter') { e.preventDefault(); if (list[searchIndex.value]) pickSearch(list[searchIndex.value]) }
+  else if (e.key === 'Enter') {
+    e.preventDefault()
+    if (searchMode.value === 'semantic' && searchQuery.value.trim() !== semanticQuery.value) {
+      // 语义模式: 先检索当前关键词;已有结果则回车打开选中项
+      if (list.length === 0) { void runSemanticSearch(); return }
+    }
+    if (list[searchIndex.value]) pickSearch(list[searchIndex.value])
+  }
   else if (e.key === 'Escape') { searchOpen.value = false }
 }
 const onGlobalKey = (e: KeyboardEvent) => {
@@ -418,16 +483,27 @@ body {
   border-bottom: 1px solid var(--border);
 }
 .qs-list { max-height: 52vh; overflow-y: auto; padding: 6px; }
+.qs-mode {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.qs-mode-hint { font-size: 12px; color: var(--text-3); }
 .qs-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
   padding: 9px 12px;
   border-radius: 6px;
   font-size: 14px;
   color: var(--text);
   cursor: pointer;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
+.qs-item-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.qs-item-sub { font-size: 12px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .qs-item.active { background: var(--surface-2); }
 .qs-empty { padding: 12px 14px; color: var(--text-3); font-size: 13px; }
 </style>

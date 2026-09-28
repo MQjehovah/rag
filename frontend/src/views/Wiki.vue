@@ -106,7 +106,7 @@
             <el-button size="small" text type="danger" @click="deleteWikiPage(current.id)">删除</el-button>
             <el-button size="small" text type="primary" @click="startEdit">编辑</el-button>
           </template>
-          <span v-else class="wiki-edit-tip">编辑中（下次编译会保留你的修改）</span>
+          <span v-if="editing" class="wiki-edit-tip">编辑中（下次编译会保留你的修改）</span>
         </div>
         <div class="wiki-crumb">{{ current.category }}</div>
         <h1 class="wiki-title">{{ current.title }}</h1>
