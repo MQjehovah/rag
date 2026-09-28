@@ -465,6 +465,14 @@
     <!-- 新建笔记本对话框 -->
     <el-dialog v-model="showNewNotebook" title="新建笔记本" width="400px">
       <el-input v-model="newNotebookName" placeholder="笔记本名称" @keyup.enter="handleCreateNotebook" />
+      <div style="margin-top: 12px">
+        <div class="muted-hint" style="margin-bottom: 4px">可见性</div>
+        <el-select v-model="newNotebookVisibility" style="width: 100%">
+          <el-option label="仅本人可见" value="self" />
+          <el-option label="部门可见" value="dept" />
+          <el-option label="公开（所有登录用户）" value="public" />
+        </el-select>
+      </div>
       <template #footer>
         <el-button @click="showNewNotebook = false">取消</el-button>
         <el-button type="primary" @click="handleCreateNotebook">创建</el-button>
@@ -491,6 +499,14 @@
         </el-form-item>
         <el-form-item label="说明">
           <el-input v-model="notebookForm.description" type="textarea" :rows="2" placeholder="可选" />
+        </el-form-item>
+        <el-form-item label="可见性">
+          <el-select v-model="notebookForm.visibility" style="width: 100%">
+            <el-option label="仅本人可见" value="self" />
+            <el-option label="部门可见" value="dept" />
+            <el-option label="公开（所有登录用户）" value="public" />
+          </el-select>
+          <div class="muted-hint">仅本人：只有自己可访问；部门：同组用户可访问；公开：所有登录用户可访问。</div>
         </el-form-item>
         <el-form-item label="嵌入模型">
           <el-select v-model="notebookForm.embedding_profile_id" clearable placeholder="默认档案" style="width: 100%">
@@ -700,6 +716,8 @@ interface Notebook {
   embedding_profile_id?: string | null
   position?: number
   section?: string
+  visibility?: 'self' | 'dept' | 'public'
+  owner_id?: string | null
 }
 
 interface EmbeddingProfile {
@@ -749,11 +767,12 @@ watch(sidebarCollapsed, (v) => localStorage.setItem('rag-sidebar-collapsed', v ?
 watch(sidebarWidth, (v) => localStorage.setItem('rag-sidebar-width', String(v)))
 const showNewNotebook = ref(false)
 const newNotebookName = ref('')
+const newNotebookVisibility = ref<'self' | 'dept' | 'public'>('dept')
 const profiles = ref<EmbeddingProfile[]>([])
 const showNotebookSettings = ref(false)
 const notebookSaving = ref(false)
 const NOTEBOOK_ICONS = ['📁', '📘', '📗', '📙', '📕', '🗂️', '🧭', '🧩', '⚙️', '🚀', '💡', '🧪', '🛠️', '🌐', '📊', '🤖']
-const notebookForm = reactive({ id: '', name: '', description: '', icon: '', embedding_profile_id: '' as string | null })
+const notebookForm = reactive({ id: '', name: '', description: '', icon: '', embedding_profile_id: '' as string | null, visibility: 'dept' as 'self' | 'dept' | 'public' })
 const showSearch = ref(false)
 const searchResults = ref<any[]>([])
 
@@ -821,6 +840,7 @@ const openNotebookSettings = (nb: Notebook) => {
   notebookForm.description = nb.description || ''
   notebookForm.icon = nb.icon || ''
   notebookForm.embedding_profile_id = nb.embedding_profile_id || ''
+  notebookForm.visibility = (nb.visibility === 'self' || nb.visibility === 'public') ? nb.visibility : 'dept'
   showNotebookSettings.value = true
 }
 
@@ -836,6 +856,7 @@ const saveNotebookSettings = async () => {
       description: notebookForm.description,
       icon: notebookForm.icon || '',
       embedding_profile_id: notebookForm.embedding_profile_id || '',
+      visibility: notebookForm.visibility,
     })
     const updated = res.data
     const idx = notebooks.value.findIndex(n => n.id === notebookForm.id)
@@ -1063,9 +1084,13 @@ const handleCreateNotebook = async () => {
     return
   }
   try {
-    const res = await http.post('/api/notebooks', { name: newNotebookName.value })
+    const res = await http.post('/api/notebooks', {
+      name: newNotebookName.value,
+      visibility: newNotebookVisibility.value,
+    })
     notebooks.value.unshift(res.data)
     newNotebookName.value = ''
+    newNotebookVisibility.value = 'dept'
     showNewNotebook.value = false
     currentNotebook.value = res.data
     await createPage()

@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
 from sqlalchemy.orm import Session
-from sqlalchemy import or_, text, func
-from typing import List, Optional
+from sqlalchemy import or_, select, text, func
+from typing import Optional
 import uuid
 import secrets
 import time
@@ -10,10 +10,8 @@ import logging
 from collections import Counter
 
 from app.core.security import has_permission
-
-logger = logging.getLogger(__name__)
-
-from app.models.database import Page, Notebook, PageChunk, PageRevision, PageComment, User, get_engine
+from app.core.visibility import notebook_visible, notebook_visible_condition
+from app.models.database import Page, Notebook, PageChunk, PageRevision, PageComment, get_engine
 from app.models.schema import PageCreate, PageUpdate, PageMove, PageViewUpdate, CommentCreate, PageResponse, PageListItem, PageListResponse
 from app.core.rag import EmbeddingService, VectorStore
 from app.core.hybrid import HybridIndex
@@ -21,6 +19,8 @@ from app.core.entity_graph import EntityGraphStore
 from app.api.deps import get_db
 from app.core.jwt_utils import get_current_user
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/pages", tags=["笔记"])
 
@@ -122,23 +122,33 @@ async def background_index_page(page_id: str):
     finally:
         await emb_svc.close()
 
+def _visible_notebook_ids(current_user):
+    """当前用户可见笔记本的 id 子查询(新可见性谓词)。"""
+    return select(Notebook.id).where(notebook_visible_condition(current_user))
+
+
+def _page_within_visible_notebook(current_user):
+    """列表过滤:未归属笔记本的页面保持公共(notebook_id IS NULL)。"""
+    return or_(
+        Page.notebook_id.is_(None),
+        Page.notebook_id.in_(_visible_notebook_ids(current_user)),
+    )
+
+
 def _check_page_access(page, current_user, db):
     if has_permission(current_user, "page.manage"):
         return
     if page.notebook_id:
         nb = db.query(Notebook).filter(Notebook.id == page.notebook_id).first()
-        if nb and nb.group_id and nb.group_id not in current_user["groups"]:
+        if nb and not notebook_visible(current_user, nb):
             raise HTTPException(status_code=403, detail="无权访问该笔记")
 
 def _check_page_access_by_nb(notebook_id, current_user, db):
     if has_permission(current_user, "page.manage"):
         return
     if notebook_id:
-        row = db.execute(
-            text("SELECT group_id FROM notebooks WHERE id = :nid"),
-            {"nid": notebook_id},
-        ).fetchone()
-        if row and row[0] and row[0] not in current_user["groups"]:
+        nb = db.query(Notebook).filter(Notebook.id == notebook_id).first()
+        if nb and not notebook_visible(current_user, nb):
             raise HTTPException(status_code=403, detail="无权访问该笔记")
 
 @router.post("", response_model=PageResponse)
@@ -146,7 +156,7 @@ def create_page(data: PageCreate, background_tasks: BackgroundTasks, db: Session
     if data.notebook_id:
         nb = db.query(Notebook).filter(Notebook.id == data.notebook_id).first()
         if nb and not has_permission(current_user, "page.manage"):
-            if nb.group_id and nb.group_id not in current_user["groups"]:
+            if not notebook_visible(current_user, nb):
                 raise HTTPException(status_code=403, detail="无权在该笔记本创建笔记")
     parent_id = data.parent_id
     if parent_id:
@@ -188,12 +198,7 @@ def list_pages(
     if tag:
         query = query.filter(Page.keywords.like(f"%{tag}%"))
     if not has_permission(current_user, "page.manage"):
-        visible_nb_ids = db.query(Notebook.id).filter(
-            or_(Notebook.group_id.in_(current_user["groups"]), Notebook.group_id.is_(None))
-        ).subquery()
-        query = query.filter(
-            or_(Page.notebook_id.is_(None), Page.notebook_id.in_(visible_nb_ids))
-        )
+        query = query.filter(_page_within_visible_notebook(current_user))
 
     total = query.count()
     rows = query.order_by(Page.position.asc(), Page.created_at.asc()).offset((page - 1) * page_size).limit(page_size).all()
@@ -220,12 +225,9 @@ def get_tags(db: Session = Depends(get_db), current_user=Depends(get_current_use
     if has_permission(current_user, "page.manage"):
         rows = db.query(Page.keywords).filter(Page.deleted_at.is_(None)).all()
     else:
-        visible_nb_ids = db.query(Notebook.id).filter(
-            or_(Notebook.group_id.in_(current_user["groups"]), Notebook.group_id.is_(None))
-        ).subquery()
         rows = db.query(Page.keywords).filter(
             Page.deleted_at.is_(None),
-            or_(Page.notebook_id.is_(None), Page.notebook_id.in_(visible_nb_ids))
+            _page_within_visible_notebook(current_user),
         ).all()
     counter = Counter()
     for (kw_str,) in rows:
@@ -244,7 +246,7 @@ def page_tree(notebook_id: str, db: Session = Depends(get_db), current_user=Depe
     nb = db.query(Notebook).filter(Notebook.id == notebook_id).first()
     if not nb:
         raise HTTPException(status_code=404, detail="笔记本不存在")
-    if not has_permission(current_user, "page.manage") and nb.group_id and nb.group_id not in current_user["groups"]:
+    if not has_permission(current_user, "page.manage") and not notebook_visible(current_user, nb):
         raise HTTPException(status_code=403, detail="无权访问该笔记本")
     rows = db.query(Page.id, Page.title, Page.parent_id, Page.position, Page.view_type, Page.status, Page.updated_at).filter(
         Page.notebook_id == notebook_id,
@@ -270,10 +272,7 @@ def list_trash(db: Session = Depends(get_db), current_user=Depends(get_current_u
     """回收站: 已软删除的页面(按用户可见范围)。"""
     q = db.query(Page.id, Page.title, Page.notebook_id, Page.deleted_at).filter(Page.deleted_at.isnot(None))
     if not has_permission(current_user, "page.manage"):
-        visible_nb_ids = db.query(Notebook.id).filter(
-            or_(Notebook.group_id.in_(current_user["groups"]), Notebook.group_id.is_(None))
-        ).subquery()
-        q = q.filter(or_(Page.notebook_id.is_(None), Page.notebook_id.in_(visible_nb_ids)))
+        q = q.filter(_page_within_visible_notebook(current_user))
     rows = q.order_by(Page.deleted_at.desc()).all()
     return {
         "items": [
@@ -325,10 +324,7 @@ def page_backlinks(page_id: str, db: Session = Depends(get_db), current_user=Dep
         Page.content.like(pattern),
     )
     if not has_permission(current_user, "page.manage"):
-        visible_nb_ids = db.query(Notebook.id).filter(
-            or_(Notebook.group_id.in_(current_user["groups"]), Notebook.group_id.is_(None))
-        ).subquery()
-        q = q.filter(or_(Page.notebook_id.is_(None), Page.notebook_id.in_(visible_nb_ids)))
+        q = q.filter(_page_within_visible_notebook(current_user))
     rows = q.limit(50).all()
     return {"items": [{"id": r[0], "title": r[1] or "无标题"} for r in rows]}
 

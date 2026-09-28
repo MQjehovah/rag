@@ -3,17 +3,17 @@ import json
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
-from sqlalchemy import or_
-from typing import List, Dict, Any
+from sqlalchemy import or_, select
+from typing import List, Dict
 from collections import Counter, defaultdict
 import logging
 
 from app.models.database import Page, GraphEdge, GraphEntity, GraphEntityEdge, GraphCommunity, Notebook, get_engine, get_session, init_db
 from app.models.schema import GraphDataResponse, GraphNodeResponse, GraphEdgeResponse, GraphStatsResponse
-from app.core.rag import EmbeddingService
 from app.core.graph import GraphBuilder
 from app.core.entity_graph import EntityGraphStore
 from app.core.graphrag import rebuild_communities, sync_image_assets
+from app.core.visibility import notebook_visible_condition
 from app.api.deps import get_db
 from app.core.jwt_utils import get_current_user
 from app.core.security import has_permission, require_permission
@@ -26,9 +26,7 @@ logger = logging.getLogger(__name__)
 def _get_visible_pages(db, current_user):
     if has_permission(current_user, "graph.manage"):
         return db.query(Page).all()
-    visible_nb_ids = db.query(Notebook.id).filter(
-        or_(Notebook.group_id.in_(current_user["groups"]), Notebook.group_id.is_(None))
-    ).subquery()
+    visible_nb_ids = select(Notebook.id).where(notebook_visible_condition(current_user))
     return db.query(Page).filter(
         or_(Page.notebook_id.is_(None), Page.notebook_id.in_(visible_nb_ids))
     ).all()

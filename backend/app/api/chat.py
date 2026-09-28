@@ -8,7 +8,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy import or_
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -16,6 +16,7 @@ from app.core.rag import EmbeddingService, RerankerService
 from app.core.retrieval import RetrievalPipeline
 from app.core.llm import call_llm_text
 from app.core.graphrag import search_communities
+from app.core.visibility import notebook_visible_condition
 from app.models.database import Notebook, Page
 from app.api.deps import get_db
 from app.api.search_common import get_visible_page_ids
@@ -403,11 +404,9 @@ def _get_kb_context(db: Session, current_user) -> dict:
         notebooks = db.query(Notebook).all()
         pages_q = db.query(Page.id, Page.title, Page.notebook_id)
     else:
-        visible_nb_filter = or_(
-            Notebook.group_id.in_(current_user["groups"]), Notebook.group_id.is_(None)
-        )
-        notebooks = db.query(Notebook).filter(visible_nb_filter).all()
-        visible_nb_ids = db.query(Notebook.id).filter(visible_nb_filter).scalar_subquery()
+        visible_nb_cond = notebook_visible_condition(current_user)
+        notebooks = db.query(Notebook).filter(visible_nb_cond).all()
+        visible_nb_ids = select(Notebook.id).where(visible_nb_cond)
         pages_q = db.query(Page.id, Page.title, Page.notebook_id).filter(
             or_(Page.notebook_id.is_(None), Page.notebook_id.in_(visible_nb_ids))
         )

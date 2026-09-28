@@ -6,7 +6,7 @@ from sqlalchemy import text
 
 from app.api.search_common import visible_wiki_filter
 from app.core.wiki_search import _visibility_sql, search_wiki
-from app.models.database import WikiPage, get_engine, get_session, init_db
+from app.models.database import WikiPage, WikiSpace, get_engine, get_session, init_db
 
 DIM = 1024
 
@@ -121,3 +121,72 @@ def test_裸SQL与ORM可见性实现一致(db, groups):
     cond, params = _visibility_sql(user)
     rows = db.execute(text(f"SELECT id FROM wiki_pages WHERE {cond}"), params).fetchall()
     assert {r[0] for r in rows} == orm_ids
+
+
+def _seed_spaces(db):
+    """空间维度 fixtures:三种策略 + legacy(公共/研发),页面覆盖空间与 group 两种归属。"""
+    db.add_all([
+        WikiSpace(id="sp-pub", name="公开空间", visibility="public"),
+        WikiSpace(id="sp-rd", name="研发空间", visibility="dept", group_id="研发部"),
+        WikiSpace(id="sp-self", name="私人空间", visibility="self", owner_id="u-owner"),
+        WikiSpace(id="sp-legacy-pub", name="旧公共空间", visibility=None, group_id=None),
+        WikiSpace(id="sp-legacy-rd", name="旧研发空间", visibility=None, group_id="研发部"),
+        WikiPage(id="wsp-pub", title="公开空间页", content="x", space_id="sp-pub",
+                 group_id=None, embedding=json.dumps(_vec(0, 1))),
+        WikiPage(id="wsp-rd", title="研发空间页", content="x", space_id="sp-rd",
+                 group_id=None, embedding=json.dumps(_vec(0, 1, 2))),
+        WikiPage(id="wsp-rd-fin", title="研发空间财务页", content="x", space_id="sp-rd",
+                 group_id="财务部", embedding=json.dumps(_vec(0, 1, 2, 3))),
+        WikiPage(id="wsp-self", title="私人空间页", content="x", space_id="sp-self",
+                 group_id=None, embedding=json.dumps(_vec(0, 1, 2, 3, 4))),
+        WikiPage(id="wsp-legacy-rd", title="旧研发空间页", content="x", space_id="sp-legacy-rd",
+                 group_id=None, embedding=json.dumps(_vec(0, 1, 2, 3, 4, 5))),
+        WikiPage(id="wsp-nospace", title="无空间页", content="x", space_id=None,
+                 group_id=None, embedding=json.dumps(_vec(0, 1, 2, 3, 4, 5, 6))),
+    ])
+    db.commit()
+
+
+@pytest.mark.parametrize(
+    "user",
+    [
+        {"groups": ["__local_admin__"]},
+        {"groups": [], "permissions": ["*"]},
+        {"groups": ["研发部"]},
+        {"groups": ["财务部"]},
+        {"groups": []},
+        {"groups": ["研发部"], "id": "u-rd"},
+        {"groups": [], "id": "u-owner"},          # self 空间 owner
+        {"groups": ["研发部"], "id": "u-owner"},  # self 空间 owner 同时同组
+    ],
+)
+def test_空间派生可见性双实现一致(db, user):
+    """页面可见性 = 页面 group 规则 AND 所属空间可见;裸 SQL 与 ORM 必须一致。"""
+    _seed(db)
+    _seed_spaces(db)
+
+    orm_ids = {p.id for p in db.query(WikiPage).filter(visible_wiki_filter(user)).all()}
+    cond, params = _visibility_sql(user)
+    rows = db.execute(text(f"SELECT id FROM wiki_pages WHERE {cond}"), params).fetchall()
+    assert {r[0] for r in rows} == orm_ids
+
+
+def test_空间可见性语义_研发部用户(db):
+    """研发部:可见公开/研发/旧研发空间页及无空间页;私人空间与页面 group=财务部不可见。"""
+    _seed(db)
+    _seed_spaces(db)
+    ids = {r["id"] for r in search_wiki(db, _vec(0), limit=50, current_user={"groups": ["研发部"]})}
+    assert {"wsp-pub", "wsp-rd", "wsp-legacy-rd", "wsp-nospace"} <= ids
+    assert "wsp-self" not in ids
+    assert "wsp-rd-fin" not in ids
+
+
+def test_空间可见性语义_财务部用户页面规则仍生效(db):
+    """财务部:公开空间可见,但研发空间页不可见;公开空间+页面组=财务部... 反之亦然。"""
+    _seed(db)
+    _seed_spaces(db)
+    ids = {r["id"] for r in search_wiki(db, _vec(0), limit=50, current_user={"groups": ["财务部"]})}
+    assert {"wsp-pub", "wsp-nospace"} <= ids
+    assert "wsp-rd" not in ids        # 研发空间不可见
+    assert "wsp-rd-fin" not in ids    # 页面组对了, 但空间不可见
+    assert "wsp-self" not in ids

@@ -7,21 +7,40 @@ from app.models.database import Page, PageChunk, Notebook
 from app.core.hybrid import HybridIndex
 from app.core.entity_graph import EntityGraphStore
 from app.models.schema import NotebookCreate, NotebookUpdate, NotebookMove, NotebookResponse, NotebookListResponse
-from app.core.rag import VectorStore
 from app.api.deps import get_db
 from app.core.jwt_utils import get_current_user
 from app.core.security import has_permission
-from app.config import settings
+from app.core.visibility import notebook_visible, notebook_visible_condition, parse_visibility
 
 router = APIRouter(prefix="/api/notebooks", tags=["笔记本"])
 
+
+def _parse_visibility(value):
+    try:
+        return parse_visibility(value)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+def _group_for_visibility(visibility, current_user, requested=None):
+    """按可见性决定 group_id:dept→本人组(优先请求的组), public/self→NULL。"""
+    if visibility != 'dept':
+        return None
+    groups = current_user["groups"]
+    if requested and requested in groups:
+        return requested
+    return groups[0] if groups else None
+
+
+def _notebook_writable(notebook, current_user) -> bool:
+    """写/读单资源闸门现状:notebook.manage 或可见性域内。"""
+    return has_permission(current_user, "notebook.manage") or notebook_visible(current_user, notebook)
+
+
 @router.post("", response_model=NotebookResponse)
 def create_notebook(data: NotebookCreate, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
-    group_id = data.group_id
-    if group_id and group_id not in current_user["groups"]:
-        group_id = current_user["groups"][0] if current_user["groups"] else None
-    if not group_id and current_user["groups"]:
-        group_id = current_user["groups"][0]
+    visibility = _parse_visibility(data.visibility or 'dept')
+    group_id = _group_for_visibility(visibility, current_user, data.group_id)
     max_pos = db.query(func.max(Notebook.position)).filter(
         (Notebook.group_id == group_id) if group_id else (Notebook.group_id.is_(None))
     ).scalar()
@@ -29,6 +48,8 @@ def create_notebook(data: NotebookCreate, db: Session = Depends(get_db), current
         id=str(uuid.uuid4()),
         name=data.name,
         group_id=group_id,
+        visibility=visibility,
+        owner_id=current_user["id"],
         description=data.description or '',
         icon=data.icon or '',
         embedding_profile_id=(data.embedding_profile_id or None),
@@ -44,7 +65,7 @@ def create_notebook(data: NotebookCreate, db: Session = Depends(get_db), current
 def list_notebooks(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     query = db.query(Notebook)
     if not has_permission(current_user, "notebook.manage"):
-        query = query.filter((Notebook.group_id.in_(current_user["groups"])) | (Notebook.group_id.is_(None)))
+        query = query.filter(notebook_visible_condition(current_user))
     notebooks = query.order_by(Notebook.position.asc(), Notebook.created_at.asc()).all()
 
     unassigned_count = db.query(Page.id).filter(Page.notebook_id.is_(None)).count()
@@ -59,9 +80,8 @@ def get_notebook(notebook_id: str, db: Session = Depends(get_db), current_user=D
     notebook = db.query(Notebook).filter(Notebook.id == notebook_id).first()
     if not notebook:
         raise HTTPException(status_code=404, detail="笔记本不存在")
-    if not has_permission(current_user, "notebook.manage"):
-        if notebook.group_id and notebook.group_id not in current_user["groups"]:
-            raise HTTPException(status_code=403, detail="无权访问该笔记本")
+    if not _notebook_writable(notebook, current_user):
+        raise HTTPException(status_code=403, detail="无权访问该笔记本")
     return notebook
 
 @router.put("/{notebook_id}", response_model=NotebookResponse)
@@ -69,9 +89,8 @@ def update_notebook(notebook_id: str, data: NotebookUpdate, db: Session = Depend
     notebook = db.query(Notebook).filter(Notebook.id == notebook_id).first()
     if not notebook:
         raise HTTPException(status_code=404, detail="笔记本不存在")
-    if not has_permission(current_user, "notebook.manage"):
-        if notebook.group_id and notebook.group_id not in current_user["groups"]:
-            raise HTTPException(status_code=403, detail="无权访问该笔记本")
+    if not _notebook_writable(notebook, current_user):
+        raise HTTPException(status_code=403, detail="无权访问该笔记本")
     if data.name is not None:
         notebook.name = data.name
     if data.description is not None:
@@ -85,6 +104,13 @@ def update_notebook(notebook_id: str, data: NotebookUpdate, db: Session = Depend
         notebook.embedding_profile_id = data.embedding_profile_id or None
     if data.group_id and data.group_id in current_user["groups"]:
         notebook.group_id = data.group_id
+    if data.visibility is not None:
+        visibility = _parse_visibility(data.visibility)
+        notebook.visibility = visibility
+        notebook.group_id = _group_for_visibility(visibility, current_user, notebook.group_id)
+        if visibility == 'self' and not notebook.owner_id:
+            # legacy 笔记本转 private 时补记当前操作者为 owner, 否则无人可见
+            notebook.owner_id = current_user["id"]
     db.commit()
     db.refresh(notebook)
     return notebook
@@ -95,9 +121,8 @@ def move_notebook(notebook_id: str, data: NotebookMove, db: Session = Depends(ge
     notebook = db.query(Notebook).filter(Notebook.id == notebook_id).first()
     if not notebook:
         raise HTTPException(status_code=404, detail="笔记本不存在")
-    if not has_permission(current_user, "notebook.manage"):
-        if notebook.group_id and notebook.group_id not in current_user["groups"]:
-            raise HTTPException(status_code=403, detail="无权访问该笔记本")
+    if not _notebook_writable(notebook, current_user):
+        raise HTTPException(status_code=403, detail="无权访问该笔记本")
     if data.section is not None:
         notebook.section = data.section
     db.flush()
@@ -116,9 +141,8 @@ def delete_notebook(notebook_id: str, db: Session = Depends(get_db), current_use
     notebook = db.query(Notebook).filter(Notebook.id == notebook_id).first()
     if not notebook:
         raise HTTPException(status_code=404, detail="笔记本不存在")
-    if not has_permission(current_user, "notebook.manage"):
-        if notebook.group_id and notebook.group_id not in current_user["groups"]:
-            raise HTTPException(status_code=403, detail="无权访问该笔记本")
+    if not _notebook_writable(notebook, current_user):
+        raise HTTPException(status_code=403, detail="无权访问该笔记本")
 
     pages = db.query(Page).filter(Page.notebook_id == notebook_id).all()
     for page in pages:

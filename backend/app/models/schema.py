@@ -12,6 +12,7 @@ class NotebookCreate(NotebookBase):
     icon: str = ''
     embedding_profile_id: Optional[str] = None
     section: str = ''
+    visibility: Optional[str] = None  # self | dept | public; 缺省 dept
 
 class NotebookUpdate(BaseModel):
     name: Optional[str] = None
@@ -20,6 +21,7 @@ class NotebookUpdate(BaseModel):
     icon: Optional[str] = None
     embedding_profile_id: Optional[str] = None
     section: Optional[str] = None
+    visibility: Optional[str] = None  # self | dept | public
 
 class NotebookMove(BaseModel):
     position: int = 0
@@ -33,6 +35,8 @@ class NotebookResponse(NotebookBase):
     embedding_profile_id: Optional[str] = None
     position: int = 0
     section: str = ''
+    visibility: Optional[str] = None
+    owner_id: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 

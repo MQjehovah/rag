@@ -32,6 +32,18 @@
           <span class="space-icon">{{ s.icon || '🗂️' }}</span>
           <span class="space-name">{{ s.name }}</span>
           <span class="space-count">{{ s.count }}</span>
+          <el-dropdown
+            v-if="isAdmin"
+            trigger="click"
+            @command="(cmd: string) => { if (cmd === 'edit') openSpaceSettings(s) }"
+          >
+            <button class="space-menu" title="空间设置" @click.stop>⋯</button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="edit">编辑空间</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
         </div>
         <button v-if="isAdmin" class="space-add" @click="spaceDialog = true">＋ 新建空间</button>
       </div>
@@ -175,10 +187,43 @@
         <el-form-item label="说明">
           <el-input v-model="newSpace.description" placeholder="可选" />
         </el-form-item>
+        <el-form-item label="可见性">
+          <el-select v-model="newSpace.visibility" style="width: 100%">
+            <el-option label="仅本人可见" value="self" />
+            <el-option label="部门可见" value="dept" />
+            <el-option label="公开（所有登录用户）" value="public" />
+          </el-select>
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="spaceDialog = false">取消</el-button>
         <el-button type="primary" :loading="savingSpace" @click="createSpace">创建</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 空间设置 -->
+    <el-dialog v-model="spaceEditDialog" title="空间设置" width="440px">
+      <el-form label-width="80px">
+        <el-form-item label="图标">
+          <el-input v-model="editSpaceForm.icon" maxlength="4" style="width: 100px" />
+        </el-form-item>
+        <el-form-item label="名称">
+          <el-input v-model="editSpaceForm.name" @keyup.enter="saveSpaceSettings" />
+        </el-form-item>
+        <el-form-item label="说明">
+          <el-input v-model="editSpaceForm.description" placeholder="可选" />
+        </el-form-item>
+        <el-form-item label="可见性">
+          <el-select v-model="editSpaceForm.visibility" style="width: 100%">
+            <el-option label="仅本人可见" value="self" />
+            <el-option label="部门可见" value="dept" />
+            <el-option label="公开（所有登录用户）" value="public" />
+          </el-select>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="spaceEditDialog = false">取消</el-button>
+        <el-button type="primary" :loading="savingSpaceEdit" @click="saveSpaceSettings">保存</el-button>
       </template>
     </el-dialog>
   </div>
@@ -219,13 +264,18 @@ interface WikiPageListItem {
   summary: string
 }
 
+type Visibility = 'self' | 'dept' | 'public'
+
 const categories = ref<{ name: string; pages: WikiPageListItem[] }[]>([])
-const spaces = ref<{ id: string; name: string; icon: string; description: string; count: number }[]>([])
+const spaces = ref<{ id: string; name: string; icon: string; description: string; count: number; visibility?: Visibility; owner_id?: string | null }[]>([])
 const activeSpace = ref<string>('')   // '' 全部 | 'default' 默认空间 | 空间 id
 const defaultCount = ref(0)
 const spaceDialog = ref(false)
-const newSpace = ref({ name: '', icon: '🗂️', description: '' })
+const newSpace = ref<{ name: string; icon: string; description: string; visibility: Visibility }>({ name: '', icon: '🗂️', description: '', visibility: 'dept' })
 const savingSpace = ref(false)
+const spaceEditDialog = ref(false)
+const savingSpaceEdit = ref(false)
+const editSpaceForm = ref<{ id: string; name: string; icon: string; description: string; visibility: Visibility }>({ id: '', name: '', icon: '', description: '', visibility: 'dept' })
 const total = ref(0)
 const running = ref(false)
 const rebuilding = ref(false)
@@ -286,13 +336,45 @@ const createSpace = async () => {
   try {
     await http.post('/api/wiki/spaces', { ...newSpace.value })
     spaceDialog.value = false
-    newSpace.value = { name: '', icon: '🗂️', description: '' }
+    newSpace.value = { name: '', icon: '🗂️', description: '', visibility: 'dept' }
     ElMessage.success('已创建空间')
     await loadSpaces()
   } catch (e: any) {
     ElMessage.error(e?.response?.data?.detail || '创建失败')
   } finally {
     savingSpace.value = false
+  }
+}
+
+const openSpaceSettings = (s: { id: string; name: string; icon?: string; description?: string; visibility?: Visibility }) => {
+  editSpaceForm.value = {
+    id: s.id,
+    name: s.name,
+    icon: s.icon || '',
+    description: s.description || '',
+    visibility: (s.visibility === 'self' || s.visibility === 'public') ? s.visibility : 'dept',
+  }
+  spaceEditDialog.value = true
+}
+
+const saveSpaceSettings = async () => {
+  if (!editSpaceForm.value.name.trim()) { ElMessage.warning('请输入空间名称'); return }
+  savingSpaceEdit.value = true
+  try {
+    await http.put(`/api/wiki/spaces/${editSpaceForm.value.id}`, {
+      name: editSpaceForm.value.name,
+      icon: editSpaceForm.value.icon || '',
+      description: editSpaceForm.value.description,
+      visibility: editSpaceForm.value.visibility,
+    })
+    spaceEditDialog.value = false
+    ElMessage.success('已保存')
+    await loadSpaces()
+    await loadList()
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail || '保存失败')
+  } finally {
+    savingSpaceEdit.value = false
   }
 }
 
@@ -899,6 +981,19 @@ onBeforeUnmount(() => {
 .space-icon { flex: 0 0 auto; }
 .space-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .space-count { font-size: 11px; color: var(--text-3); }
+.space-menu {
+  border: none;
+  background: transparent;
+  color: var(--text-3);
+  font-size: 13px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 4px;
+  cursor: pointer;
+  visibility: hidden;
+}
+.space-item:hover .space-menu { visibility: visible; }
+.space-menu:hover { background: var(--surface-3); color: var(--text); }
 .space-add {
   border: none;
   background: transparent;

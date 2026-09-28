@@ -1,24 +1,22 @@
 from typing import Any, Dict, Set
 
-from sqlalchemy import or_, true
+from sqlalchemy import or_, select
 from sqlalchemy import text as sql_text
 from sqlalchemy.orm import Session
 
 from app.core.security import has_permission
-from app.models.database import Notebook, Page, WikiPage
+from app.core.visibility import notebook_visible_condition, wiki_page_visible_condition
+from app.models.database import Notebook, Page
 
 
 def visible_wiki_filter(current_user):
-    """WikiPage 的可见性条件。
+    """WikiPage 的可见性条件(页面 group 规则 AND 所属空间可见性)。
 
-    语义与 notebook 一致:group_id 为 NULL 视为公共,所有登录用户可见。
+    语义见 app/core/visibility.py;空间为空(默认空间)视为公共。
     有 `*` 权限(含 __local_admin__ 桥接等效)返回恒真条件(而非 None),
     这样调用方可以直接 filter(),不必记得判空——filter(None) 会退化成 WHERE NULL,静默返回 0 行。
     """
-    if has_permission(current_user, "*"):
-        return true()
-    groups = (current_user or {}).get("groups") or []
-    return or_(WikiPage.group_id.is_(None), WikiPage.group_id.in_(groups))
+    return wiki_page_visible_condition(current_user)
 
 
 def get_visible_page_ids(db: Session, current_user) -> Set[str]:
@@ -26,10 +24,7 @@ def get_visible_page_ids(db: Session, current_user) -> Set[str]:
     base = db.query(Page.id).filter(Page.deleted_at.is_(None))
     if has_permission(current_user, "*"):
         return set(p[0] for p in base.all())
-    groups = (current_user or {}).get("groups") or []
-    visible_nb_ids = db.query(Notebook.id).filter(
-        or_(Notebook.group_id.in_(groups), Notebook.group_id.is_(None))
-    ).subquery()
+    visible_nb_ids = select(Notebook.id).where(notebook_visible_condition(current_user))
     return set(
         p[0]
         for p in base.filter(

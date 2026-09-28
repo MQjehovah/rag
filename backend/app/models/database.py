@@ -25,6 +25,10 @@ class Notebook(Base):
     # 笔记本图标(emoji)
     icon = Column(String(32), default='')
     group_id = Column(String(255), nullable=True, index=True)
+    # 可见性(self 仅本人 / dept 部门组 / public 公开); NULL = legacy(按 group_id 旧语义)
+    visibility = Column(String(16), nullable=True)
+    # 创建者(user id); visibility=self 时用于判定
+    owner_id = Column(String(36), nullable=True, index=True)
     # 侧边栏排序位次与分组名(用户自定义)
     position = Column(Integer, default=0)
     section = Column(String(128), default='')
@@ -203,6 +207,10 @@ class WikiSpace(Base):
     description = Column(Text, default='')
     position = Column(Integer, default=0)
     group_id = Column(String(255), nullable=True, index=True)
+    # 可见性(self 仅本人 / dept 部门组 / public 公开); NULL = legacy(按 group_id 旧语义)
+    visibility = Column(String(16), nullable=True)
+    # 创建者(user id); visibility=self 时用于判定
+    owner_id = Column(String(36), nullable=True, index=True)
     created_at = Column(DateTime, default=datetime.now)
 
 

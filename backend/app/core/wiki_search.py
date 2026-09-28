@@ -11,7 +11,7 @@ import numpy as np
 from sqlalchemy import text
 
 from app.api.search_common import visible_wiki_filter
-from app.core.security import has_permission
+from app.core.visibility import wiki_page_visible_sql
 from app.models.database import WikiPage
 
 logger = logging.getLogger(__name__)
@@ -20,24 +20,10 @@ logger = logging.getLogger(__name__)
 def _visibility_sql(current_user) -> Tuple[str, Dict[str, Any]]:
     """构造与 visible_wiki_filter 等价的裸 SQL 可见性条件与参数。
 
-    管理员不过滤;否则 "group_id IS NULL OR group_id IN (:vg0, ...)"。
+    语义已统一到 app/core/visibility.py(页面 group 规则 + 所属空间可见性);
     两种实现的等价性由 tests/core/test_wiki_search.py 的等价性测试锁定。
     """
-    groups = (current_user or {}).get("groups") or []
-    if has_permission(current_user or {}, "*"):
-        return "1 = 1", {}
-
-    params: Dict[str, Any] = {}
-    placeholders = []
-    for i, g in enumerate(groups):
-        key = f"vg{i}"
-        params[key] = g
-        placeholders.append(f":{key}")
-    if placeholders:
-        cond = f"(group_id IS NULL OR group_id IN ({','.join(placeholders)}))"
-    else:
-        cond = "group_id IS NULL"
-    return cond, params
+    return wiki_page_visible_sql(current_user)
 
 
 def _row_to_dict(row) -> Dict[str, Any]:
