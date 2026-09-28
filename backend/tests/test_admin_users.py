@@ -53,6 +53,25 @@ def test_create_user_rejects_blank_password_and_strips_fields(api_client, as_use
     assert res.json()["email"] == "e@example.com"
 
 
+def test_update_user_strips_profile_fields(api_client, api_engine, as_user):
+    db = get_session(api_engine)
+    try:
+        _user(db, "profile")
+    finally:
+        db.close()
+    as_user(["__local_admin__"])
+    res = api_client.put("/api/admin/users/u-profile", json={
+        "display_name": " 新名字 ", "email": " new@example.com ",
+    })
+    assert res.status_code == 200
+    assert res.json()["display_name"] == "新名字"
+    assert res.json()["email"] == "new@example.com"
+    listed = api_client.get("/api/admin/users?query=profile").json()
+    item = next(u for u in listed["items"] if u["username"] == "profile")
+    assert item["display_name"] == "新名字"
+    assert item["email"] == "new@example.com"
+
+
 def test_disable_user_blocks_login_and_token(api_client, api_engine, as_user):
     as_user(["__local_admin__"])
     uid = api_client.post("/api/admin/users", json={

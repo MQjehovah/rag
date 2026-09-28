@@ -12,8 +12,8 @@ def visible_wiki_filter(current_user):
     """WikiPage 的可见性条件。
 
     语义与 notebook 一致:group_id 为 NULL 视为公共,所有登录用户可见。
-    本地管理员返回恒真条件(而非 None),这样调用方可以直接 filter(),
-    不必记得判空——filter(None) 会退化成 WHERE NULL,静默返回 0 行。
+    有 `*` 权限(含 __local_admin__ 桥接等效)返回恒真条件(而非 None),
+    这样调用方可以直接 filter(),不必记得判空——filter(None) 会退化成 WHERE NULL,静默返回 0 行。
     """
     if has_permission(current_user, "*"):
         return true()

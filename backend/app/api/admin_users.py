@@ -261,9 +261,9 @@ def update_user(
         raise HTTPException(status_code=400, detail="不能禁用自己")
     user = _get_user_or_404(user_id, db)
     if body.display_name is not None:
-        user.display_name = body.display_name
+        user.display_name = body.display_name.strip()
     if body.email is not None:
-        user.email = body.email
+        user.email = body.email.strip()
     if body.is_active is False:
         # 目标已禁用时再置 False 是空操作,只需防"禁掉最后一个在用的管理员"
         if user.is_active and _is_admin_capable(db, user.id) and _count_active_admin_capable(db) == 1:

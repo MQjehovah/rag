@@ -1,7 +1,7 @@
 # RAG 用户与权限管理设计（RBAC）
 
 日期：2026-09-28
-状态：已确认，待实施
+状态：已实施（2026-09-28；执行记录见 `docs/plans/2026-09-28-rag-rbac.md` 末尾）
 关联：`docs/plans/2026-09-20-knowledge-authz-design.md`（可见性隔离，已完成）；本设计在其之上补「功能权限 RBAC + 用户/组管理」
 
 ## 背景
@@ -41,7 +41,7 @@ rag 目前只有 `__local_admin__` 一个粗粒度管理员标记（SSO roles �
 
 | 键 | 名称 | 覆盖范围 |
 | --- | --- | --- |
-| `sources.manage` | 数据源管理 | `/api/sources*` 增删改、Jira 同步 |
+| `sources.manage` | 数据源管理 | `/api/sources*` 增删改与状态查看；Jira 同步不单独授权（走 `*`） |
 | `pipeline.manage` | 编译管道与模板 | `/api/pipelines*`、`/api/compile-templates*` 增删改/运行 |
 | `embedding.manage` | 嵌入模型管理 | `/api/embeddings*` 档案增删改、重建索引 |
 | `graph.manage` | 知识图谱管理 | `/api/graph*` 重建/社区摘要；图谱页浏览（菜单可见性） |
