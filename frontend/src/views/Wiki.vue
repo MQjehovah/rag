@@ -3,13 +3,6 @@
     <aside class="wiki-sidebar">
       <div class="wiki-sidebar-header">
         <span class="wiki-brand">知识库 Wiki</span>
-        <el-button
-          v-if="isAdmin"
-          size="small"
-          type="primary"
-          :loading="rebuilding"
-          @click="rebuildWiki"
-        >{{ running ? '编译中' : '重新编译' }}</el-button>
       </div>
       <div class="space-bar">
         <div v-if="isAdmin" class="space-item" :class="{ active: activeSpace === '' }" @click="activeSpace = ''">
@@ -97,7 +90,7 @@
         <div v-if="isAdmin" class="wiki-tree-add" @click="createWikiPage(null)">＋ 新建页面</div>
         <el-empty
           v-if="!total && !running"
-          description="Wiki 尚未生成，点右上角重新编译"
+          description="Wiki 尚未生成(编译任务完成后自动生成)"
           :image-size="60"
         />
       </div>
@@ -312,7 +305,6 @@ const aclUserOptions = ref<{ id: string; username: string; display_name: string 
 const aclGroupOptions = ref<string[]>([])
 const total = ref(0)
 const running = ref(false)
-const rebuilding = ref(false)
 const current = ref<any>(null)
 const filterText = ref('')
 
@@ -633,22 +625,6 @@ watch(current, () => {
     if (bodyRef.value) signRenderedImages(bodyRef.value)
   })
 })
-
-const rebuildWiki = async () => {
-  rebuilding.value = true
-  try {
-    const res = await http.post('/api/wiki/rebuild')
-    if (res.data.running) {
-      running.value = true
-      startPolling()
-      ElMessage.info('Wiki 编译已启动，后台进行中')
-    }
-  } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail || '启动编译失败')
-  } finally {
-    rebuilding.value = false
-  }
-}
 
 const pollStatus = async () => {
   try {
