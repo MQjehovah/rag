@@ -1,11 +1,12 @@
 """用户相关公共工具:组同步与 payload 组装,供 jwt_utils 双轨鉴权共用。"""
 
+import json
 import uuid
 
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.models.database import User, UserGroup
+from app.models.database import Role, User, UserGroup, UserRole
 
 
 def sync_user_groups(db: Session, user, groups: list[str]):
@@ -29,6 +30,21 @@ def build_user_payload(db: Session, user: User) -> dict:
         ug.group_name
         for ug in db.query(UserGroup).filter(UserGroup.user_id == user.id).all()
     ]
+    role_rows = (
+        db.query(Role)
+        .join(UserRole, UserRole.role_id == Role.id)
+        .filter(UserRole.user_id == user.id)
+        .all()
+    )
+    roles = [{"name": r.name, "display_name": r.display_name} for r in role_rows]
+    permissions: list[str] = []
+    for r in role_rows:
+        try:
+            for p in json.loads(r.permissions or "[]"):
+                if isinstance(p, str) and p and p not in permissions:
+                    permissions.append(p)
+        except (TypeError, ValueError):
+            continue
     return {
         "id": user.id,
         "username": user.username,
@@ -42,4 +58,6 @@ def build_user_payload(db: Session, user: User) -> dict:
             if settings.ldap_group_map_admin
             else False
         ),
+        "roles": roles,
+        "permissions": permissions,
     }
