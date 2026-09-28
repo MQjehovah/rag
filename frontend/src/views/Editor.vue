@@ -4,7 +4,16 @@
       <!-- 侧边栏 -->
       <aside class="sidebar" :style="{ width: sidebarCollapsed ? '0px' : sidebarWidth + 'px' }">
         <div class="side-search">
-          <el-input v-model="searchQuery" placeholder="搜索笔记..." clearable @keyup.enter="doSearch" />
+          <el-input
+            v-model="searchQuery"
+            :placeholder="searchMode === 'name' ? '按名称搜索笔记...' : '语义搜索笔记...'"
+            clearable
+            @keyup.enter="doSearch"
+          />
+          <el-radio-group v-model="searchMode" size="small" class="search-mode">
+            <el-radio-button value="name">名称</el-radio-button>
+            <el-radio-button value="semantic">语义</el-radio-button>
+          </el-radio-group>
         </div>
 
         <template v-if="favPages.length">
@@ -511,22 +520,22 @@
     </el-dialog>
 
     <!-- 搜索结果对话框 -->
-    <el-dialog v-model="showSearch" title="搜索结果" width="700px">
+    <el-dialog v-model="showSearch" :title="searchMode === 'name' ? '名称搜索结果' : '语义搜索结果'" width="700px">
       <div v-if="searchResults.length > 0">
         <div v-for="result in searchResults" :key="result.id" class="search-result" @click="openFromSearch(result)">
           <div class="result-header">
             <span class="result-title">{{ result.title }}</span>
-            <el-tag size="small" :type="getSourceTagType(result.source)">{{ result.source }}</el-tag>
+            <el-tag v-if="result.source" size="small" :type="getSourceTagType(result.source)">{{ result.source }}</el-tag>
           </div>
-          <div class="result-content">{{ result.content }}</div>
+          <div v-if="result.content" class="result-content">{{ result.content }}</div>
           <div v-if="result.chunks && result.chunks.length" class="result-chunks">
             <div v-for="(c, ci) in result.chunks.slice(0, 2)" :key="ci" class="result-chunk">
               <span v-if="c.context" class="result-chunk-ctx">{{ c.context }}</span>
               {{ c.content }}
             </div>
           </div>
-          <div class="result-footer">
-            <el-tag size="small" type="info">得分: {{ result.score?.toFixed(3) }}</el-tag>
+          <div v-if="typeof result.score === 'number'" class="result-footer">
+            <el-tag size="small" type="info">得分: {{ result.score.toFixed(3) }}</el-tag>
           </div>
         </div>
       </div>
@@ -742,6 +751,9 @@ const currentPage = ref<Page | null>(null)
 const saveStatus = ref<'saved' | 'saving' | 'unsaved'>('saved')
 
 const searchQuery = ref('')
+/** 搜索模式: name=按笔记名称(默认) | semantic=语义检索 */
+const searchMode = ref<'name' | 'semantic'>(localStorage.getItem('rag-note-search-mode') === 'semantic' ? 'semantic' : 'name')
+watch(searchMode, (v) => localStorage.setItem('rag-note-search-mode', v))
 const sidebarCollapsed = ref(localStorage.getItem('rag-sidebar-collapsed') === '1')
 const sidebarWidth = ref(Math.min(360, Math.max(208, Number(localStorage.getItem('rag-sidebar-width')) || 260)))
 const collapsedPages = ref<string[]>([])
@@ -1751,9 +1763,25 @@ const getSourceTagType = (source: string) => {
 }
 
 const doSearch = async () => {
-  if (!searchQuery.value.trim()) return
+  const q = searchQuery.value.trim()
+  if (!q) return
+  // 名称模式: 本地按标题过滤(不做语义检索)
+  if (searchMode.value === 'name') {
+    try {
+      const res = await http.get('/api/pages', { params: { page: 1, page_size: 500 } })
+      const lower = q.toLowerCase()
+      searchResults.value = (res.data.items || [])
+        .map((p: any) => ({ id: p.id, title: p.title || '无标题' }))
+        .filter((p: { title: string }) => p.title.toLowerCase().includes(lower))
+        .slice(0, 40)
+      showSearch.value = true
+    } catch (e) {
+      ElMessage.error('搜索失败')
+    }
+    return
+  }
   try {
-    const res = await http.post('/api/search', { query: searchQuery.value, top_k: 10 })
+    const res = await http.post('/api/search', { query: q, top_k: 10 })
     searchResults.value = res.data.results || []
     showSearch.value = true
   } catch (e) {
@@ -2358,6 +2386,7 @@ html, body, #app { height: 100%; }
 .icon-btn:hover { background: #ebebe9; color: #37352f; }
 .icon-btn.expand { margin-right: 4px; }
 .side-search { padding: 12px 10px 8px; }
+.search-mode { margin-top: 6px; }
 .side-search :deep(.el-input__wrapper) {
   background: #fff;
   border: 1px solid #e9e9e7;

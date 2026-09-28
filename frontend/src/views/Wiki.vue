@@ -33,7 +33,7 @@
           <span class="space-name">{{ s.name }}</span>
           <span class="space-count">{{ s.count }}</span>
         </div>
-        <button class="space-add" @click="spaceDialog = true">＋ 新建空间</button>
+        <button v-if="isAdmin" class="space-add" @click="spaceDialog = true">＋ 新建空间</button>
       </div>
       <el-input
         v-model="filterText"
@@ -42,40 +42,7 @@
         size="small"
         class="wiki-filter"
       />
-      <div class="wiki-semantic">
-        <el-input
-          v-model="semanticQuery"
-          placeholder="语义搜索（回车）"
-          clearable
-          size="small"
-          @keyup.enter="runSemanticSearch"
-        >
-          <template #append>
-            <el-button :loading="searching" @click="runSemanticSearch">语义搜索</el-button>
-          </template>
-        </el-input>
-      </div>
       <div class="wiki-cat-list">
-        <div v-if="searched" class="wiki-search-results">
-          <div class="wiki-search-results-head">
-            <span>语义搜索结果</span>
-            <el-button size="small" text @click="clearSemanticSearch">清除</el-button>
-          </div>
-          <el-empty
-            v-if="!searchResults.length"
-            description="没有找到相关页面"
-            :image-size="50"
-          />
-          <div
-            v-for="r in searchResults"
-            :key="r.id"
-            class="wiki-page-item wiki-search-item"
-            @click="openPage(r.id)"
-          >
-            <div class="wiki-result-title">{{ r.title }}</div>
-            <div v-if="r.summary" class="wiki-result-summary">{{ r.summary }}</div>
-          </div>
-        </div>
         <div class="wiki-tree">
           <div
             v-for="row in wikiTreeRows"
@@ -89,7 +56,7 @@
               'drop-inside': wikiDrop?.id === row.page.id && wikiDrop?.zone === 'inside',
             }"
             :style="{ paddingLeft: (8 + row.depth * 14) + 'px' }"
-            draggable="true"
+            :draggable="isAdmin"
             @dragstart="onWikiDragStart(row.page, $event)"
             @dragover="onWikiDragOver(row.page, $event)"
             @drop.stop="onWikiDrop(row.page, $event)"
@@ -104,7 +71,7 @@
             >›</span>
             <span v-else class="wiki-tree-chev placeholder"></span>
             <span class="wiki-tree-title">{{ row.page.title }}</span>
-            <el-dropdown trigger="click" @command="(c: string) => c === 'child' ? createWikiPage(row.page.id) : deleteWikiPage(row.page.id)">
+            <el-dropdown v-if="isAdmin" trigger="click" @command="(c: string) => c === 'child' ? createWikiPage(row.page.id) : deleteWikiPage(row.page.id)">
               <button class="wiki-tree-menu" title="更多" @click.stop>⋯</button>
               <template #dropdown>
                 <el-dropdown-menu>
@@ -115,7 +82,7 @@
             </el-dropdown>
           </div>
         </div>
-        <div class="wiki-tree-add" @click="createWikiPage(null)">＋ 新建页面</div>
+        <div v-if="isAdmin" class="wiki-tree-add" @click="createWikiPage(null)">＋ 新建页面</div>
         <el-empty
           v-if="!total && !running"
           description="Wiki 尚未生成，点右上角重新编译"
@@ -126,7 +93,7 @@
     <main class="wiki-main">
       <div v-if="current" class="wiki-content-card">
         <div class="wiki-card-actions">
-          <template v-if="!editing">
+          <template v-if="!editing && isAdmin">
             <el-dropdown trigger="click" @command="(sid: string) => moveToSpace(sid === 'default' ? null : sid)">
               <el-button size="small" text>移动到空间 ▾</el-button>
               <template #dropdown>
@@ -252,14 +219,6 @@ interface WikiPageListItem {
   summary: string
 }
 
-interface WikiSearchItem {
-  id: string
-  title: string
-  summary: string
-  category: string
-  score: number
-}
-
 const categories = ref<{ name: string; pages: WikiPageListItem[] }[]>([])
 const spaces = ref<{ id: string; name: string; icon: string; description: string; count: number }[]>([])
 const activeSpace = ref<string>('')   // '' 全部 | 'default' 默认空间 | 空间 id
@@ -273,10 +232,6 @@ const rebuilding = ref(false)
 const current = ref<any>(null)
 const filterText = ref('')
 
-const semanticQuery = ref('')
-const searching = ref(false)
-const searched = ref(false)
-const searchResults = ref<WikiSearchItem[]>([])
 const editing = ref(false)
 const savingEdit = ref(false)
 const editForm = ref({ content: '', summary: '', category: '' })
@@ -408,6 +363,7 @@ const deleteWikiPage = async (id: string) => {
 const wikiDragId = ref<string | null>(null)
 const wikiDrop = ref<{ id: string; zone: 'before' | 'after' | 'inside' } | null>(null)
 const onWikiDragStart = (p: any, ev: DragEvent) => {
+  if (!isAdmin.value) return
   wikiDragId.value = p.id
   if (ev.dataTransfer) { ev.dataTransfer.effectAllowed = 'move'; ev.dataTransfer.setData('text/plain', p.id) }
 }
@@ -421,6 +377,7 @@ const onWikiDragOver = (p: any, ev: DragEvent) => {
 }
 const onWikiDrop = async (p: any, ev: DragEvent) => {
   ev.preventDefault()
+  if (!isAdmin.value) return
   const dragId = wikiDragId.value
   const t = wikiDrop.value
   wikiDragId.value = null
@@ -457,26 +414,6 @@ const openPage = async (pageId: string) => {
   } catch (e: any) {
     ElMessage.error(e?.response?.data?.detail || '加载页面失败')
   }
-}
-
-const runSemanticSearch = async () => {
-  const q = semanticQuery.value.trim()
-  if (!q) return
-  searching.value = true
-  try {
-    const res = await http.post('/api/wiki/search', { query: q, top_k: 8 })
-    searchResults.value = res.data.results || []
-    searched.value = true
-  } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail || '语义搜索失败')
-  } finally {
-    searching.value = false
-  }
-}
-
-const clearSemanticSearch = () => {
-  searched.value = false
-  searchResults.value = []
 }
 
 const startEdit = () => {
@@ -654,42 +591,6 @@ onBeforeUnmount(() => {
 }
 .wiki-filter {
   padding: 0 16px 8px;
-}
-.wiki-semantic {
-  padding: 0 16px 8px;
-}
-.wiki-search-results {
-  margin: 4px 0 10px;
-  padding: 8px;
-  background: #f8fafc;
-  border-radius: 8px;
-}
-.wiki-search-results-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  font-size: 12px;
-  font-weight: 600;
-  color: #64748b;
-  padding: 0 4px 4px;
-}
-.wiki-search-item {
-  margin-bottom: 4px;
-  background: #fff;
-  border: 1px solid #eef2f7;
-}
-.wiki-result-title {
-  font-size: 13px;
-  color: #1e293b;
-}
-.wiki-result-summary {
-  font-size: 12px;
-  color: #94a3b8;
-  margin-top: 2px;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
 }
 .wiki-cat-list {
   flex: 1;

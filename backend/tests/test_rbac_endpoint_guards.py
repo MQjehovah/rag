@@ -304,6 +304,23 @@ def test_wiki_space_crud_requires_wiki_admin(api_client, as_perm):
     assert api_client.delete(f"/api/wiki/spaces/{space_id}").status_code == 200
 
 
+def test_wiki_page_crud_requires_wiki_admin(api_client, as_perm):
+    """知识库页面 新建/编辑/删除/移动 统一 wiki.admin;普通用户一律 403。"""
+    as_perm([])
+    assert api_client.post("/api/wiki", json={"title": "新页"}).status_code == 403
+    assert api_client.put("/api/wiki/whatever", json={"content": "x"}).status_code == 403
+    assert api_client.delete("/api/wiki/whatever").status_code == 403
+    assert api_client.put("/api/wiki/whatever/move", json={"parent_id": None}).status_code == 403
+    assert api_client.put("/api/wiki/whatever/space", json={"space_id": None}).status_code == 403
+
+    as_perm(["wiki.admin"])
+    created = api_client.post("/api/wiki", json={"title": "新页"})
+    assert created.status_code == 200
+    page_id = created.json()["id"]
+    assert api_client.put(f"/api/wiki/{page_id}", json={"content": "管理员写"}).status_code == 200
+    assert api_client.delete(f"/api/wiki/{page_id}").status_code == 200
+
+
 def test_graph_rebuild_requires_graph_manage(api_client, as_perm):
     as_perm([])
     assert api_client.post("/api/graph/rebuild").status_code == 403

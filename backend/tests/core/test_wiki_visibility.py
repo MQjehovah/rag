@@ -150,11 +150,21 @@ def test_公共页来源笔记按可见性过滤(api_engine, api_client, as_user
     assert titles == {"公共来源笔记"}
 
 
-def test_编辑他组页面_404(api_engine, api_client, as_user):
+def test_普通用户不可编辑wiki页_403(api_engine, api_client, as_user):
+    """编辑(含本组/公共/他组页)均需 wiki.admin:普通用户一律 403。"""
     ids = _seed_pages(api_engine)
     as_user(["研发部"])
     res = api_client.put(f"/api/wiki/{ids['fin']}", json={"content": "越权"})
-    assert res.status_code == 404
+    assert res.status_code == 403
+    res = api_client.put(f"/api/wiki/{ids['public']}", json={"content": "越权"})
+    assert res.status_code == 403
+
+
+def test_管理员可编辑wiki页(api_engine, api_client, as_user):
+    ids = _seed_pages(api_engine)
+    as_user(["__local_admin__"])
+    res = api_client.put(f"/api/wiki/{ids['fin']}", json={"content": "管理员修订"})
+    assert res.status_code == 200
 
 
 def test_管理员列表看到全部(api_engine, api_client, as_user):

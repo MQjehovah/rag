@@ -163,6 +163,7 @@ def delete_space(space_id: str, db: Session = Depends(get_db), current_user=Depe
 
 @router.put("/{page_id}/space")
 def move_wiki_space(page_id: str, data: WikiSpaceMove, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    require_permission(current_user, "wiki.admin")
     page = db.query(WikiPage).filter(WikiPage.id == page_id).first()
     if not page or not _wiki_visible(page, current_user):
         raise HTTPException(status_code=404, detail="Wiki 页面不存在")
@@ -174,6 +175,7 @@ def move_wiki_space(page_id: str, data: WikiSpaceMove, db: Session = Depends(get
 @router.post("")
 def create_wiki_page(data: WikiPageCreate, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     """手工新建 wiki 页(可指定空间与父页面, 支持多级)。"""
+    require_permission(current_user, "wiki.admin")
     parent_id = data.parent_id
     if parent_id:
         parent = db.query(WikiPage).filter(WikiPage.id == parent_id).first()
@@ -206,6 +208,7 @@ def create_wiki_page(data: WikiPageCreate, db: Session = Depends(get_db), curren
 
 @router.put("/{page_id}/move")
 def move_wiki_page(page_id: str, data: WikiPageMove, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    require_permission(current_user, "wiki.admin")
     page = db.query(WikiPage).filter(WikiPage.id == page_id).first()
     if not page or not _wiki_visible(page, current_user):
         raise HTTPException(status_code=404, detail="Wiki 页面不存在")
@@ -313,6 +316,7 @@ async def search_wiki_endpoint(
 
 @router.delete("/{page_id}")
 def delete_wiki_page(page_id: str, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    require_permission(current_user, "wiki.admin")
     page = db.query(WikiPage).filter(WikiPage.id == page_id).first()
     if not page or not _wiki_visible(page, current_user):
         raise HTTPException(status_code=404, detail="Wiki 页面不存在")
@@ -363,6 +367,7 @@ async def update_wiki_page(
 ):
     """Human fine-tuning of a wiki page.  The next compile merge pass sees
     this edited content and preserves it."""
+    require_permission(current_user, "wiki.admin")
     page = db.query(WikiPage).filter(WikiPage.id == page_id).first()
     if not page or not _wiki_visible(page, current_user):
         raise HTTPException(status_code=404, detail="Wiki 页面不存在")
