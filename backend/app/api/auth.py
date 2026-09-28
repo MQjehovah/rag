@@ -115,7 +115,7 @@ def login(data: LoginRequest, db: Session = Depends(get_db)):
         db.commit()
 
     groups = ldap_result.get("groups", [])
-    sync_user_groups(db, user, groups)
+    sync_user_groups(db, user, groups, source="ldap")
 
     payload = build_user_payload(db, user)
     token = create_access_token(user.id, payload["groups"])

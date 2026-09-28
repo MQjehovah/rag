@@ -15,7 +15,7 @@ from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 
 from app.core.jwt_utils import create_access_token, get_current_user
-from app.models.database import User, UserGroup, get_engine, get_session, init_db
+from app.models.database import Group, User, UserGroup, get_engine, get_session, init_db
 from tests.conftest import sign_token, valid_claims
 
 SSO_EMP_NO = "202202100024"
@@ -68,6 +68,12 @@ def test_get_current_user_sso_provisions_and_does_not_duplicate(sso_env, db):
     get_current_user(credentials=_bearer(token), db=db)
     assert db.query(User).count() == 1
     assert db.query(UserGroup).filter(UserGroup.user_id == user.id).count() == len(SSO_GROUPS)
+
+    # 群组注册表: SSO 同步的群组自动登记(不存在则新建, source=sso), 且幂等不重复
+    registry = {g.name: g.source for g in db.query(Group).all()}
+    for name in SSO_GROUPS:
+        assert registry.get(name) == "sso"
+    assert db.query(Group).count() == len(SSO_GROUPS)
 
 
 def test_get_current_user_sso_rejects_invalid_token(sso_env, db):

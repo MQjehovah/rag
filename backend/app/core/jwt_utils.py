@@ -125,7 +125,7 @@ def _resolve_sso_user(db: Session, claims: dict) -> dict:
     _write_back_claims(db, user, claims)
     groups = _normalize_claims_groups(claims)
     if groups:
-        sync_user_groups(db, user, groups)
+        sync_user_groups(db, user, groups, source="sso")
     return build_user_payload(db, user)
 
 

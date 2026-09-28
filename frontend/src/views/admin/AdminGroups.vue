@@ -3,8 +3,8 @@
     <header class="page-header">
       <div class="ph-main">
         <div class="ph-eyebrow">系统管理</div>
-        <h1 class="page-title">组管理</h1>
-        <p class="page-desc">组用于知识、笔记本等资源的可见域；同步来源的组与成员由统一认证维护，仅本地成员可在本页调整。</p>
+        <h1 class="page-title">群组管理</h1>
+        <p class="page-desc">群组用于知识、笔记本等资源的可见域；同步来源的群组与成员由统一认证维护（SSO/LDAP 登录自动登记），仅本地成员可在本页调整。</p>
       </div>
       <div class="ph-actions">
         <div class="create-row">

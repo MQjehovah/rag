@@ -95,10 +95,21 @@ def _clean_user_ids(ids: list[str]) -> list[str]:
 
 @router.get("/groups")
 def list_groups(current_user=Depends(get_current_user), db: Session = Depends(get_db)):
-    # 只读列表放行 user.manage(用户管理页的组下拉依赖);组管理其余端点仍限 group.manage
+    # 只读列表放行 user.manage(用户管理页的组下拉依赖);群组管理其余端点仍限 group.manage
     if not (has_permission(current_user, "group.manage") or has_permission(current_user, "user.manage")):
         raise HTTPException(status_code=403, detail="缺少权限: group.manage 或 user.manage")
     groups = db.query(Group).order_by(Group.name.asc()).all()
+    # 历史回填:登录同步写入 user_groups 但注册表缺失的群组(早期数据)补登记(来源按 sso 记)
+    known = {g.name for g in groups}
+    extra = [
+        name for (name,) in db.query(UserGroup.group_name).distinct().all()
+        if name and not name.startswith("__") and name not in known
+    ]
+    if extra:
+        for name in extra:
+            db.add(Group(id=str(uuid.uuid4()), name=name, source="sso"))
+        db.commit()
+        groups = db.query(Group).order_by(Group.name.asc()).all()
     # 防御:内部标记组(如 __local_admin__)不进注册表,误入也不展示
     return {"items": [_group_out(db, g) for g in groups if not g.name.startswith("__")]}
 

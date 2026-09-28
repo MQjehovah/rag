@@ -7,18 +7,32 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.core.rbac_seed import INTERNAL_ADMIN_GROUP
 from app.core.security import parse_permissions
-from app.models.database import Role, User, UserGroup, UserRole
+from app.models.database import Group, Role, User, UserGroup, UserRole
 
 
-def sync_user_groups(db: Session, user, groups: list[str]):
-    """把 user 的组全量同步为 groups(删旧插新,先删后插并提交)。
+def _ensure_group_registry(db: Session, groups: list[str], source: str) -> None:
+    """把同步来的群组登记进群组注册表: 不存在则新建(内部 `__` 前缀跳过)。"""
+    names = [g.strip() for g in (groups or []) if g and g.strip() and not g.strip().startswith("__")]
+    if not names:
+        return
+    existing = {name for (name,) in db.query(Group.name).filter(Group.name.in_(names)).all()}
+    for name in names:
+        if name not in existing:
+            db.add(Group(id=str(uuid.uuid4()), name=name, source=source))
+            existing.add(name)
+
+
+def sync_user_groups(db: Session, user, groups: list[str], source: str = "sso"):
+    """把 user 的组全量同步为 groups(删旧插新), 并把群组登记进注册表(不存在则新建)。
 
     空 groups 是否清空由调用方决定:本函数不做为空短路,调用方在无需
     改动时直接不调用即可(见 jwt_utils._resolve_sso_user)。
+    source 标记来源(sso/ldap), 供群组管理页展示; 内部 `__` 前缀组不进注册表。
     """
     db.query(UserGroup).filter(UserGroup.user_id == user.id).delete()
     for g in groups:
         db.add(UserGroup(id=str(uuid.uuid4()), user_id=user.id, group_name=g))
+    _ensure_group_registry(db, groups, source)
     db.commit()
 
 

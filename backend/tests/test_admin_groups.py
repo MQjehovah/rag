@@ -17,6 +17,35 @@ def test_list_create_delete_group(api_client, api_engine, as_user):
     assert api_client.delete(f"/api/admin/groups/{gid}").status_code == 200
 
 
+def test_list_groups_backfills_synced_groups(api_client, api_engine, as_user):
+    """登录同步写入 user_groups 但注册表缺失的群组, 列表时自动补登记(source=sso), 幂等。"""
+    as_user(["__local_admin__"])
+    db = get_session(api_engine)
+    try:
+        db.add(User(id="u-bf", username="bf", is_local=False))
+        db.add(UserGroup(id="ug-bf1", user_id="u-bf", group_name="SSO部门A"))
+        db.add(UserGroup(id="ug-bf2", user_id="u-bf", group_name="SSO部门B"))
+        db.add(UserGroup(id="ug-bf3", user_id="u-bf", group_name="__local_admin__"))
+        db.commit()
+    finally:
+        db.close()
+
+    listed = api_client.get("/api/admin/groups").json()
+    by_name = {g["name"]: g for g in listed["items"]}
+    assert by_name["SSO部门A"]["source"] == "sso"
+    assert by_name["SSO部门B"]["source"] == "sso"
+    assert "__local_admin__" not in by_name  # 内部标记组不登记不展示
+
+    db = get_session(api_engine)
+    try:
+        assert db.query(Group).filter(Group.name == "SSO部门A").count() == 1
+    finally:
+        db.close()
+    listed2 = api_client.get("/api/admin/groups").json()
+    names = [g["name"] for g in listed2["items"]]
+    assert names.count("SSO部门A") == 1
+
+
 def test_delete_group_in_use_rejected(api_client, api_engine, as_user):
     as_user(["__local_admin__"])
     gid = api_client.post("/api/admin/groups", json={"name": "使用中组"}).json()["id"]
