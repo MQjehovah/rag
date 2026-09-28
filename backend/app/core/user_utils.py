@@ -1,11 +1,11 @@
 """用户相关公共工具:组同步与 payload 组装,供 jwt_utils 双轨鉴权共用。"""
 
-import json
 import uuid
 
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.core.security import parse_permissions
 from app.models.database import Role, User, UserGroup, UserRole
 
 
@@ -34,17 +34,15 @@ def build_user_payload(db: Session, user: User) -> dict:
         db.query(Role)
         .join(UserRole, UserRole.role_id == Role.id)
         .filter(UserRole.user_id == user.id)
+        .order_by(Role.name)
         .all()
     )
     roles = [{"name": r.name, "display_name": r.display_name} for r in role_rows]
     permissions: list[str] = []
     for r in role_rows:
-        try:
-            for p in json.loads(r.permissions or "[]"):
-                if isinstance(p, str) and p and p not in permissions:
-                    permissions.append(p)
-        except (TypeError, ValueError):
-            continue
+        for p in parse_permissions(r.permissions):
+            if p not in permissions:
+                permissions.append(p)
     return {
         "id": user.id,
         "username": user.username,

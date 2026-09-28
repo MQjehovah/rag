@@ -299,6 +299,9 @@ class UserResponse(BaseModel):
     is_local: bool = False
     groups: List[str] = []
     is_active: bool = True
+    # RBAC:角色列表与并集权限键(默认空保证旧客户端/旧数据兼容)
+    roles: List[dict] = []
+    permissions: List[str] = []
 
 class LoginResponse(BaseModel):
     token: str

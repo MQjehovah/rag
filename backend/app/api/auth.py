@@ -12,7 +12,7 @@ from app.core.auth import ldap_auth
 from app.api.deps import get_db
 from app.core import sso_auth
 from app.core.jwt_utils import create_access_token, get_current_user, _resolve_sso_user
-from app.core.user_utils import sync_user_groups
+from app.core.user_utils import build_user_payload, sync_user_groups
 from app.core.rbac_seed import seed_rbac, INTERNAL_ADMIN_GROUP
 from app.config import settings
 
@@ -81,19 +81,9 @@ def login(data: LoginRequest, db: Session = Depends(get_db)):
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="用户已禁用",
             )
-        groups = [ug.group_name for ug in db.query(UserGroup).filter(UserGroup.user_id == user.id).all()]
-        token = create_access_token(user.id, groups)
-        return LoginResponse(
-            token=token,
-            user=UserResponse(
-                id=user.id,
-                username=user.username,
-                email=user.email,
-                display_name=user.display_name,
-                is_local=True,
-                groups=groups,
-            ),
-        )
+        payload = build_user_payload(db, user)
+        token = create_access_token(user.id, payload["groups"])
+        return LoginResponse(token=token, user=UserResponse(**payload))
 
     ldap_result = ldap_auth.authenticate(data.username, data.password)
     if ldap_result is None:
@@ -127,18 +117,9 @@ def login(data: LoginRequest, db: Session = Depends(get_db)):
     groups = ldap_result.get("groups", [])
     sync_user_groups(db, user, groups)
 
-    token = create_access_token(user.id, groups)
-    return LoginResponse(
-        token=token,
-        user=UserResponse(
-            id=user.id,
-            username=user.username,
-            email=user.email,
-            display_name=user.display_name,
-            is_local=False,
-            groups=groups,
-        ),
-    )
+    payload = build_user_payload(db, user)
+    token = create_access_token(user.id, payload["groups"])
+    return LoginResponse(token=token, user=UserResponse(**payload))
 
 
 @router.get("/me", response_model=UserResponse)
