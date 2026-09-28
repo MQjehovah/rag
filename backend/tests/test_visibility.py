@@ -1,12 +1,13 @@
-"""统一可见性(self / dept / public + legacy)端到端与单元测试。
+"""统一可见性(self / dept / public + legacy)与资源 ACL 追加授权端到端与单元测试。
 
 覆盖:
 - notebook:列表与详情的四种用户视角、创建/更新时的 owner/visibility/group 落库;
+- 资源 ACL:管理员增改用户/部门追加授权,列表/详情/页面/检索随授权变化,替换式保存与删除清理;
 - pages:可见性派生自所属笔记本(notebook_id IS NULL 保持公共);
-- wiki space:列表过滤与增改的可见性落库;
+- wiki space:列表过滤与增改的可见性落库,空间 ACL 对页面/列表/检索生效;
 - wiki page:空间派生 + 页面 group 规则;
 - 检索可见域:get_visible_page_ids 与 search_wiki 不含不可见资源页面;
-- admin(*) 三种策略全见; SQL/Python 双实现一致。
+- admin(*) 三种策略全见; SQL/Python 双实现一致(含 ACL 子句)。
 """
 import json
 from datetime import datetime
@@ -15,9 +16,9 @@ import pytest
 from sqlalchemy import text
 
 from app.api.search_common import get_visible_page_ids, visible_wiki_filter
-from app.core.visibility import notebook_visible
+from app.core.visibility import load_acl, notebook_visible
 from app.core.wiki_search import _visibility_sql, search_wiki
-from app.models.database import Notebook, Page, WikiPage, WikiSpace, get_session
+from app.models.database import Notebook, Page, ResourceAcl, WikiPage, WikiSpace, get_session
 
 DIM = 1024
 
@@ -374,5 +375,221 @@ def test_wiki_sql_matches_orm_with_spaces(api_engine, user):
         cond, params = _visibility_sql(user)
         rows = db.execute(text(f"SELECT id FROM wiki_pages WHERE {cond}"), params).fetchall()
         assert {r[0] for r in rows} == orm_ids
+    finally:
+        db.close()
+
+
+# ---------------- 资源 ACL 追加授权(管理员配置) ----------------
+
+def _set_acl(api_client, as_user, resource_type, resource_id, **acl):
+    """以具备对应 manage 权限的管理员写资源 ACL,返回响应。"""
+    perms = ["notebook.manage"] if resource_type == "notebook" else ["wiki.admin"]
+    as_user([], id="u-admin", permissions=perms)
+    path = f"/api/notebooks/{resource_id}" if resource_type == "notebook" else f"/api/wiki/spaces/{resource_id}"
+    return api_client.put(path, json=acl)
+
+
+def test_notebook_acl_user_grant(api_engine, api_client, as_user):
+    """self 笔记本 + acl_users=[他人] → 被授权用户可见(列表+详情+所属页面),未列用户不可见。"""
+    _seed(api_engine)
+    res = _set_acl(api_client, as_user, "notebook", "nb-self", acl_users=["u-fin"])
+    assert res.status_code == 200
+    assert res.json()["acl_users"] == ["u-fin"]
+    assert res.json()["acl_groups"] == []
+
+    _as(as_user, "other")  # u-fin
+    assert "nb-self" in _nb_ids(api_client)
+    assert api_client.get("/api/notebooks/nb-self").status_code == 200
+    listed = {p["id"] for p in api_client.get("/api/pages", params={"page_size": 100}).json()["items"]}
+    assert "p-self" in listed
+    assert api_client.get("/api/pages/p-self").status_code == 200
+
+    _as(as_user, "same")  # u-rd 不在 ACL
+    assert "nb-self" not in _nb_ids(api_client)
+    assert api_client.get("/api/notebooks/nb-self").status_code == 403
+    assert api_client.get("/api/pages/p-self").status_code == 403
+
+    _as(as_user, "none")
+    assert "nb-self" not in _nb_ids(api_client)
+    assert api_client.get("/api/notebooks/nb-self").status_code == 403
+
+
+def test_notebook_acl_group_grant(api_engine, api_client, as_user):
+    """self 笔记本 + acl_groups=[G] → G 组用户可见, 非 G 不可见。"""
+    _seed(api_engine)
+    res = _set_acl(api_client, as_user, "notebook", "nb-self", acl_groups=["财务部"])
+    assert res.status_code == 200
+    assert res.json()["acl_groups"] == ["财务部"]
+
+    _as(as_user, "other")  # 财务部
+    assert "nb-self" in _nb_ids(api_client)
+    assert api_client.get("/api/notebooks/nb-self").status_code == 200
+
+    _as(as_user, "same")  # 研发部
+    assert "nb-self" not in _nb_ids(api_client)
+    assert api_client.get("/api/notebooks/nb-self").status_code == 403
+
+    _as(as_user, "none")
+    assert "nb-self" not in _nb_ids(api_client)
+
+
+def test_notebook_acl_is_additive_on_dept(api_engine, api_client, as_user):
+    """dept 笔记本 + acl_users 追加 → 原部门通道与 ACL 追加通道双通道可见。"""
+    _seed(api_engine)
+    res = _set_acl(api_client, as_user, "notebook", "nb-dept", acl_users=["u-none"])
+    assert res.status_code == 200
+
+    _as(as_user, "none")  # 原 dept 域外, ACL 追加后被授权
+    assert "nb-dept" in _nb_ids(api_client)
+    assert api_client.get("/api/notebooks/nb-dept").status_code == 200
+
+    _as(as_user, "same")  # 原 dept 通道不受影响
+    assert "nb-dept" in _nb_ids(api_client)
+    assert api_client.get("/api/notebooks/nb-dept").status_code == 200
+
+    _as(as_user, "other")  # 未授权且非本组
+    assert "nb-dept" not in _nb_ids(api_client)
+
+
+def test_notebook_acl_only_admin_writes(api_engine, api_client, as_user):
+    """非 notebook.manage 即使可见也不能配置 ACL; 非 ACL 字段不受影响。"""
+    _seed(api_engine)
+    _as(as_user, "owner")
+    assert api_client.put("/api/notebooks/nb-self", json={"acl_users": ["u-fin"]}).status_code == 403
+    assert api_client.put("/api/notebooks/nb-self", json={"acl_groups": ["财务部"]}).status_code == 403
+    assert api_client.put("/api/notebooks/nb-self", json={"name": "改名"}).status_code == 200
+
+
+def test_notebook_acl_replace_and_delete_cleanup(api_engine, api_client, as_user):
+    """PUT 替换式保存(去重/去空);删除资源清理 ACL 行。"""
+    _seed(api_engine)
+    res = _set_acl(api_client, as_user, "notebook", "nb-self", acl_users=["u-fin", "u-fin", "  "])
+    assert res.status_code == 200
+    assert res.json()["acl_users"] == ["u-fin"]
+
+    res = _set_acl(api_client, as_user, "notebook", "nb-self", acl_users=["u-none"])
+    assert res.status_code == 200
+    assert res.json()["acl_users"] == ["u-none"]
+
+    _as(as_user, "other")  # u-fin 授权已被替换掉
+    assert "nb-self" not in _nb_ids(api_client)
+    _as(as_user, "none")  # u-none 现被授权
+    assert "nb-self" in _nb_ids(api_client)
+
+    as_user([], id="u-admin", permissions=["notebook.manage"])
+    assert api_client.delete("/api/notebooks/nb-self").status_code == 200
+    db = get_session(api_engine)
+    try:
+        left = db.query(ResourceAcl).filter(
+            ResourceAcl.resource_type == "notebook",
+            ResourceAcl.resource_id == "nb-self",
+        ).count()
+        assert left == 0
+    finally:
+        db.close()
+
+
+def test_wiki_space_acl_user_grant(api_engine, api_client, as_user):
+    """self 空间 + acl_users → 被授权用户可见空间与空间下页面(列表/详情/检索)。"""
+    _seed(api_engine)
+    res = _set_acl(api_client, as_user, "wiki_space", "sp-self", acl_users=["u-fin"])
+    assert res.status_code == 200
+
+    _as(as_user, "other")  # u-fin
+    spaces = {s["id"]: s for s in api_client.get("/api/wiki/spaces").json()["spaces"]}
+    assert "sp-self" in spaces
+    assert spaces["sp-self"]["acl_users"] == ["u-fin"]
+    assert "w-self" in _wiki_ids(api_client)
+    assert api_client.get("/api/wiki/w-self").status_code == 200
+    db = get_session(api_engine)
+    try:
+        hits = {r["id"] for r in search_wiki(db, _vec(0), limit=50, current_user={"id": "u-fin", "groups": ["财务部"]})}
+        assert "w-self" in hits
+    finally:
+        db.close()
+
+    _as(as_user, "same")
+    assert "sp-self" not in _space_ids(api_client)
+    assert "w-self" not in _wiki_ids(api_client)
+    assert api_client.get("/api/wiki/w-self").status_code == 404
+
+    _as(as_user, "none")
+    assert "sp-self" not in _space_ids(api_client)
+
+
+def test_wiki_space_acl_group_grant(api_engine, api_client, as_user):
+    """self 空间 + acl_groups → 组内用户可见空间及页面, 组外不可见。"""
+    _seed(api_engine)
+    res = _set_acl(api_client, as_user, "wiki_space", "sp-self", acl_groups=["研发部"])
+    assert res.status_code == 200
+
+    _as(as_user, "same")  # 研发部
+    assert "sp-self" in _space_ids(api_client)
+    assert "w-self" in _wiki_ids(api_client)
+    assert api_client.get("/api/wiki/w-self").status_code == 200
+
+    _as(as_user, "other")
+    assert "sp-self" not in _space_ids(api_client)
+    assert "w-self" not in _wiki_ids(api_client)
+    assert api_client.get("/api/wiki/w-self").status_code == 404
+
+
+def test_wiki_space_acl_delete_cleanup(api_engine, api_client, as_user):
+    _seed(api_engine)
+    res = _set_acl(api_client, as_user, "wiki_space", "sp-self", acl_users=["u-fin"])
+    assert res.status_code == 200
+    as_user([], id="u-admin", permissions=["wiki.admin"])
+    assert api_client.delete("/api/wiki/spaces/sp-self").status_code == 200
+    db = get_session(api_engine)
+    try:
+        left = db.query(ResourceAcl).filter(
+            ResourceAcl.resource_type == "wiki_space",
+            ResourceAcl.resource_id == "sp-self",
+        ).count()
+        assert left == 0
+    finally:
+        db.close()
+
+
+def test_admin_sees_all_with_acl_rows(api_engine, api_client, as_user):
+    """存在 ACL 行时管理员(*)仍全见,三种策略不变。"""
+    _seed(api_engine)
+    db = get_session(api_engine)
+    try:
+        db.add(ResourceAcl(resource_type="notebook", resource_id="nb-self",
+                           subject_type="user", subject_id="u-fin"))
+        db.add(ResourceAcl(resource_type="wiki_space", resource_id="sp-self",
+                           subject_type="group", subject_id="财务部"))
+        db.commit()
+    finally:
+        db.close()
+    all_nb = {"nb-self", "nb-dept", "nb-pub", "nb-legacy-pub", "nb-legacy-rd"}
+    as_user(["__local_admin__"])
+    assert _nb_ids(api_client) == all_nb
+    assert _space_ids(api_client) == {"sp-self", "sp-dept", "sp-pub", "sp-legacy"}
+    assert _wiki_ids(api_client) == {"w-self", "w-dept", "w-pub", "w-pub-fin", "w-legacy", "w-nospace"}
+
+
+@pytest.mark.parametrize("key", ["owner", "same", "other", "none"])
+def test_notebook_acl_sql_matches_python(api_engine, key):
+    """带 ACL 子句的 SQLAlchemy 条件与 Python 谓词等价。"""
+    _seed(api_engine)
+    db = get_session(api_engine)
+    try:
+        db.add_all([
+            ResourceAcl(resource_type="notebook", resource_id="nb-self",
+                        subject_type="user", subject_id="u-fin"),
+            ResourceAcl(resource_type="notebook", resource_id="nb-dept",
+                        subject_type="group", subject_id="财务部"),
+        ])
+        db.commit()
+        uid, groups = USERS[key]
+        user = {"id": uid, "groups": groups}
+        from app.core.visibility import notebook_visible_condition
+
+        all_rows = db.query(Notebook).all()
+        sql_ids = {n.id for n in db.query(Notebook).filter(notebook_visible_condition(user)).all()}
+        py_ids = {n.id for n in all_rows if notebook_visible(user, n, acl=load_acl(db, "notebook", n.id))}
+        assert sql_ids == py_ids, key
     finally:
         db.close()

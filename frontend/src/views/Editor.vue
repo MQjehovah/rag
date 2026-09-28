@@ -508,6 +508,38 @@
           </el-select>
           <div class="muted-hint">仅本人：只有自己可访问；部门：同组用户可访问；公开：所有登录用户可访问。</div>
         </el-form-item>
+        <template v-if="canManageNotebook">
+          <el-form-item label="可访问用户">
+            <el-select
+              v-model="notebookForm.acl_users"
+              multiple
+              filterable
+              placeholder="额外授权具体用户"
+              style="width: 100%"
+            >
+              <el-option
+                v-for="u in aclUserOptions"
+                :key="u.id"
+                :label="`${u.display_name || u.username}（${u.username}）`"
+                :value="u.id"
+              />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="可访问部门">
+            <el-select
+              v-model="notebookForm.acl_groups"
+              multiple
+              filterable
+              allow-create
+              default-first-option
+              placeholder="额外授权部门/组"
+              style="width: 100%"
+            >
+              <el-option v-for="g in aclGroupOptions" :key="g" :label="g" :value="g" />
+            </el-select>
+            <div class="muted-hint">在「仅本人 / 部门 / 公开」之外，额外授权所选用户与部门可访问。</div>
+          </el-form-item>
+        </template>
         <el-form-item label="嵌入模型">
           <el-select v-model="notebookForm.embedding_profile_id" clearable placeholder="默认档案" style="width: 100%">
             <el-option
@@ -669,6 +701,7 @@ import type { UploadFile as ElUploadFile } from 'element-plus'
 import http from '../api/http'
 import TipTapEditor from '../components/TipTapEditor.vue'
 import { useAuthStore } from '../stores/auth'
+import { PERM } from '../constants/perms'
 import MarkdownIt from 'markdown-it'
 import taskLists from 'markdown-it-task-lists'
 import DOMPurify from 'dompurify'
@@ -718,6 +751,8 @@ interface Notebook {
   section?: string
   visibility?: 'self' | 'dept' | 'public'
   owner_id?: string | null
+  acl_users?: string[]
+  acl_groups?: string[]
 }
 
 interface EmbeddingProfile {
@@ -772,7 +807,31 @@ const profiles = ref<EmbeddingProfile[]>([])
 const showNotebookSettings = ref(false)
 const notebookSaving = ref(false)
 const NOTEBOOK_ICONS = ['📁', '📘', '📗', '📙', '📕', '🗂️', '🧭', '🧩', '⚙️', '🚀', '💡', '🧪', '🛠️', '🌐', '📊', '🤖']
-const notebookForm = reactive({ id: '', name: '', description: '', icon: '', embedding_profile_id: '' as string | null, visibility: 'dept' as 'self' | 'dept' | 'public' })
+const notebookForm = reactive({
+  id: '', name: '', description: '', icon: '', embedding_profile_id: '' as string | null,
+  visibility: 'dept' as 'self' | 'dept' | 'public',
+  acl_users: [] as string[], acl_groups: [] as string[],
+})
+// 管理员(notebook.manage)可配置资源级追加授权
+const canManageNotebook = computed(() => auth.hasPerm(PERM.notebook))
+const aclUserOptions = ref<{ id: string; username: string; display_name: string }[]>([])
+const aclGroupOptions = ref<string[]>([])
+const loadAclOptions = async () => {
+  if (!canManageNotebook.value) return
+  try {
+    const res = await http.get('/api/auth/users')
+    aclUserOptions.value = res.data || []
+  } catch {
+    aclUserOptions.value = []
+  }
+  try {
+    const res = await http.get('/api/admin/groups')
+    aclGroupOptions.value = (res.data.items || []).map((g: any) => g.name)
+  } catch {
+    // 无 group.manage/user.manage 时列表为空, 下拉仍可 allow-create 手输组名
+    aclGroupOptions.value = []
+  }
+}
 const showSearch = ref(false)
 const searchResults = ref<any[]>([])
 
@@ -834,14 +893,32 @@ const loadProfiles = async () => {
   }
 }
 
-const openNotebookSettings = (nb: Notebook) => {
+const openNotebookSettings = async (nb: Notebook) => {
   notebookForm.id = nb.id
   notebookForm.name = nb.name
   notebookForm.description = nb.description || ''
   notebookForm.icon = nb.icon || ''
   notebookForm.embedding_profile_id = nb.embedding_profile_id || ''
   notebookForm.visibility = (nb.visibility === 'self' || nb.visibility === 'public') ? nb.visibility : 'dept'
+  notebookForm.acl_users = nb.acl_users || []
+  notebookForm.acl_groups = nb.acl_groups || []
   showNotebookSettings.value = true
+  void loadAclOptions()
+  try {
+    // 详情接口带 ACL 预填(列表行不含)
+    const res = await http.get(`/api/notebooks/${nb.id}`)
+    if (notebookForm.id !== nb.id) return
+    const detail = res.data
+    notebookForm.name = detail.name ?? notebookForm.name
+    notebookForm.description = detail.description || ''
+    notebookForm.icon = detail.icon || ''
+    notebookForm.embedding_profile_id = detail.embedding_profile_id || ''
+    notebookForm.visibility = (detail.visibility === 'self' || detail.visibility === 'public') ? detail.visibility : 'dept'
+    notebookForm.acl_users = detail.acl_users || []
+    notebookForm.acl_groups = detail.acl_groups || []
+  } catch {
+    // 拉取失败时保留列表行数据
+  }
 }
 
 const saveNotebookSettings = async () => {
@@ -851,13 +928,18 @@ const saveNotebookSettings = async () => {
   }
   notebookSaving.value = true
   try {
-    const res = await http.put(`/api/notebooks/${notebookForm.id}`, {
+    const payload: Record<string, unknown> = {
       name: notebookForm.name,
       description: notebookForm.description,
       icon: notebookForm.icon || '',
       embedding_profile_id: notebookForm.embedding_profile_id || '',
       visibility: notebookForm.visibility,
-    })
+    }
+    if (canManageNotebook.value) {
+      payload.acl_users = notebookForm.acl_users
+      payload.acl_groups = notebookForm.acl_groups
+    }
+    const res = await http.put(`/api/notebooks/${notebookForm.id}`, payload)
     const updated = res.data
     const idx = notebooks.value.findIndex(n => n.id === notebookForm.id)
     if (idx >= 0) notebooks.value[idx] = { ...notebooks.value[idx], ...updated }

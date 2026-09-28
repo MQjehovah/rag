@@ -62,7 +62,7 @@ def test_SQL与Python可见性实现一致(db, groups):
     user = {"groups": groups}
     all_pages = db.query(WikiPage).all()
     sql_result = {p.title for p in db.query(WikiPage).filter(visible_wiki_filter(user)).all()}
-    py_result = {p.title for p in all_pages if _wiki_visible(p, user)}
+    py_result = {p.title for p in all_pages if _wiki_visible(db, p, user)}
     assert sql_result == py_result
 
 

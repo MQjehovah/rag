@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, event, Column, String, Text, DateTime, ForeignKey, Boolean, Integer, Float, Index, inspect, text as sqlalchemy_text
+from sqlalchemy import create_engine, event, Column, String, Text, DateTime, ForeignKey, Boolean, Integer, Float, Index, UniqueConstraint, inspect, text as sqlalchemy_text
 from sqlalchemy.pool import NullPool
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
@@ -212,6 +212,21 @@ class WikiSpace(Base):
     # 创建者(user id); visibility=self 时用于判定
     owner_id = Column(String(36), nullable=True, index=True)
     created_at = Column(DateTime, default=datetime.now)
+
+
+class ResourceAcl(Base):
+    """资源级追加授权: 多选用户/部门(组)。"""
+    __tablename__ = 'resource_acl'
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    resource_type = Column(String(20), nullable=False, index=True)   # 'notebook' | 'wiki_space'
+    resource_id = Column(String(36), nullable=False, index=True)
+    subject_type = Column(String(10), nullable=False)                # 'user' | 'group'
+    subject_id = Column(String(255), nullable=False)                 # user.id 或 group 名
+
+    __table_args__ = (
+        UniqueConstraint('resource_type', 'resource_id', 'subject_type', 'subject_id', name='uq_resource_acl'),
+    )
 
 
 class GraphCommunity(Base):

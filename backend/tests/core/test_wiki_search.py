@@ -6,7 +6,7 @@ from sqlalchemy import text
 
 from app.api.search_common import visible_wiki_filter
 from app.core.wiki_search import _visibility_sql, search_wiki
-from app.models.database import WikiPage, WikiSpace, get_engine, get_session, init_db
+from app.models.database import ResourceAcl, WikiPage, WikiSpace, get_engine, get_session, init_db
 
 DIM = 1024
 
@@ -190,3 +190,38 @@ def test_空间可见性语义_财务部用户页面规则仍生效(db):
     assert "wsp-rd" not in ids        # 研发空间不可见
     assert "wsp-rd-fin" not in ids    # 页面组对了, 但空间不可见
     assert "wsp-self" not in ids
+
+
+def test_空间ACL双实现一致(db):
+    """空间 ACL 追加授权下,裸 SQL(含 resource_acl 子查询)与 ORM 条件必须一致。"""
+    _seed(db)
+    _seed_spaces(db)
+    db.add_all([
+        ResourceAcl(resource_type="wiki_space", resource_id="sp-self",
+                    subject_type="user", subject_id="u-owner2"),
+        ResourceAcl(resource_type="wiki_space", resource_id="sp-rd",
+                    subject_type="group", subject_id="财务部"),
+    ])
+    db.commit()
+    for user in (
+        {"groups": ["研发部"]},
+        {"groups": ["财务部"]},
+        {"groups": [], "id": "u-owner2"},
+        {"groups": [], "id": "u-owner"},
+        {"groups": [], "permissions": ["*"]},
+    ):
+        orm_ids = {p.id for p in db.query(WikiPage).filter(visible_wiki_filter(user)).all()}
+        cond, params = _visibility_sql(user)
+        rows = db.execute(text(f"SELECT id FROM wiki_pages WHERE {cond}"), params).fetchall()
+        assert {r[0] for r in rows} == orm_ids, user
+
+
+def test_空间ACL检索命中(db):
+    """空间 ACL 授权用户经语义检索也能命中该空间页面。"""
+    _seed(db)
+    _seed_spaces(db)
+    db.add(ResourceAcl(resource_type="wiki_space", resource_id="sp-self",
+                       subject_type="group", subject_id="财务部"))
+    db.commit()
+    hits = {r["id"] for r in search_wiki(db, _vec(0), limit=50, current_user={"groups": ["财务部"]})}
+    assert "wsp-self" in hits

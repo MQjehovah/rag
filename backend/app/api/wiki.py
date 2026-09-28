@@ -16,7 +16,16 @@ from app.core.rag import EmbeddingService
 from app.core.wiki import build_wiki, ensure_default_space, refresh_stale_wiki, resolve_space_id
 from app.core.wiki_embedding import embed_wiki_pages
 from app.core.wiki_search import search_wiki
-from app.core.visibility import wiki_page_visible, wiki_space_visible, parse_visibility
+from app.core.visibility import (
+    ACL_WIKI_SPACE,
+    delete_acl,
+    load_acl,
+    load_acl_lists,
+    parse_visibility,
+    replace_acl,
+    wiki_page_visible,
+    wiki_space_visible,
+)
 from app.models.database import Page, WikiPage, WikiSpace
 
 router = APIRouter(prefix="/api/wiki", tags=["Wiki"])
@@ -24,9 +33,12 @@ router = APIRouter(prefix="/api/wiki", tags=["Wiki"])
 logger = logging.getLogger(__name__)
 
 
-def _wiki_visible(page: WikiPage, current_user, space: WikiSpace | None = None) -> bool:
-    """页面可见:页面 group 规则 AND 所属空间可见(space_id 为空视为默认空间=公共)。"""
-    return wiki_page_visible(current_user, page, space)
+def _wiki_visible(db: Session, page: WikiPage, current_user, space: WikiSpace | None = None) -> bool:
+    """页面可见:页面 group 规则 AND 所属空间可见(space_id 为空视为默认空间=公共,含空间 ACL)。"""
+    if has_permission(current_user, "*"):
+        return True
+    space_acl = load_acl(db, ACL_WIKI_SPACE, space.id) if space is not None else None
+    return wiki_page_visible(current_user, page, space, space_acl=space_acl)
 
 
 def _space_for(db: Session, page: WikiPage) -> WikiSpace | None:
@@ -71,6 +83,9 @@ class SpaceUpdate(BaseModel):
     icon: str | None = None
     description: str | None = None
     visibility: str | None = None
+    # 资源级追加授权(仅 wiki.admin 可写):替换式保存
+    acl_users: list[str] | None = None
+    acl_groups: list[str] | None = None
 
 
 class WikiSpaceMove(BaseModel):
@@ -102,11 +117,12 @@ def _space_group_for_visibility(visibility: str, current_user) -> str | None:
     return None
 
 
-def _space_visible(space: WikiSpace, current_user) -> bool:
-    # 管理键(wiki.admin)保持既有全见语义; 其余按 visibility(含 * 管理员)判定
+def _space_visible(db: Session, space: WikiSpace, current_user) -> bool:
+    # 管理键(wiki.admin)保持既有全见语义; 其余按 visibility(含 * 管理员) + 空间 ACL 判定
     if has_permission(current_user, "wiki.admin"):
         return True
-    return wiki_space_visible(current_user, space)
+    space_acl = load_acl(db, ACL_WIKI_SPACE, space.id)
+    return wiki_space_visible(current_user, space, acl=space_acl)
 
 
 # ---- 空间(必须在 /{page_id} 之前声明, 否则 "spaces" 会被当作 page_id) ----
@@ -114,25 +130,28 @@ def _space_visible(space: WikiSpace, current_user) -> bool:
 def list_spaces(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     spaces = db.query(WikiSpace).order_by(WikiSpace.position.asc(), WikiSpace.created_at.asc()).all()
     default_id = ensure_default_space(db).id
-    spaces = [s for s in spaces if _space_visible(s, current_user) and s.id != default_id]
+    spaces = [s for s in spaces if _space_visible(db, s, current_user) and s.id != default_id]
     # 计数(按空间)
     counts: Dict[str, int] = {}
     for (sid,) in db.query(WikiPage.space_id).filter(visible_wiki_filter(current_user)).all():
         counts[sid or ""] = counts.get(sid or "", 0) + 1
+    out = []
+    for s in spaces:
+        acl_users, acl_groups = load_acl_lists(db, ACL_WIKI_SPACE, s.id)
+        out.append({
+            "id": s.id,
+            "name": s.name,
+            "icon": s.icon or "",
+            "description": s.description or "",
+            "group_id": s.group_id,
+            "visibility": s.visibility,
+            "owner_id": s.owner_id,
+            "acl_users": acl_users,
+            "acl_groups": acl_groups,
+            "count": counts.get(s.id, 0),
+        })
     return {
-        "spaces": [
-            {
-                "id": s.id,
-                "name": s.name,
-                "icon": s.icon or "",
-                "description": s.description or "",
-                "group_id": s.group_id,
-                "visibility": s.visibility,
-                "owner_id": s.owner_id,
-                "count": counts.get(s.id, 0),
-            }
-            for s in spaces
-        ],
+        "spaces": out,
         "default_count": counts.get(default_id, 0) + counts.get("", 0),
         "total": sum(counts.values()),
     }
@@ -166,7 +185,7 @@ def create_space(data: SpaceCreate, db: Session = Depends(get_db), current_user=
 def update_space(space_id: str, data: SpaceUpdate, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     require_permission(current_user, "wiki.admin")
     space = db.query(WikiSpace).filter(WikiSpace.id == space_id).first()
-    if not space or not _space_visible(space, current_user):
+    if not space or not _space_visible(db, space, current_user):
         raise HTTPException(status_code=404, detail="空间不存在")
     if data.name is not None:
         space.name = data.name.strip() or space.name
@@ -181,6 +200,9 @@ def update_space(space_id: str, data: SpaceUpdate, db: Session = Depends(get_db)
         if visibility == "self" and not space.owner_id:
             # legacy 空间转 private 时补记当前操作者为 owner, 否则无人可见
             space.owner_id = current_user["id"]
+    if data.acl_users is not None or data.acl_groups is not None:
+        # 替换式保存:DELETE 后 INSERT(去重、剔除空值),追加授权不改变原可见性
+        replace_acl(db, ACL_WIKI_SPACE, space.id, data.acl_users or [], data.acl_groups or [])
     db.commit()
     return {"message": "已保存", "id": space.id}
 
@@ -189,9 +211,10 @@ def update_space(space_id: str, data: SpaceUpdate, db: Session = Depends(get_db)
 def delete_space(space_id: str, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     require_permission(current_user, "wiki.admin")
     space = db.query(WikiSpace).filter(WikiSpace.id == space_id).first()
-    if not space or not _space_visible(space, current_user):
+    if not space or not _space_visible(db, space, current_user):
         raise HTTPException(status_code=404, detail="空间不存在")
     db.query(WikiPage).filter(WikiPage.space_id == space_id).update({WikiPage.space_id: None})
+    delete_acl(db, ACL_WIKI_SPACE, space_id)
     db.delete(space)
     db.commit()
     return {"message": "已删除(页面已移至默认空间)"}
@@ -201,7 +224,7 @@ def delete_space(space_id: str, db: Session = Depends(get_db), current_user=Depe
 def move_wiki_space(page_id: str, data: WikiSpaceMove, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     require_permission(current_user, "wiki.admin")
     page = db.query(WikiPage).filter(WikiPage.id == page_id).first()
-    if not page or not _wiki_visible(page, current_user, _space_for(db, page)):
+    if not page or not _wiki_visible(db, page, current_user, _space_for(db, page)):
         raise HTTPException(status_code=404, detail="Wiki 页面不存在")
     page.space_id = resolve_space_id(db, data.space_id)
     db.commit()
@@ -246,7 +269,7 @@ def create_wiki_page(data: WikiPageCreate, db: Session = Depends(get_db), curren
 def move_wiki_page(page_id: str, data: WikiPageMove, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     require_permission(current_user, "wiki.admin")
     page = db.query(WikiPage).filter(WikiPage.id == page_id).first()
-    if not page or not _wiki_visible(page, current_user, _space_for(db, page)):
+    if not page or not _wiki_visible(db, page, current_user, _space_for(db, page)):
         raise HTTPException(status_code=404, detail="Wiki 页面不存在")
     parent_id = data.parent_id
     if parent_id:
@@ -354,7 +377,7 @@ async def search_wiki_endpoint(
 def delete_wiki_page(page_id: str, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     require_permission(current_user, "wiki.admin")
     page = db.query(WikiPage).filter(WikiPage.id == page_id).first()
-    if not page or not _wiki_visible(page, current_user, _space_for(db, page)):
+    if not page or not _wiki_visible(db, page, current_user, _space_for(db, page)):
         raise HTTPException(status_code=404, detail="Wiki 页面不存在")
     db.query(WikiPage).filter(WikiPage.parent_id == page_id).update({WikiPage.parent_id: None})
     db.delete(page)
@@ -369,7 +392,7 @@ def get_wiki_page(
     current_user=Depends(get_current_user),
 ):
     page = db.query(WikiPage).filter(WikiPage.id == page_id).first()
-    if not page or not _wiki_visible(page, current_user, _space_for(db, page)):
+    if not page or not _wiki_visible(db, page, current_user, _space_for(db, page)):
         raise HTTPException(status_code=404, detail="Wiki 页面不存在")
     try:
         note_ids = json.loads(page.source_note_ids or "[]")
@@ -405,7 +428,7 @@ async def update_wiki_page(
     this edited content and preserves it."""
     require_permission(current_user, "wiki.admin")
     page = db.query(WikiPage).filter(WikiPage.id == page_id).first()
-    if not page or not _wiki_visible(page, current_user, _space_for(db, page)):
+    if not page or not _wiki_visible(db, page, current_user, _space_for(db, page)):
         raise HTTPException(status_code=404, detail="Wiki 页面不存在")
     if data.content is not None:
         page.content = data.content

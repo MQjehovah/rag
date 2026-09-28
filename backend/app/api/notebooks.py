@@ -10,7 +10,15 @@ from app.models.schema import NotebookCreate, NotebookUpdate, NotebookMove, Note
 from app.api.deps import get_db
 from app.core.jwt_utils import get_current_user
 from app.core.security import has_permission
-from app.core.visibility import notebook_visible, notebook_visible_condition, parse_visibility
+from app.core.visibility import (
+    ACL_NOTEBOOK,
+    delete_acl,
+    load_acl_lists,
+    notebook_visible_condition,
+    parse_visibility,
+    replace_acl,
+    resource_visible_db,
+)
 
 router = APIRouter(prefix="/api/notebooks", tags=["笔记本"])
 
@@ -32,9 +40,16 @@ def _group_for_visibility(visibility, current_user, requested=None):
     return groups[0] if groups else None
 
 
-def _notebook_writable(notebook, current_user) -> bool:
-    """写/读单资源闸门现状:notebook.manage 或可见性域内。"""
-    return has_permission(current_user, "notebook.manage") or notebook_visible(current_user, notebook)
+def notebook_writable(db: Session, user, notebook) -> bool:
+    """写/读单资源闸门现状:notebook.manage 或可见性域内(含资源 ACL)。"""
+    return has_permission(user, "notebook.manage") or resource_visible_db(db, user, ACL_NOTEBOOK, notebook)
+
+
+def _notebook_response(db: Session, notebook: Notebook) -> NotebookResponse:
+    """响应带资源 ACL 预填字段(GET /{id} 与 PUT 回包共用)。"""
+    resp = NotebookResponse.model_validate(notebook)
+    resp.acl_users, resp.acl_groups = load_acl_lists(db, ACL_NOTEBOOK, notebook.id)
+    return resp
 
 
 @router.post("", response_model=NotebookResponse)
@@ -80,17 +95,21 @@ def get_notebook(notebook_id: str, db: Session = Depends(get_db), current_user=D
     notebook = db.query(Notebook).filter(Notebook.id == notebook_id).first()
     if not notebook:
         raise HTTPException(status_code=404, detail="笔记本不存在")
-    if not _notebook_writable(notebook, current_user):
+    if not notebook_writable(db, current_user, notebook):
         raise HTTPException(status_code=403, detail="无权访问该笔记本")
-    return notebook
+    return _notebook_response(db, notebook)
 
 @router.put("/{notebook_id}", response_model=NotebookResponse)
 def update_notebook(notebook_id: str, data: NotebookUpdate, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     notebook = db.query(Notebook).filter(Notebook.id == notebook_id).first()
     if not notebook:
         raise HTTPException(status_code=404, detail="笔记本不存在")
-    if not _notebook_writable(notebook, current_user):
+    if not notebook_writable(db, current_user, notebook):
         raise HTTPException(status_code=403, detail="无权访问该笔记本")
+    manages = has_permission(current_user, "notebook.manage")
+    wants_acl = data.acl_users is not None or data.acl_groups is not None
+    if wants_acl and not manages:
+        raise HTTPException(status_code=403, detail="仅管理员可配置资源授权")
     if data.name is not None:
         notebook.name = data.name
     if data.description is not None:
@@ -111,9 +130,12 @@ def update_notebook(notebook_id: str, data: NotebookUpdate, db: Session = Depend
         if visibility == 'self' and not notebook.owner_id:
             # legacy 笔记本转 private 时补记当前操作者为 owner, 否则无人可见
             notebook.owner_id = current_user["id"]
+    if wants_acl:
+        # 替换式保存:DELETE 后 INSERT(去重、剔除空值),追加授权不改变原可见性
+        replace_acl(db, ACL_NOTEBOOK, notebook.id, data.acl_users or [], data.acl_groups or [])
     db.commit()
     db.refresh(notebook)
-    return notebook
+    return _notebook_response(db, notebook)
 
 @router.post("/{notebook_id}/move")
 def move_notebook(notebook_id: str, data: NotebookMove, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
@@ -121,7 +143,7 @@ def move_notebook(notebook_id: str, data: NotebookMove, db: Session = Depends(ge
     notebook = db.query(Notebook).filter(Notebook.id == notebook_id).first()
     if not notebook:
         raise HTTPException(status_code=404, detail="笔记本不存在")
-    if not _notebook_writable(notebook, current_user):
+    if not notebook_writable(db, current_user, notebook):
         raise HTTPException(status_code=403, detail="无权访问该笔记本")
     if data.section is not None:
         notebook.section = data.section
@@ -141,7 +163,7 @@ def delete_notebook(notebook_id: str, db: Session = Depends(get_db), current_use
     notebook = db.query(Notebook).filter(Notebook.id == notebook_id).first()
     if not notebook:
         raise HTTPException(status_code=404, detail="笔记本不存在")
-    if not _notebook_writable(notebook, current_user):
+    if not notebook_writable(db, current_user, notebook):
         raise HTTPException(status_code=403, detail="无权访问该笔记本")
 
     pages = db.query(Page).filter(Page.notebook_id == notebook_id).all()
@@ -151,6 +173,7 @@ def delete_notebook(notebook_id: str, db: Session = Depends(get_db), current_use
         EntityGraphStore(db).delete_page(page.id)
         db.delete(page)
 
+    delete_acl(db, ACL_NOTEBOOK, notebook_id)
     db.delete(notebook)
     db.commit()
     return {"message": "删除成功"}

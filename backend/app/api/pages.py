@@ -10,7 +10,7 @@ import logging
 from collections import Counter
 
 from app.core.security import has_permission
-from app.core.visibility import notebook_visible, notebook_visible_condition
+from app.core.visibility import ACL_NOTEBOOK, notebook_visible_condition, resource_visible_db
 from app.models.database import Page, Notebook, PageChunk, PageRevision, PageComment, get_engine
 from app.models.schema import PageCreate, PageUpdate, PageMove, PageViewUpdate, CommentCreate, PageResponse, PageListItem, PageListResponse
 from app.core.rag import EmbeddingService, VectorStore
@@ -140,7 +140,7 @@ def _check_page_access(page, current_user, db):
         return
     if page.notebook_id:
         nb = db.query(Notebook).filter(Notebook.id == page.notebook_id).first()
-        if nb and not notebook_visible(current_user, nb):
+        if nb and not resource_visible_db(db, current_user, ACL_NOTEBOOK, nb):
             raise HTTPException(status_code=403, detail="无权访问该笔记")
 
 def _check_page_access_by_nb(notebook_id, current_user, db):
@@ -148,7 +148,7 @@ def _check_page_access_by_nb(notebook_id, current_user, db):
         return
     if notebook_id:
         nb = db.query(Notebook).filter(Notebook.id == notebook_id).first()
-        if nb and not notebook_visible(current_user, nb):
+        if nb and not resource_visible_db(db, current_user, ACL_NOTEBOOK, nb):
             raise HTTPException(status_code=403, detail="无权访问该笔记")
 
 @router.post("", response_model=PageResponse)
@@ -156,7 +156,7 @@ def create_page(data: PageCreate, background_tasks: BackgroundTasks, db: Session
     if data.notebook_id:
         nb = db.query(Notebook).filter(Notebook.id == data.notebook_id).first()
         if nb and not has_permission(current_user, "page.manage"):
-            if not notebook_visible(current_user, nb):
+            if not resource_visible_db(db, current_user, ACL_NOTEBOOK, nb):
                 raise HTTPException(status_code=403, detail="无权在该笔记本创建笔记")
     parent_id = data.parent_id
     if parent_id:
@@ -246,7 +246,7 @@ def page_tree(notebook_id: str, db: Session = Depends(get_db), current_user=Depe
     nb = db.query(Notebook).filter(Notebook.id == notebook_id).first()
     if not nb:
         raise HTTPException(status_code=404, detail="笔记本不存在")
-    if not has_permission(current_user, "page.manage") and not notebook_visible(current_user, nb):
+    if not has_permission(current_user, "page.manage") and not resource_visible_db(db, current_user, ACL_NOTEBOOK, nb):
         raise HTTPException(status_code=403, detail="无权访问该笔记本")
     rows = db.query(Page.id, Page.title, Page.parent_id, Page.position, Page.view_type, Page.status, Page.updated_at).filter(
         Page.notebook_id == notebook_id,

@@ -264,9 +264,9 @@ def test_visibility_helpers_permission_driven_with_marker_bridge(api_engine):
 
         # 2) wiki._wiki_visible:他组页面在 * / 标记下可见,普通成员不可见
         fin_wiki = db.query(WikiPage).filter(WikiPage.id == "vis-w-fin").one()
-        assert _wiki_visible(fin_wiki, star) is True
-        assert _wiki_visible(fin_wiki, marker) is True
-        assert _wiki_visible(fin_wiki, member) is False
+        assert _wiki_visible(db, fin_wiki, star) is True
+        assert _wiki_visible(db, fin_wiki, marker) is True
+        assert _wiki_visible(db, fin_wiki, member) is False
 
         # 3) search_common.visible_wiki_filter
         def _wiki_ids(user):

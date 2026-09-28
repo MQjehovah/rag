@@ -22,6 +22,9 @@ class NotebookUpdate(BaseModel):
     embedding_profile_id: Optional[str] = None
     section: Optional[str] = None
     visibility: Optional[str] = None  # self | dept | public
+    # 资源级追加授权(仅 notebook.manage 可写):替换式保存
+    acl_users: Optional[List[str]] = None
+    acl_groups: Optional[List[str]] = None
 
 class NotebookMove(BaseModel):
     position: int = 0
@@ -37,6 +40,8 @@ class NotebookResponse(NotebookBase):
     section: str = ''
     visibility: Optional[str] = None
     owner_id: Optional[str] = None
+    acl_users: List[str] = []
+    acl_groups: List[str] = []
     created_at: datetime
     updated_at: datetime
 

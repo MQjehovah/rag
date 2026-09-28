@@ -220,6 +220,38 @@
             <el-option label="公开（所有登录用户）" value="public" />
           </el-select>
         </el-form-item>
+        <template v-if="isAdmin">
+          <el-form-item label="可访问用户">
+            <el-select
+              v-model="editSpaceForm.acl_users"
+              multiple
+              filterable
+              placeholder="额外授权具体用户"
+              style="width: 100%"
+            >
+              <el-option
+                v-for="u in aclUserOptions"
+                :key="u.id"
+                :label="`${u.display_name || u.username}（${u.username}）`"
+                :value="u.id"
+              />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="可访问部门">
+            <el-select
+              v-model="editSpaceForm.acl_groups"
+              multiple
+              filterable
+              allow-create
+              default-first-option
+              placeholder="额外授权部门/组"
+              style="width: 100%"
+            >
+              <el-option v-for="g in aclGroupOptions" :key="g" :label="g" :value="g" />
+            </el-select>
+            <div class="muted-hint">在「仅本人 / 部门 / 公开」之外，额外授权所选用户与部门可访问。</div>
+          </el-form-item>
+        </template>
       </el-form>
       <template #footer>
         <el-button @click="spaceEditDialog = false">取消</el-button>
@@ -267,7 +299,7 @@ interface WikiPageListItem {
 type Visibility = 'self' | 'dept' | 'public'
 
 const categories = ref<{ name: string; pages: WikiPageListItem[] }[]>([])
-const spaces = ref<{ id: string; name: string; icon: string; description: string; count: number; visibility?: Visibility; owner_id?: string | null }[]>([])
+const spaces = ref<{ id: string; name: string; icon: string; description: string; count: number; visibility?: Visibility; owner_id?: string | null; acl_users?: string[]; acl_groups?: string[] }[]>([])
 const activeSpace = ref<string>('')   // '' 全部 | 'default' 默认空间 | 空间 id
 const defaultCount = ref(0)
 const spaceDialog = ref(false)
@@ -275,7 +307,9 @@ const newSpace = ref<{ name: string; icon: string; description: string; visibili
 const savingSpace = ref(false)
 const spaceEditDialog = ref(false)
 const savingSpaceEdit = ref(false)
-const editSpaceForm = ref<{ id: string; name: string; icon: string; description: string; visibility: Visibility }>({ id: '', name: '', icon: '', description: '', visibility: 'dept' })
+const editSpaceForm = ref<{ id: string; name: string; icon: string; description: string; visibility: Visibility; acl_users: string[]; acl_groups: string[] }>({ id: '', name: '', icon: '', description: '', visibility: 'dept', acl_users: [], acl_groups: [] })
+const aclUserOptions = ref<{ id: string; username: string; display_name: string }[]>([])
+const aclGroupOptions = ref<string[]>([])
 const total = ref(0)
 const running = ref(false)
 const rebuilding = ref(false)
@@ -346,15 +380,35 @@ const createSpace = async () => {
   }
 }
 
-const openSpaceSettings = (s: { id: string; name: string; icon?: string; description?: string; visibility?: Visibility }) => {
+const openSpaceSettings = (s: { id: string; name: string; icon?: string; description?: string; visibility?: Visibility; acl_users?: string[]; acl_groups?: string[] }) => {
   editSpaceForm.value = {
     id: s.id,
     name: s.name,
     icon: s.icon || '',
     description: s.description || '',
     visibility: (s.visibility === 'self' || s.visibility === 'public') ? s.visibility : 'dept',
+    acl_users: s.acl_users || [],
+    acl_groups: s.acl_groups || [],
   }
   spaceEditDialog.value = true
+  void loadAclOptions()
+}
+
+const loadAclOptions = async () => {
+  if (!isAdmin.value) return
+  try {
+    const res = await http.get('/api/auth/users')
+    aclUserOptions.value = res.data || []
+  } catch {
+    aclUserOptions.value = []
+  }
+  try {
+    const res = await http.get('/api/admin/groups')
+    aclGroupOptions.value = (res.data.items || []).map((g: any) => g.name)
+  } catch {
+    // 无 group.manage/user.manage 时列表为空, 下拉仍可 allow-create 手输组名
+    aclGroupOptions.value = []
+  }
 }
 
 const saveSpaceSettings = async () => {
@@ -366,6 +420,8 @@ const saveSpaceSettings = async () => {
       icon: editSpaceForm.value.icon || '',
       description: editSpaceForm.value.description,
       visibility: editSpaceForm.value.visibility,
+      acl_users: editSpaceForm.value.acl_users,
+      acl_groups: editSpaceForm.value.acl_groups,
     })
     spaceEditDialog.value = false
     ElMessage.success('已保存')
