@@ -515,7 +515,8 @@ async function preview(p: Pipeline) {
   previewPlan.value = []
   previewNotebook.value = ''
   try {
-    const r = await http.post(`/api/pipelines/${p.id}/preview`)
+    // 长同步接口，客户端不设超时
+    const r = await http.post(`/api/pipelines/${p.id}/preview`, null, { timeout: 0 })
     if (r.data.ok) {
       previewNotebook.value = r.data.notebook
       previewPlan.value = r.data.plan || []

@@ -227,7 +227,7 @@
         <el-button
           type="primary"
           :loading="isSaving('create')"
-          :disabled="savingKey !== null"
+          :disabled="savingKeys.size > 0"
           @click="saveCreate"
         >创建</el-button>
       </template>
@@ -251,7 +251,7 @@
         <el-button
           type="primary"
           :loading="isSaving('edit:' + (editTarget?.id || ''))"
-          :disabled="savingKey !== null"
+          :disabled="savingKeys.size > 0"
           @click="saveEdit"
         >保存</el-button>
       </template>
@@ -282,7 +282,7 @@
         <el-button
           type="primary"
           :loading="isSaving('roles:' + (rolesTarget?.id || ''))"
-          :disabled="savingKey !== null"
+          :disabled="savingKeys.size > 0"
           @click="saveRoles"
         >保存</el-button>
       </template>
@@ -312,7 +312,7 @@
         <el-button
           type="primary"
           :loading="isSaving('groups:' + (groupsTarget?.id || ''))"
-          :disabled="savingKey !== null"
+          :disabled="savingKeys.size > 0"
           @click="saveGroups"
         >保存</el-button>
       </template>
@@ -363,7 +363,7 @@ const activeQuery = ref('')
 const loading = ref(false)
 const loadError = ref(false)
 const loadedOnce = ref(false)
-const savingKey = ref<string | null>(null)
+const savingKeys = ref<Set<string>>(new Set())
 
 const roleOptions = ref<RoleOption[]>([])
 const groupOptions = ref<GroupOption[]>([])
@@ -395,14 +395,27 @@ const groupsForm = ref<string[]>([])
 let reqSeq = 0
 let optionsSeq = 0
 
-/** 全局进行中的写操作键(create / edit:<id> / toggle:<id> / pwd:<id> / roles:<id> / groups:<id>) */
-function isSaving(key: string): boolean {
-  return savingKey.value === key
+/** 登记写操作键(create / edit:<id> / toggle:<id> / pwd:<id> / roles:<id> / groups:<id>);同键重复触发直接忽略 */
+function beginSaving(key: string): boolean {
+  if (savingKeys.value.has(key)) return false
+  savingKeys.value = new Set(savingKeys.value).add(key)
+  return true
 }
 
-/** 该行是否有写操作进行中:行内其余按钮一并禁用,但不影响其他行 */
+function endSaving(key: string) {
+  const next = new Set(savingKeys.value)
+  next.delete(key)
+  savingKeys.value = next
+}
+
+/** 某写操作是否进行中 */
+function isSaving(key: string): boolean {
+  return savingKeys.value.has(key)
+}
+
+/** 该行是否有写操作进行中:行内其余按钮一并禁用,但不影响其他行(create 无 id) */
 function isRowBusy(id: string): boolean {
-  return savingKey.value !== null && savingKey.value.endsWith(`:${id}`)
+  return [...savingKeys.value].some(k => k.endsWith(`:${id}`))
 }
 
 function visibleGroups(u: UserRow): string[] {
@@ -488,7 +501,7 @@ async function saveCreate() {
     ElMessage.warning('请填写密码')
     return
   }
-  savingKey.value = 'create'
+  if (!beginSaving('create')) return
   try {
     await http.post('/api/admin/users', {
       username,
@@ -504,7 +517,7 @@ async function saveCreate() {
   } catch (e: any) {
     ElMessage.error(errText(e))
   } finally {
-    savingKey.value = null
+    endSaving('create')
   }
 }
 
@@ -518,7 +531,8 @@ function openEdit(u: UserRow) {
 
 async function saveEdit() {
   if (!editTarget.value) return
-  savingKey.value = `edit:${editTarget.value.id}`
+  const key = `edit:${editTarget.value.id}`
+  if (!beginSaving(key)) return
   try {
     await http.put(`/api/admin/users/${editTarget.value.id}`, {
       display_name: editForm.display_name.trim(),
@@ -530,7 +544,7 @@ async function saveEdit() {
   } catch (e: any) {
     ElMessage.error(errText(e))
   } finally {
-    savingKey.value = null
+    endSaving(key)
   }
 }
 
@@ -546,7 +560,8 @@ async function toggleActive(u: UserRow) {
       return
     }
   }
-  savingKey.value = `toggle:${u.id}`
+  const key = `toggle:${u.id}`
+  if (!beginSaving(key)) return
   try {
     await http.put(`/api/admin/users/${u.id}`, { is_active: !u.is_active })
     ElMessage.success(u.is_active ? '已禁用' : '已启用')
@@ -554,7 +569,7 @@ async function toggleActive(u: UserRow) {
   } catch (e: any) {
     ElMessage.error(errText(e))
   } finally {
-    savingKey.value = null
+    endSaving(key)
   }
 }
 
@@ -572,7 +587,8 @@ async function resetPassword(u: UserRow) {
   } catch {
     return
   }
-  savingKey.value = `pwd:${u.id}`
+  const key = `pwd:${u.id}`
+  if (!beginSaving(key)) return
   try {
     await http.post(`/api/admin/users/${u.id}/password`, { password })
     ElMessage.success('密码已重置')
@@ -580,7 +596,7 @@ async function resetPassword(u: UserRow) {
   } catch (e: any) {
     ElMessage.error(errText(e))
   } finally {
-    savingKey.value = null
+    endSaving(key)
   }
 }
 
@@ -592,7 +608,8 @@ function openRoles(u: UserRow) {
 
 async function saveRoles() {
   if (!rolesTarget.value) return
-  savingKey.value = `roles:${rolesTarget.value.id}`
+  const key = `roles:${rolesTarget.value.id}`
+  if (!beginSaving(key)) return
   try {
     await http.put(`/api/admin/users/${rolesTarget.value.id}/roles`, { roles: rolesForm.value })
     rolesOpen.value = false
@@ -601,7 +618,7 @@ async function saveRoles() {
   } catch (e: any) {
     ElMessage.error(errText(e))
   } finally {
-    savingKey.value = null
+    endSaving(key)
   }
 }
 
@@ -614,7 +631,8 @@ function openGroups(u: UserRow) {
 
 async function saveGroups() {
   if (!groupsTarget.value) return
-  savingKey.value = `groups:${groupsTarget.value.id}`
+  const key = `groups:${groupsTarget.value.id}`
+  if (!beginSaving(key)) return
   try {
     await http.put(`/api/admin/users/${groupsTarget.value.id}/groups`, { groups: groupsForm.value })
     groupsOpen.value = false
@@ -623,7 +641,7 @@ async function saveGroups() {
   } catch (e: any) {
     ElMessage.error(errText(e))
   } finally {
-    savingKey.value = null
+    endSaving(key)
   }
 }
 

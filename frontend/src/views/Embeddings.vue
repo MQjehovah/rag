@@ -212,7 +212,8 @@ async function makeDefault(p: Profile) {
 
 async function testProfile(p: Profile) {
   try {
-    const r = await http.post(`/api/embeddings/profiles/${p.id}/test`)
+    // 长同步接口，客户端不设超时
+    const r = await http.post(`/api/embeddings/profiles/${p.id}/test`, null, { timeout: 0 })
     if (r.data.ok) {
       ElMessage.success(`连通，返回维度 ${r.data.dimensions}${r.data.match ? '' : '（与配置维度不一致）'}`)
     } else {

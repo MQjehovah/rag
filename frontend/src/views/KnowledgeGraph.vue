@@ -350,7 +350,8 @@ const zoomFit = () => {
 const rebuildGraph = async () => {
   rebuilding.value = true
   try {
-    const res = await http.post('/api/graph/rebuild')
+    // 长同步接口，客户端不设超时
+    const res = await http.post('/api/graph/rebuild', null, { timeout: 0 })
     ElMessage.success(res.data.message)
     await loadData()
   } catch {
@@ -363,7 +364,8 @@ const rebuildGraph = async () => {
 const rebuildEntities = async () => {
   rebuildingEntities.value = true
   try {
-    const res = await http.post('/api/graph/rebuild-entities')
+    // 长同步接口，客户端不设超时
+    const res = await http.post('/api/graph/rebuild-entities', null, { timeout: 0 })
     ElMessage.success(res.data.message)
     await loadData()
   } catch {

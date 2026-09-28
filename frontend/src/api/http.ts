@@ -1,7 +1,8 @@
 import axios from 'axios'
 
 const API_BASE = (import.meta.env.BASE_URL || '/').replace(/\/$/, '')
-// 60s 超时兜底:网络挂起时请求不至于无限等待(100s+ 的慢接口不经此 axios 实例)
+// 默认 60s 超时兜底:网络挂起时请求不至于无限等待;
+// 长同步调用点(图谱重建/试编译/嵌入连通测试)在调用处传 { timeout: 0 } 豁免
 const http = axios.create({ baseURL: API_BASE, timeout: 60000 })
 
 http.interceptors.request.use((config) => {
