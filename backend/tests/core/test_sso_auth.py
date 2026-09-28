@@ -196,6 +196,16 @@ def test_verify_sso_token_fails_closed_without_audience_config(sso_env, monkeypa
         verify_sso_token(token)
 
 
+def test_verify_sso_token_rejects_missing_aud_claim(sso_env):
+    """无 aud claim 的 token fail-closed 拒绝(不静默跳过受众校验)。"""
+    key, _ = sso_env
+    payload = valid_claims()
+    payload.pop("aud")
+    token = sign_token(payload, key)
+    with pytest.raises(SsoAuthError, match="audience"):
+        verify_sso_token(token)
+
+
 # ---- 回调端点:建号 / 组映射 / 错误分支 ----
 
 

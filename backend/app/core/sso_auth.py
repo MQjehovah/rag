@@ -117,11 +117,11 @@ def _audience_matches(claims: dict, expected: list[str]) -> bool:
     """token aud 是否命中期望受众之一。
 
     python-jose 的 audience 参数只接受字符串(传 list 报错),而 token 里的 aud
-    claim 本身可以是字符串或列表,故在此自行校验(命中任一期望值即通过);
-    无 aud claim 时不校验,与 python-jose 原行为保持一致。
+    claim 本身可以是字符串或列表,故在此自行校验(命中任一期望值即通过)。
+    无 aud claim 的 token 一律拒绝(fail-closed,不静默跳过受众校验)。
     """
     if "aud" not in claims:
-        return True
+        return False
     aud = claims["aud"]
     token_auds = [aud] if isinstance(aud, str) else aud
     if not isinstance(token_auds, list) or any(not isinstance(item, str) for item in token_auds):
@@ -133,7 +133,8 @@ def verify_sso_token(token: str, audience: str | None = None) -> dict:
     """校验 SSO 签发的 RS256 token,通过则返回 claims(含 sub 工号)。
 
     未配置 sso_issuer 视为 SSO 禁用;**受众强制**:显式 audience 或 sso_audience
-    二者必有一,否则一律拒绝(fail-closed,避免接受未面向本资源的 token)。
+    二者必有一,否则一律拒绝;token 无 aud claim 或 aud 不匹配同样拒绝
+    (fail-closed,避免接受未面向本资源的 token)。
     sso_audience 支持逗号多值(如 gateway,dashboard-gateway),aud 命中任一即通过;
     显式 audience 参数仍为单值(授权码回调按本系统 client_id 校验,优先于配置)。
 

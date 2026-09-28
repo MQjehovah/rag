@@ -50,16 +50,23 @@ def test_user_column_migrations_noop_on_sqlite(tmp_path):
         engine.dispose()
 
 
-def test_init_db_calls_user_column_migrations_on_sqlite(tmp_path):
-    """启动路径冒烟: init_db 内部调用迁移, SQLite 下不炸且建出 users 新列。"""
+def test_init_db_calls_user_column_migrations_on_sqlite(tmp_path, monkeypatch):
+    """启动路径: init_db 必须以 engine 调用迁移(SQLite 下迁移自身 no-op)。"""
     from sqlalchemy import inspect
 
+    from app.models import database as database_module
+
+    calls = []
+    monkeypatch.setattr(
+        database_module, "run_user_column_migrations", lambda engine: calls.append(engine)
+    )
     engine = get_engine(f"sqlite:///{tmp_path / 'init.db'}")
     try:
         init_db(engine)
         cols = {c["name"] for c in inspect(engine).get_columns("users")}
     finally:
         engine.dispose()
+    assert calls == [engine]
     assert {"name", "work_id", "phone"} <= cols
 
 
@@ -152,3 +159,17 @@ def test_sso_work_id_always_aligns_to_sub(sso_env, db):
 
     db.refresh(existing)
     assert existing.work_id == SSO_EMP_NO
+
+
+def test_sso_unchanged_claims_skip_commit(sso_env, db, monkeypatch):
+    """同 claims 二次登录: 字段无变化时不 commit(避免每请求无谓写入)。"""
+    key, _ = sso_env
+    token = _sso_token(key, name="张三", email="z@example.com", mobile="13800000000")
+    get_current_user(credentials=_bearer(token), db=db)
+
+    commits = []
+    original_commit = Session.commit
+    monkeypatch.setattr(Session, "commit", lambda self: commits.append(1) or original_commit(self))
+    get_current_user(credentials=_bearer(token), db=db)
+
+    assert commits == []

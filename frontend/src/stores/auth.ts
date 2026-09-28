@@ -11,7 +11,7 @@ interface User {
   name: string
   work_id?: string
   phone?: string
-  /** 旧 payload 字段(兼容历史残留数据);新代码一律读 name */
+  /** 兼容发布切换期旧后端 payload / 内存中旧对象;新代码一律读 name */
   display_name?: string
   is_local: boolean
   groups: string[]
