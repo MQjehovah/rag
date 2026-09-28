@@ -9,10 +9,18 @@ from app.core.rbac_seed import INTERNAL_ADMIN_GROUP
 from app.core.security import parse_permissions
 from app.models.database import Group, Role, User, UserGroup, UserRole
 
+# SSO claims 会把 roles 并入 groups(历史可见性语义), 但这些是角色名而非群组:
+# 注册表/群组管理/ACL 部门选项不应登记它们。
+_ROLE_LIKE_NAMES = {"user", "admin", "default", "supreme", "service"}
+
 
 def _ensure_group_registry(db: Session, groups: list[str], source: str) -> None:
-    """把同步来的群组登记进群组注册表: 不存在则新建(内部 `__` 前缀跳过)。"""
-    names = [g.strip() for g in (groups or []) if g and g.strip() and not g.strip().startswith("__")]
+    """把同步来的群组登记进群组注册表: 不存在则新建(内部 `__` 前缀与角色名跳过)。"""
+    names = [
+        g.strip() for g in (groups or [])
+        if g and g.strip() and not g.strip().startswith("__")
+        and g.strip().lower() not in _ROLE_LIKE_NAMES
+    ]
     if not names:
         return
     existing = {name for (name,) in db.query(Group.name).filter(Group.name.in_(names)).all()}

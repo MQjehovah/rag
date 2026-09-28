@@ -26,6 +26,7 @@ def test_list_groups_backfills_synced_groups(api_client, api_engine, as_user):
         db.add(UserGroup(id="ug-bf1", user_id="u-bf", group_name="SSO部门A"))
         db.add(UserGroup(id="ug-bf2", user_id="u-bf", group_name="SSO部门B"))
         db.add(UserGroup(id="ug-bf3", user_id="u-bf", group_name="__local_admin__"))
+        db.add(UserGroup(id="ug-bf4", user_id="u-bf", group_name="user"))  # 角色名不应登记
         db.commit()
     finally:
         db.close()
@@ -35,6 +36,7 @@ def test_list_groups_backfills_synced_groups(api_client, api_engine, as_user):
     assert by_name["SSO部门A"]["source"] == "sso"
     assert by_name["SSO部门B"]["source"] == "sso"
     assert "__local_admin__" not in by_name  # 内部标记组不登记不展示
+    assert "user" not in by_name             # 角色名不登记
 
     db = get_session(api_engine)
     try:

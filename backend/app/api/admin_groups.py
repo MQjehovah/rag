@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_db
 from app.core.jwt_utils import get_current_user
 from app.core.security import has_permission, require_permission
+from app.core.user_utils import _ensure_group_registry
 from app.models.database import (
     CompileTemplate, Group, Notebook, Pipeline, User, UserGroup, WikiPage, WikiSpace,
 )
@@ -99,15 +100,15 @@ def list_groups(current_user=Depends(get_current_user), db: Session = Depends(ge
     if not (has_permission(current_user, "group.manage") or has_permission(current_user, "user.manage")):
         raise HTTPException(status_code=403, detail="缺少权限: group.manage 或 user.manage")
     groups = db.query(Group).order_by(Group.name.asc()).all()
-    # 历史回填:登录同步写入 user_groups 但注册表缺失的群组(早期数据)补登记(来源按 sso 记)
+    # 历史回填:登录同步写入 user_groups 但注册表缺失的群组(早期数据)补登记(来源按 sso 记;
+    # 角色名与内部 `__` 前缀由 _ensure_group_registry 过滤)
     known = {g.name for g in groups}
     extra = [
         name for (name,) in db.query(UserGroup.group_name).distinct().all()
-        if name and not name.startswith("__") and name not in known
+        if name and name not in known
     ]
     if extra:
-        for name in extra:
-            db.add(Group(id=str(uuid.uuid4()), name=name, source="sso"))
+        _ensure_group_registry(db, extra, "sso")
         db.commit()
         groups = db.query(Group).order_by(Group.name.asc()).all()
     # 防御:内部标记组(如 __local_admin__)不进注册表,误入也不展示
