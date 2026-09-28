@@ -49,13 +49,9 @@
           </template>
         </el-table-column>
 
-        <el-table-column label="来源" min-width="150">
+        <el-table-column label="来源笔记本" min-width="180" show-overflow-tooltip>
           <template #default="{ row }">
-            <div class="cell-title">
-              <span v-if="row.scope_type === 'all'">全部笔记本</span>
-              <span v-else-if="row.scope_type === 'group'">本组全部</span>
-              <span v-else>{{ (row.notebook_ids || []).length }} 个笔记本</span>
-            </div>
+            <div class="cell-title">{{ sourceNames(row) }}</div>
             <div v-if="row.incremental" class="cell-sub">增量编译</div>
           </template>
         </el-table-column>
@@ -138,7 +134,7 @@
             <el-select
               v-model="form.template_id"
               clearable
-              placeholder="不使用模板（用下方自定义 / 内置）"
+              placeholder="不使用模板（使用内置默认）"
               style="flex: 1"
               @change="onTemplateChange"
             >
@@ -146,51 +142,21 @@
             </el-select>
             <el-button @click="router.push('/templates')">管理模板</el-button>
           </div>
-          <div class="field-hint">选择模板后，其「提示词 / 规则 / 输出模板」作为缺省；下方留空的字段将采用模板值。</div>
+          <div class="field-hint">编译的提示词 / 规则 / 输出模板由所选模板决定；未选择时使用内置默认。</div>
         </el-form-item>
-        <el-form-item label="来源范围">
-          <el-radio-group v-model="form.scope_type">
-            <el-radio value="notebooks">指定笔记本</el-radio>
-            <el-radio value="group">本组全部</el-radio>
-            <el-radio value="all">全部笔记本</el-radio>
-          </el-radio-group>
-        </el-form-item>
-        <el-form-item v-if="form.scope_type === 'notebooks'" label="笔记本">
-          <el-select v-model="form.notebook_ids" multiple style="width: 100%" placeholder="选择来源笔记本">
+        <el-form-item label="来源笔记本">
+          <el-select
+            v-model="form.notebook_ids"
+            multiple
+            filterable
+            collapse-tags
+            collapse-tags-tooltip
+            style="width: 100%"
+            placeholder="选择作为来源的笔记本（可多选）"
+          >
             <el-option v-for="n in notebooks" :key="n.id" :label="n.name" :value="n.id" />
           </el-select>
-        </el-form-item>
-        <el-form-item label="提示词">
-          <el-input
-            v-model="form.prompt_template"
-            type="textarea"
-            :rows="3"
-            :placeholder="defaultPrompt(form.compiler_kind) || '留空 = 使用内置角色与目标'"
-          />
-        </el-form-item>
-        <el-form-item label="规则">
-          <el-input
-            v-model="form.compile_rules"
-            type="textarea"
-            :rows="5"
-            :placeholder="compileRules || '留空 = 仅用内置通用规则'"
-          />
-        </el-form-item>
-        <el-form-item label="输出模板">
-          <div style="width: 100%">
-            <el-input
-              v-model="form.compile_template"
-              type="textarea"
-              :rows="7"
-              :placeholder="defaultTemplate(form.compiler_kind) || '留空 = 按内容合理分节'"
-            />
-            <div class="field-hint">
-              三段：<b>提示词</b>（角色+目标）、<b>规则</b>（追加在内置通用规则之后）、<b>输出模板</b>（正文结构骨架）。
-              均留空 = 用内置；系统固定追加「JSON 输出协议 + parent 规则」。
-              <el-button link type="primary" size="small" @click="fillDefaultRule">填入内置</el-button>
-              <el-button link size="small" @click="clearRule">清空</el-button>
-            </div>
-          </div>
+          <div class="field-hint">仅编译所选笔记本内的笔记。</div>
         </el-form-item>
         <el-form-item label="目标空间">
           <el-select v-model="form.target_space_id" clearable placeholder="默认空间" style="width: 100%">
@@ -314,8 +280,6 @@ const KIND_LABELS: Record<string, string> = {
 const pipelines = ref<Pipeline[]>([])
 const notebooks = ref<{ id: string; name: string }[]>([])
 const spaces = ref<WikiSpaceItem[]>([])
-const compileTemplates = ref<Record<string, { prompt: string; template: string }>>({})
-const compileRules = ref('')
 const templateLib = ref<{ id: string; name: string; compiler_kind: string }[]>([])
 const loading = ref(false)
 const q = ref('')
@@ -326,13 +290,9 @@ const runBanner = ref('')
 const form = reactive({
   name: '',
   description: '',
-  scope_type: 'notebooks',
   notebook_ids: [] as string[],
   compiler_kind: 'wiki',
   template_id: '' as string | null,
-  prompt_template: '',
-  compile_rules: '',
-  compile_template: '',
   model: '',
   target_category: '',
   target_space_id: '' as string | null,
@@ -433,23 +393,11 @@ function templateName(id?: string | null) {
   return templateLib.value.find(t => t.id === id)?.name || ''
 }
 
-async function loadCompileTemplates() {
-  try {
-    const d = (await http.get('/api/pipelines/compile-templates')).data
-    compileTemplates.value = d.kinds || {}
-    compileRules.value = d.rules || ''
-  } catch {
-    compileTemplates.value = {}
-    compileRules.value = ''
-  }
-}
-
-function defaultPrompt(kind: string) {
-  return compileTemplates.value[kind]?.prompt || ''
-}
-
-function defaultTemplate(kind: string) {
-  return compileTemplates.value[kind]?.template || ''
+function sourceNames(p: Pipeline) {
+  const ids = p.notebook_ids || []
+  if (!ids.length) return '未指定'
+  const names = ids.map(id => notebooks.value.find(n => n.id === id)?.name || id)
+  return names.join('、')
 }
 
 async function loadTemplateLib() {
@@ -465,30 +413,14 @@ function onTemplateChange(id: string | null) {
   if (t) form.compiler_kind = t.compiler_kind
 }
 
-function fillDefaultRule() {
-  form.prompt_template = defaultPrompt(form.compiler_kind)
-  form.compile_rules = compileRules.value
-  form.compile_template = defaultTemplate(form.compiler_kind)
-}
-
-function clearRule() {
-  form.prompt_template = ''
-  form.compile_rules = ''
-  form.compile_template = ''
-}
-
 function openCreate() {
   editing.value = null
   Object.assign(form, {
     name: '',
     description: '',
-    scope_type: 'notebooks',
     notebook_ids: [],
     compiler_kind: 'wiki',
     template_id: '',
-    prompt_template: '',
-    compile_rules: '',
-    compile_template: '',
     model: '',
     target_category: '',
     target_space_id: '',
@@ -504,13 +436,9 @@ function openEdit(p: Pipeline) {
   Object.assign(form, {
     name: p.name,
     description: p.description,
-    scope_type: p.scope_type,
     notebook_ids: [...(p.notebook_ids || [])],
     compiler_kind: p.compiler_kind,
     template_id: p.template_id || '',
-    prompt_template: p.prompt_template,
-    compile_rules: p.compile_rules,
-    compile_template: p.compile_template,
     model: p.model,
     target_category: p.target_category,
     target_space_id: p.target_space_id || '',
@@ -526,13 +454,19 @@ async function save() {
     ElMessage.warning('请填写名称')
     return
   }
-  if (form.scope_type === 'notebooks' && form.notebook_ids.length === 0) {
+  if (form.notebook_ids.length === 0) {
     ElMessage.warning('请选择至少一个来源笔记本')
     return
   }
   saving.value = true
   try {
-    const payload = { ...form }
+    const payload = {
+      ...form,
+      scope_type: 'notebooks',
+      prompt_template: '',
+      compile_rules: '',
+      compile_template: ''
+    }
     if (editing.value) {
       await http.put(`/api/pipelines/${editing.value.id}`, payload)
     } else {
@@ -634,7 +568,6 @@ onMounted(() => {
   load()
   loadNotebooks()
   loadSpaces()
-  loadCompileTemplates()
   loadTemplateLib()
   timer = setInterval(refreshRunning, 2500)
 })
