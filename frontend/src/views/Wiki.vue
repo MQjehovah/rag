@@ -12,7 +12,7 @@
         >{{ running ? '编译中' : '重新编译' }}</el-button>
       </div>
       <div class="space-bar">
-        <div class="space-item" :class="{ active: activeSpace === '' }" @click="activeSpace = ''">
+        <div v-if="isAdmin" class="space-item" :class="{ active: activeSpace === '' }" @click="activeSpace = ''">
           <span class="space-icon">📚</span>
           <span class="space-name">全部</span>
           <span class="space-count">{{ totalAll }}</span>
@@ -275,6 +275,8 @@ const loadSpaces = async () => {
     const res = await http.get('/api/wiki/spaces')
     spaces.value = res.data.spaces || []
     defaultCount.value = res.data.default_count || 0
+    // 「全部」仅管理员可见: 普通用户默认落在「默认空间」, 不停留在跨空间聚合视图
+    if (!isAdmin.value && activeSpace.value === '') activeSpace.value = 'default'
   } catch { /* ignore */ }
 }
 
