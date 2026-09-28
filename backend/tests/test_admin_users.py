@@ -198,3 +198,25 @@ def test_sso_user_groups_readonly(api_client, api_engine, as_user):
     as_user(["__local_admin__"])
     res = api_client.put("/api/admin/users/u-10086/groups", json={"groups": ["产品部"]})
     assert res.status_code == 400
+
+
+def test_group_manage_can_read_users_but_not_write(api_client, api_engine, as_user):
+    """组管理页的成员候选下拉依赖:group.manage 可只读用户列表;用户写端点仍限 user.manage。"""
+    db = get_session(api_engine)
+    try:
+        _user(db, "target")
+    finally:
+        db.close()
+    as_user([], permissions=["group.manage"])
+    assert api_client.get("/api/admin/users?query=target").status_code == 200
+    assert api_client.put(
+        "/api/admin/users/u-target", json={"display_name": "改名"}
+    ).status_code == 403
+    assert api_client.post(
+        "/api/admin/users", json={"username": "new", "password": "Passw0rd!"}
+    ).status_code == 403
+    # 无相关权限 → 403 且 detail 可读
+    as_user([])
+    res = api_client.get("/api/admin/users")
+    assert res.status_code == 403
+    assert "user.manage" in res.json()["detail"]

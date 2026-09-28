@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_db
 from app.core.jwt_utils import get_current_user
 from app.core.rbac_seed import INTERNAL_ADMIN_GROUP
-from app.core.security import parse_permissions, require_permission
+from app.core.security import has_permission, parse_permissions, require_permission
 from app.models.database import Group, Role, User, UserGroup, UserRole
 
 router = APIRouter(prefix="/api/admin", tags=["RBAC 管理"])
@@ -174,7 +174,9 @@ def list_users(
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    require_permission(current_user, "user.manage")
+    # 只读列表放行 group.manage(组管理页挑选本地成员依赖);用户写端点仍限 user.manage
+    if not (has_permission(current_user, "user.manage") or has_permission(current_user, "group.manage")):
+        raise HTTPException(status_code=403, detail="缺少权限: user.manage 或 group.manage")
     page = max(page, 1)
     page_size = min(max(page_size, 1), 100)
     q = db.query(User)

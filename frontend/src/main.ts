@@ -42,6 +42,7 @@ const router = createRouter({
     { path: '/embeddings', component: Embeddings, meta: { perm: PERM.embedding } },
     { path: '/admin/users', component: () => import('./views/admin/AdminUsers.vue'), meta: { perm: PERM.user } },
     { path: '/admin/roles', component: () => import('./views/admin/AdminRoles.vue'), meta: { perm: PERM.role } },
+    { path: '/admin/groups', component: () => import('./views/admin/AdminGroups.vue'), meta: { perm: PERM.group } },
   ]
 })
 
