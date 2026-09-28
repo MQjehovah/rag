@@ -1,82 +1,125 @@
 <template>
   <div class="page">
-    <div class="page-head">
+    <header class="page-head">
       <div>
         <h2>编译管道</h2>
-        <p class="muted">把笔记本里的笔记编译成 wiki 页（知识蒸馏 / 接口文档 / 文档合集 / 变更记录 / 自定义），产出并入「知识库」浏览。</p>
+        <p class="page-sub">把笔记本里的笔记编译成知识库页面：知识蒸馏 / 接口文档 / 文档合集 / 变更记录 / 自定义。</p>
       </div>
-      <el-button type="primary" @click="openCreate">+ 新建管道</el-button>
+      <el-button type="primary" class="btn-new" @click="openCreate">
+        <el-icon><Plus /></el-icon><span>新建管道</span>
+      </el-button>
+    </header>
+
+    <div class="stat-row">
+      <div class="stat-item"><span class="stat-num">{{ pipelines.length }}</span><span class="stat-label">管道</span></div>
+      <div class="stat-item"><span class="stat-num">{{ enabledCount }}</span><span class="stat-label">已启用</span></div>
+      <div class="stat-item"><span class="stat-num">{{ autoCount }}</span><span class="stat-label">自动触发</span></div>
+      <div class="stat-item"><span class="stat-num">{{ runningCount }}</span><span class="stat-label">运行中</span></div>
     </div>
 
-    <div v-if="loading" class="muted">加载中...</div>
-    <el-table v-else :data="pipelines" border size="small">
-      <el-table-column prop="name" label="名称" min-width="160">
-        <template #default="{ row }">
-          <span>{{ row.name }}</span>
-          <el-tag v-if="!row.enabled" size="small" type="info" style="margin-left: 6px">停用</el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column label="编译方式 / 模板" min-width="200">
-        <template #default="{ row }">
-          <el-tag size="small" effect="light">{{ KIND_LABELS[row.compiler_kind] || row.compiler_kind }}</el-tag>
-          <el-tag v-if="row.template_id" size="small" type="info" effect="plain" style="margin-left: 6px">
-            {{ templateName(row.template_id) || '模板' }}
-          </el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column label="来源" min-width="160">
-        <template #default="{ row }">
-          <span v-if="row.scope_type === 'all'">全部笔记本</span>
-          <span v-else-if="row.scope_type === 'group'">本组全部</span>
-          <span v-else>{{ (row.notebook_ids || []).length }} 个笔记本</span>
-          <el-tag v-if="row.incremental" size="small" style="margin-left: 6px">增量</el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column label="目标空间" width="150">
-        <template #default="{ row }">
-          <span>{{ spaceName(row.target_space_id) }}</span>
-          <el-tag v-if="row.auto_trigger" size="small" type="success" style="margin-left: 6px">自动</el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column label="最近状态" width="150">
-        <template #default="{ row }">
-          <el-tag v-if="row.running" size="small" type="warning">运行中</el-tag>
-          <el-tag v-else-if="row.last_status === 'success'" size="small" type="success">成功</el-tag>
-          <el-tag v-else-if="row.last_status === 'failed'" size="small" type="danger">失败</el-tag>
-          <span v-else class="muted">未运行</span>
-        </template>
-      </el-table-column>
-      <el-table-column label="操作" width="360">
-        <template #default="{ row }">
-          <el-dropdown trigger="click" @command="(m: string) => run(row, m as 'incremental' | 'full')">
-            <el-button size="small" type="primary" :loading="row.running" :disabled="!row.enabled">
-              {{ row.running ? '编译中…' : '运行 ▾' }}
-            </el-button>
-            <template #dropdown>
-              <el-dropdown-menu>
-                <el-dropdown-item command="incremental">增量运行</el-dropdown-item>
-                <el-dropdown-item command="full">全量重编</el-dropdown-item>
-              </el-dropdown-menu>
-            </template>
-          </el-dropdown>
-          <el-button size="small" @click="preview(row)">试编译</el-button>
-          <el-button size="small" @click="openOutputs(row)">产出</el-button>
-          <el-button size="small" @click="openRuns(row)">记录</el-button>
-          <el-button size="small" @click="openEdit(row)">编辑</el-button>
-          <el-button size="small" type="danger" plain @click="removePipeline(row)">删除</el-button>
-        </template>
-      </el-table-column>
-      <template #empty>
-        <div class="empty">暂无编译管道，点击右上角「新建管道」创建</div>
-      </template>
-    </el-table>
+    <div class="panel">
+      <div class="panel-head">
+        <div class="panel-title">管道列表</div>
+        <div class="panel-tools">
+          <el-input v-model="q" placeholder="搜索名称或编译方式" clearable class="search">
+            <template #prefix><el-icon><Search /></el-icon></template>
+          </el-input>
+          <el-button :loading="loading" @click="load">刷新</el-button>
+        </div>
+      </div>
 
-    <div v-if="statusText" class="muted" style="font-size: 12px; margin-top: 8px">{{ statusText }}</div>
+      <el-table v-loading="loading" :data="filtered" row-key="id">
+        <el-table-column label="名称" min-width="220">
+          <template #default="{ row }">
+            <div class="cell-line">
+              <span class="cell-title">{{ row.name }}</span>
+              <span v-if="!row.enabled" class="mini-pill off">停用</span>
+            </div>
+            <div v-if="row.description" class="cell-sub">{{ row.description }}</div>
+          </template>
+        </el-table-column>
 
-    <el-dialog v-model="dialog" :title="editing ? '编辑编译管道' : '新建编译管道'" width="640px">
+        <el-table-column label="编译方式" min-width="170">
+          <template #default="{ row }">
+            <div class="cell-title">{{ KIND_LABELS[row.compiler_kind] || row.compiler_kind }}</div>
+            <div v-if="row.template_id" class="cell-sub">模板：{{ templateName(row.template_id) || '—' }}</div>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="来源" min-width="150">
+          <template #default="{ row }">
+            <div class="cell-title">
+              <span v-if="row.scope_type === 'all'">全部笔记本</span>
+              <span v-else-if="row.scope_type === 'group'">本组全部</span>
+              <span v-else>{{ (row.notebook_ids || []).length }} 个笔记本</span>
+            </div>
+            <div v-if="row.incremental" class="cell-sub">增量编译</div>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="目标空间" width="150">
+          <template #default="{ row }">
+            <div class="cell-title">{{ spaceName(row.target_space_id) }}</div>
+            <div v-if="row.auto_trigger" class="cell-sub accent">自动触发</div>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="最近状态" width="128">
+          <template #default="{ row }">
+            <span class="st" :class="statusClass(row)">
+              <i class="status-dot" :class="statusDot(row)" />{{ statusLabel(row) }}
+            </span>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="操作" width="160" align="right">
+          <template #default="{ row }">
+            <div class="row-actions">
+              <el-dropdown trigger="click" @command="(m: string) => run(row, m as 'incremental' | 'full')">
+                <el-button size="small" type="primary" :loading="row.running" :disabled="!row.enabled">
+                  运行<el-icon class="caret"><ArrowDown /></el-icon>
+                </el-button>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item command="incremental">增量运行</el-dropdown-item>
+                    <el-dropdown-item command="full">全量重编</el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
+              <el-dropdown trigger="click" @command="(m: string) => onRowCmd(row, m)">
+                <el-button size="small" class="more"><el-icon><MoreHorizontal /></el-icon></el-button>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item command="preview">试编译</el-dropdown-item>
+                    <el-dropdown-item command="outputs">查看产出</el-dropdown-item>
+                    <el-dropdown-item command="runs">运行记录</el-dropdown-item>
+                    <el-dropdown-item command="edit" divided>编辑</el-dropdown-item>
+                    <el-dropdown-item command="delete">删除</el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
+            </div>
+          </template>
+        </el-table-column>
+
+        <template #empty>
+          <div class="empty-state">
+            <div class="empty-title">暂无编译管道</div>
+            <div class="empty-sub">点击右上角「新建管道」创建第一条管道</div>
+          </div>
+        </template>
+      </el-table>
+    </div>
+
+    <div v-if="runBanner" class="run-banner">
+      <i class="status-dot run" /><span>{{ runBanner }}</span>
+    </div>
+
+    <!-- 新建 / 编辑 -->
+    <el-dialog v-model="dialog" :title="editing ? '编辑编译管道' : '新建编译管道'" width="640px" top="6vh">
       <el-form label-width="110px">
         <el-form-item label="名称">
-          <el-input v-model="form.name" placeholder="如：Qwen接口文档" />
+          <el-input v-model="form.name" placeholder="如：Qwen 接口文档" />
         </el-form-item>
         <el-form-item label="说明">
           <el-input v-model="form.description" placeholder="可选" />
@@ -87,7 +130,7 @@
           </el-select>
         </el-form-item>
         <el-form-item label="编译模板">
-          <div style="display: flex; gap: 8px; width: 100%">
+          <div class="row-flex">
             <el-select
               v-model="form.template_id"
               clearable
@@ -99,7 +142,7 @@
             </el-select>
             <el-button @click="router.push('/templates')">管理模板</el-button>
           </div>
-          <div class="muted" style="font-size: 12px">选择模板后，其「提示词/规则/输出模板」作为缺省；下方留空的字段将采用模板值。</div>
+          <div class="field-hint">选择模板后，其「提示词 / 规则 / 输出模板」作为缺省；下方留空的字段将采用模板值。</div>
         </el-form-item>
         <el-form-item label="来源范围">
           <el-radio-group v-model="form.scope_type">
@@ -118,7 +161,7 @@
             v-model="form.prompt_template"
             type="textarea"
             :rows="3"
-            :placeholder="defaultPrompt(form.compiler_kind) || '留空=内置角色与目标'"
+            :placeholder="defaultPrompt(form.compiler_kind) || '留空 = 使用内置角色与目标'"
           />
         </el-form-item>
         <el-form-item label="规则">
@@ -126,7 +169,7 @@
             v-model="form.compile_rules"
             type="textarea"
             :rows="5"
-            :placeholder="compileRules || '留空=仅用内置通用规则'"
+            :placeholder="compileRules || '留空 = 仅用内置通用规则'"
           />
         </el-form-item>
         <el-form-item label="输出模板">
@@ -135,11 +178,11 @@
               v-model="form.compile_template"
               type="textarea"
               :rows="7"
-              :placeholder="defaultTemplate(form.compiler_kind) || '留空=按内容合理分节'"
+              :placeholder="defaultTemplate(form.compiler_kind) || '留空 = 按内容合理分节'"
             />
-            <div class="muted" style="font-size: 12px; margin-top: 4px; line-height: 1.6">
-              三段：<b>提示词</b>（角色+目标）、<b>规则</b>（约束 LLM 的编译行为，会追加在内置通用规则之后）、
-              <b>输出模板</b>（页面正文结构骨架）。均留空=用内置；系统固定追加「JSON 输出协议 + parent 规则」。
+            <div class="field-hint">
+              三段：<b>提示词</b>（角色+目标）、<b>规则</b>（追加在内置通用规则之后）、<b>输出模板</b>（正文结构骨架）。
+              均留空 = 用内置；系统固定追加「JSON 输出协议 + parent 规则」。
               <el-button link type="primary" size="small" @click="fillDefaultRule">填入内置</el-button>
               <el-button link size="small" @click="clearRule">清空</el-button>
             </div>
@@ -149,18 +192,18 @@
           <el-select v-model="form.target_space_id" clearable placeholder="默认空间" style="width: 100%">
             <el-option v-for="s in spaces" :key="s.id" :label="s.name" :value="s.id" />
           </el-select>
-          <div class="muted" style="font-size: 12px">留空=默认空间；产物按知识结构生成在该空间内（层级由 LLM 按管道指令决定）。</div>
+          <div class="field-hint">留空 = 默认空间；产物按知识结构生成在该空间内（层级由 LLM 按管道指令决定）。</div>
         </el-form-item>
         <el-form-item label="产出分类">
           <el-input v-model="form.target_category" placeholder="可选：写入知识库的分类标签，如：接口文档" />
         </el-form-item>
         <el-form-item label="自动编译">
           <el-switch v-model="form.auto_trigger" />
-          <span class="muted" style="margin-left: 8px; font-size: 12px">笔记变更时自动逐条编译（按笔记限流）</span>
+          <span class="field-hint inline">笔记变更时自动逐条编译（按笔记限流）</span>
         </el-form-item>
         <el-form-item label="增量编译">
           <el-switch v-model="form.incremental" />
-          <span class="muted" style="margin-left: 8px; font-size: 12px">仅编译自上次成功运行后有更新的笔记</span>
+          <span class="field-hint inline">仅编译自上次成功运行后有更新的笔记</span>
         </el-form-item>
         <el-form-item label="启用">
           <el-switch v-model="form.enabled" />
@@ -172,43 +215,46 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="previewDialog" title="试编译预览" width="760px">
-      <div v-if="previewLoading" class="muted">编译中（可能需数秒）...</div>
+    <!-- 试编译 -->
+    <el-dialog v-model="previewDialog" title="试编译预览" width="760px" top="6vh">
+      <div v-if="previewLoading" class="hint">编译中（可能需数秒）…</div>
       <template v-else>
-        <div v-if="previewError" class="muted" style="color: #f56c6c">{{ previewError }}</div>
+        <div v-if="previewError" class="err">{{ previewError }}</div>
         <template v-else>
-          <div class="muted" style="font-size: 12px; margin-bottom: 6px">来源笔记本：{{ previewNotebook }}</div>
+          <div class="field-hint">来源笔记本：{{ previewNotebook }}</div>
           <div v-if="previewPlan.length" class="plan">
-            <div class="plan-head">拟定产出（新建/更新哪些页面、标题与父级）</div>
+            <div class="plan-head">拟定产出（新建 / 更新哪些页面）</div>
             <div v-for="(o, i) in previewPlan" :key="i" class="plan-row">
-              <el-tag size="small" :type="o.action === 'create' ? 'success' : 'warning'">
+              <span class="act" :class="o.action === 'create' ? 'create' : 'update'">
                 {{ o.action === 'create' ? '新建' : '更新' }}
-              </el-tag>
+              </span>
               <span class="plan-title">{{ o.title }}</span>
-              <span v-if="o.parent" class="muted plan-parent">父级：{{ o.parent }}</span>
+              <span v-if="o.parent" class="plan-parent">父级：{{ o.parent }}</span>
             </div>
           </div>
-          <div class="muted" style="font-size: 12px; margin: 8px 0 4px">首个页面正文预览：</div>
+          <div class="field-hint" style="margin: 10px 0 4px">首个页面正文预览</div>
           <pre class="md-preview">{{ previewContent }}</pre>
         </template>
       </template>
     </el-dialog>
 
-    <el-dialog v-model="runsDialog" title="运行记录" width="720px">
-      <el-table :data="runs" size="small" border>
+    <!-- 运行记录 -->
+    <el-dialog v-model="runsDialog" title="运行记录" width="720px" top="8vh">
+      <el-table :data="runs">
         <el-table-column prop="status" label="状态" width="90" />
-        <el-table-column label="进度" width="110">
+        <el-table-column label="进度" width="130">
           <template #default="{ row }">{{ row.processed }}/{{ row.total }}（变更 {{ row.changed }}）</template>
         </el-table-column>
         <el-table-column prop="message" label="说明" min-width="220" show-overflow-tooltip />
-        <el-table-column prop="started_at" label="开始" width="170" />
-        <el-table-column prop="finished_at" label="结束" width="170" />
+        <el-table-column prop="started_at" label="开始" width="165" />
+        <el-table-column prop="finished_at" label="结束" width="165" />
       </el-table>
     </el-dialog>
 
-    <el-dialog v-model="outputsDialog" title="编译产出（知识库页）" width="720px">
-      <div v-if="outputs.length === 0" class="muted">暂无产出</div>
-      <el-table v-else :data="outputs" size="small" border>
+    <!-- 产出 -->
+    <el-dialog v-model="outputsDialog" title="编译产出（知识库页面）" width="720px" top="8vh">
+      <div v-if="outputs.length === 0" class="hint" style="padding: 32px">暂无产出</div>
+      <el-table v-else :data="outputs">
         <el-table-column label="标题" min-width="220">
           <template #default="{ row }">
             <router-link class="link" :to="`/wiki/${row.id}`">{{ row.title }}</router-link>
@@ -222,9 +268,10 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, onUnmounted, reactive, ref } from 'vue'
+import { onMounted, onUnmounted, reactive, ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { Plus, Search, MoreHorizontal, ArrowDown } from 'lucide-vue-next'
 import http from '../api/http'
 
 const router = useRouter()
@@ -267,10 +314,11 @@ const compileTemplates = ref<Record<string, { prompt: string; template: string }
 const compileRules = ref('')
 const templateLib = ref<{ id: string; name: string; compiler_kind: string }[]>([])
 const loading = ref(false)
+const q = ref('')
 const dialog = ref(false)
 const saving = ref(false)
 const editing = ref<Pipeline | null>(null)
-const statusText = ref('')
+const runBanner = ref('')
 const form = reactive({
   name: '',
   description: '',
@@ -302,6 +350,45 @@ const outputsDialog = ref(false)
 const outputs = ref<any[]>([])
 
 let timer: ReturnType<typeof setInterval> | undefined
+
+const enabledCount = computed(() => pipelines.value.filter(p => p.enabled).length)
+const autoCount = computed(() => pipelines.value.filter(p => p.auto_trigger).length)
+const runningCount = computed(() => pipelines.value.filter(p => p.running).length)
+const filtered = computed(() => {
+  const s = q.value.trim().toLowerCase()
+  if (!s) return pipelines.value
+  return pipelines.value.filter(p =>
+    p.name.toLowerCase().includes(s) ||
+    (KIND_LABELS[p.compiler_kind] || p.compiler_kind).toLowerCase().includes(s)
+  )
+})
+
+function statusLabel(p: Pipeline) {
+  if (p.running) return '运行中'
+  if (p.last_status === 'success') return '成功'
+  if (p.last_status === 'failed') return '失败'
+  return '未运行'
+}
+function statusClass(p: Pipeline) {
+  if (p.running) return 'run'
+  if (p.last_status === 'success') return 'ok'
+  if (p.last_status === 'failed') return 'err'
+  return 'idle'
+}
+function statusDot(p: Pipeline) {
+  if (p.running) return 'run'
+  if (p.last_status === 'success') return 'ok'
+  if (p.last_status === 'failed') return 'err'
+  return 'off'
+}
+
+function onRowCmd(p: Pipeline, cmd: string) {
+  if (cmd === 'preview') preview(p)
+  else if (cmd === 'outputs') openOutputs(p)
+  else if (cmd === 'runs') openRuns(p)
+  else if (cmd === 'edit') openEdit(p)
+  else if (cmd === 'delete') removePipeline(p)
+}
 
 async function load() {
   loading.value = true
@@ -535,7 +622,7 @@ async function refreshRunning() {
       /* ignore */
     }
   }
-  statusText.value = parts.join('；')
+  runBanner.value = parts.join('；')
   await load()
 }
 
@@ -553,25 +640,101 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-.page { padding: 28px 40px 60px; height: 100%; overflow: auto; max-width: 1100px; margin: 0 auto; }
-.page-head { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 18px; gap: 12px; }
-.page-head h2 { margin: 0 0 4px; font-size: 24px; font-weight: 700; color: var(--text); }
-.muted { color: var(--text-3); }
-.empty { color: var(--text-3); padding: 32px; text-align: center; font-size: 13px; }
-.link { color: #409eff; text-decoration: none; }
-.md-preview {
-  max-height: 60vh; overflow: auto; background: var(--surface-2); padding: 12px;
-  border-radius: 8px; font-size: 12px; white-space: pre-wrap; word-break: break-word;
+.page { padding: 32px 40px 64px; height: 100%; overflow: auto; max-width: 1180px; margin: 0 auto; }
+
+.page-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 16px;
+  padding-bottom: 18px;
+  margin-bottom: 20px;
+  border-bottom: 1px solid var(--border);
 }
-.plan {
+.page-head h2 { margin: 0; font-size: 20px; font-weight: 650; letter-spacing: -0.01em; color: var(--text); }
+.page-sub { margin: 5px 0 0; font-size: 13px; color: var(--text-3); }
+.btn-new { display: inline-flex; align-items: center; gap: 6px; }
+
+.stat-row { margin-bottom: 18px; }
+
+.panel-title { font-size: 14px; font-weight: 600; color: var(--text); }
+.panel-tools { display: flex; align-items: center; gap: 10px; }
+.search :deep(.el-input__wrapper) { box-shadow: 0 0 0 1px var(--border) inset; }
+
+.cell-line { display: flex; align-items: center; gap: 8px; }
+.cell-title { font-size: 13.5px; font-weight: 550; color: var(--text); }
+.cell-sub { font-size: 12px; color: var(--text-3); margin-top: 3px; }
+.cell-sub.accent { color: var(--primary); }
+
+.mini-pill {
+  font-size: 11px;
+  font-weight: 500;
+  padding: 1px 7px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.mini-pill.off { color: var(--text-3); background: var(--surface-2); }
+
+.st { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 500; }
+.st.ok { color: var(--success); }
+.st.err { color: var(--danger); }
+.st.run { color: var(--warning); }
+.st.idle { color: var(--text-3); }
+
+.row-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.more { padding: 5px 8px; }
+.caret { margin-left: 3px; }
+
+.run-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+  padding: 10px 14px;
+  font-size: 12.5px;
+  color: var(--text-2);
+  background: var(--surface-2);
   border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 8px 10px;
-  max-height: 200px;
-  overflow: auto;
+  border-radius: var(--radius);
 }
-.plan-head { font-size: 12px; color: var(--text-3); margin-bottom: 6px; }
-.plan-row { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
-.plan-title { font-weight: 500; color: var(--text); }
-.plan-parent { font-size: 12px; }
+
+.empty-state { padding: 36px 0; }
+.empty-title { font-size: 14px; font-weight: 600; color: var(--text-2); }
+.empty-sub { font-size: 12.5px; color: var(--text-3); margin-top: 6px; }
+
+.row-flex { display: flex; gap: 8px; width: 100%; }
+.field-hint { font-size: 12px; color: var(--text-3); line-height: 1.6; margin-top: 4px; }
+.field-hint.inline { margin: 0 0 0 10px; }
+.err { color: var(--danger); font-size: 13px; }
+.hint { color: var(--text-3); font-size: 13px; padding: 8px 0; }
+.link { color: var(--primary); text-decoration: none; }
+.link:hover { text-decoration: underline; }
+
+.md-preview {
+  max-height: 55vh;
+  overflow: auto;
+  background: var(--surface-2);
+  padding: 14px;
+  border-radius: var(--radius);
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.plan { border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; max-height: 200px; overflow: auto; }
+.plan-head { font-size: 12px; color: var(--text-3); margin-bottom: 8px; }
+.plan-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
+.act {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 999px;
+  flex: 0 0 auto;
+}
+.act.create { color: var(--success); background: color-mix(in srgb, var(--success) 12%, transparent); }
+.act.update { color: var(--warning); background: color-mix(in srgb, var(--warning) 16%, transparent); }
+.plan-title { font-weight: 500; color: var(--text); font-size: 13px; }
+.plan-parent { font-size: 12px; color: var(--text-3); }
 </style>

@@ -1,70 +1,103 @@
 <template>
   <div class="sources-page">
-    <div class="page-head">
+    <header class="page-head">
       <div>
         <h2>数据源</h2>
-        <p class="muted">企业系统作为插件接入：拉取原始内容 → LLM 形成笔记 → 编译进知识库。</p>
+        <p class="page-sub">企业系统作为插件接入：拉取原始内容 → 形成笔记 → 编译进知识库。</p>
       </div>
-      <el-button size="small" :loading="loading" @click="load">刷新</el-button>
-    </div>
+      <div class="head-right">
+        <div class="stat-row">
+          <div class="stat-item"><span class="stat-num">{{ sources.length }}</span><span class="stat-label">已接入</span></div>
+          <div class="stat-item"><span class="stat-num">{{ enabledCount }}</span><span class="stat-label">已启用</span></div>
+          <div class="stat-item"><span class="stat-num">{{ runningCount }}</span><span class="stat-label">同步中</span></div>
+        </div>
+        <el-button class="btn-refresh" :loading="loading" @click="load">
+          <el-icon><RefreshCw /></el-icon><span>刷新</span>
+        </el-button>
+      </div>
+    </header>
 
-    <div v-if="loading && !sources.length" class="muted">加载中...</div>
-    <div v-else-if="!sources.length" class="empty">暂无已接入的数据源</div>
+    <div v-if="loading && !sources.length" class="hint">正在加载数据源…</div>
+    <div v-else-if="!sources.length" class="hint">暂无已接入的数据源</div>
 
-    <div v-else class="source-list">
-      <div v-for="s in sources" :key="s.key" class="source-card">
-        <div class="source-icon">{{ ICONS[s.key] || '🔌' }}</div>
-        <div class="source-main">
-          <div class="source-card-head">
-            <div class="source-title">
-              <span class="source-name">{{ s.name }}</span>
-              <el-tag :type="s.enabled ? 'success' : 'info'" size="small" effect="light">
-                {{ s.enabled ? '已启用' : '未启用' }}
-              </el-tag>
-            </div>
-            <div class="source-actions">
-              <el-button size="small" :loading="testing === s.key" @click="testSource(s)">测试连接</el-button>
-              <el-select v-if="s.key === 'jira'" v-model="syncScope" size="small" style="width: 170px">
-                <el-option v-for="o in scopeOptions" :key="o.value" :label="o.label" :value="o.value" />
-              </el-select>
-              <el-button
-                size="small"
-                type="primary"
-                :disabled="!s.enabled || s.status?.running"
-                :loading="s.status?.running"
-                @click="syncSource(s)"
-              >{{ s.status?.running ? '同步中...' : '立即同步' }}</el-button>
-              <el-button v-if="s.status?.running" size="small" type="danger" plain @click="cancelSync(s)">取消</el-button>
-            </div>
+    <div v-else class="grid">
+      <article v-for="s in sources" :key="s.key" class="src">
+        <div class="src-top">
+          <div class="tile" :style="tileStyle(s.key)">
+            <el-icon :size="18"><component :is="asset(s.key).icon" /></el-icon>
           </div>
-          <div class="source-desc">{{ s.description }}</div>
-          <div class="source-config">配置：{{ s.config || '-' }}</div>
-          <div v-if="s.status && s.status.message" class="source-status">
-            {{ s.status.message }}
+          <div class="src-id">
+            <div class="src-name">{{ s.name }}</div>
+            <div class="src-key">{{ s.key }}</div>
+          </div>
+          <span class="pill" :class="s.enabled ? 'on' : 'off'">
+            <i class="status-dot" :class="s.enabled ? 'ok' : 'off'" />{{ s.enabled ? '已启用' : '未启用' }}
+          </span>
+        </div>
+
+        <p class="src-desc">{{ s.description }}</p>
+
+        <div class="meta">
+          <span class="meta-k">配置</span>
+          <span class="meta-v" :title="s.config">{{ s.config || '—' }}</span>
+        </div>
+
+        <div v-if="s.status && s.status.message" class="src-status" :class="{ run: s.status.running }">
+          <div class="status-line">
+            <i class="status-dot" :class="s.status.running ? 'run' : (s.enabled ? 'ok' : 'off')" />
+            <span class="status-msg">{{ s.status.message }}</span>
+          </div>
+          <template v-if="s.status.running && s.status.total > 0">
             <el-progress
-              v-if="s.status.running && s.status.total > 0"
               :percentage="Math.round(s.status.processed / s.status.total * 100)"
-              :format="() => `${s.status.processed}/${s.status.total}`"
-              style="margin-top: 6px"
+              :stroke-width="5"
+              :show-text="false"
+              style="margin-top: 10px"
             />
+            <div class="prog-txt">{{ s.status.processed }} / {{ s.status.total }}</div>
+          </template>
+        </div>
+
+        <div class="src-foot">
+          <el-button link class="btn-test" :loading="testing === s.key" @click="testSource(s)">测试连接</el-button>
+          <div class="foot-right">
+            <el-select v-if="s.key === 'jira'" v-model="syncScope" size="small" style="width: 158px">
+              <el-option v-for="o in scopeOptions" :key="o.value" :label="o.label" :value="o.value" />
+            </el-select>
+            <el-button v-if="s.status?.running" size="small" @click="cancelSync(s)">取消</el-button>
+            <el-button
+              size="small"
+              type="primary"
+              :disabled="!s.enabled || s.status?.running"
+              :loading="s.status?.running"
+              @click="syncSource(s)"
+            >{{ s.status?.running ? '同步中' : '立即同步' }}</el-button>
           </div>
         </div>
-      </div>
+      </article>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage } from 'element-plus'
+import {
+  RefreshCw, Plug, Layers, MessageSquare, GitMerge, Gitlab, BookOpen,
+} from 'lucide-vue-next'
 import http from '../api/http'
 
-const ICONS: Record<string, string> = {
-  jira: '🧩',
-  dingtalk: '💬',
-  gerrit: '🔀',
-  gitlab: '🦊',
-  confluence: '📚',
+const ASSETS: Record<string, { icon: any; color: string }> = {
+  jira: { icon: Layers, color: '#2684ff' },
+  dingtalk: { icon: MessageSquare, color: '#3296fa' },
+  gerrit: { icon: GitMerge, color: '#0ea5e9' },
+  gitlab: { icon: Gitlab, color: '#fc6d26' },
+  confluence: { icon: BookOpen, color: '#1868db' },
+}
+const asset = (key: string) => ASSETS[key] || { icon: Plug, color: '#64748b' }
+const tileStyle = (key: string) => {
+  const c = asset(key).color
+  return { color: c, background: c + '1a', borderColor: c + '33' }
 }
 
 const sources = ref<any[]>([])
@@ -78,6 +111,9 @@ const scopeOptions = [
   { value: '90', label: '回填最近 90 天' },
 ]
 let timer: number | null = null
+
+const enabledCount = computed(() => sources.value.filter(s => s.enabled).length)
+const runningCount = computed(() => sources.value.filter(s => s.status?.running).length)
 
 const load = async () => {
   loading.value = true
@@ -154,60 +190,119 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .sources-page {
-  padding: 28px 40px 60px;
-  max-width: 1040px;
+  padding: 32px 40px 64px;
+  max-width: 1180px;
   margin: 0 auto;
   height: 100%;
   overflow-y: auto;
 }
-.page-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 18px; }
-.page-head h2 { font-size: 24px; font-weight: 700; color: var(--text); margin: 0 0 4px; }
-.muted { color: var(--text-3); font-size: 13px; }
-.empty { color: var(--text-3); padding: 40px; text-align: center; }
-.source-list { display: flex; flex-direction: column; gap: 14px; }
-.source-card {
+
+/* ---- 页头 ---- */
+.page-head {
   display: flex;
-  gap: 14px;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 16px;
+  padding-bottom: 18px;
+  margin-bottom: 22px;
+  border-bottom: 1px solid var(--border);
+}
+.page-head h2 { margin: 0; font-size: 20px; font-weight: 650; letter-spacing: -0.01em; color: var(--text); }
+.page-sub { margin: 5px 0 0; font-size: 13px; color: var(--text-3); }
+.head-right { display: flex; align-items: center; gap: 24px; }
+.btn-refresh { display: inline-flex; align-items: center; gap: 6px; }
+
+.hint { color: var(--text-3); padding: 48px; text-align: center; font-size: 13px; }
+
+/* ---- 卡片栅格 ---- */
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  gap: 16px;
+}
+.src {
+  display: flex;
+  flex-direction: column;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  padding: 16px 18px;
+  padding: 18px;
   box-shadow: var(--shadow-sm);
-  transition: box-shadow 0.15s, border-color 0.15s;
+  transition: border-color 0.15s, box-shadow 0.15s, transform 0.15s;
 }
-.source-card:hover { border-color: var(--border-strong); box-shadow: var(--shadow); }
-.source-icon {
-  width: 40px;
-  height: 40px;
+.src:hover { border-color: var(--border-strong); box-shadow: var(--shadow); transform: translateY(-1px); }
+
+.src-top { display: flex; align-items: flex-start; gap: 12px; }
+.tile {
+  width: 38px;
+  height: 38px;
   flex: 0 0 auto;
   border-radius: 10px;
-  background: var(--surface-2);
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 20px;
+  border: 1px solid transparent;
 }
-.source-main { flex: 1; min-width: 0; }
-.source-card-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
-.source-title { display: flex; align-items: center; gap: 8px; }
-.source-name { font-size: 15px; font-weight: 600; color: var(--text); }
-.source-desc { font-size: 12px; color: var(--text-3); margin-top: 4px; }
-.source-config {
+.src-id { flex: 1; min-width: 0; }
+.src-name { font-size: 14.5px; font-weight: 600; color: var(--text); line-height: 1.3; }
+.src-key { font-size: 11.5px; color: var(--text-3); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; margin-top: 1px; }
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   font-size: 12px;
-  color: var(--text-2);
-  margin-top: 8px;
+  font-weight: 500;
+  padding: 3px 9px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.pill.on { color: var(--success); background: color-mix(in srgb, var(--success) 12%, transparent); }
+.pill.off { color: var(--text-3); background: var(--surface-2); }
+
+.src-desc { font-size: 13px; color: var(--text-2); line-height: 1.6; margin: 14px 0 0; }
+
+.meta {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  margin-top: 12px;
+  padding: 8px 11px;
   background: var(--surface-2);
-  border-radius: 6px;
-  padding: 5px 10px;
-  display: inline-block;
-}
-.source-status {
+  border-radius: var(--radius);
   font-size: 12px;
-  color: var(--text-2);
-  background: var(--primary-weak);
-  border-radius: 8px;
-  padding: 8px 12px;
-  margin-top: 10px;
 }
-.source-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.meta-k { color: var(--text-3); flex: 0 0 auto; }
+.meta-v {
+  color: var(--text-2);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.src-status {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+.src-status.run { background: var(--primary-weak); border-color: transparent; }
+.status-line { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--text-2); }
+.status-msg { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.prog-txt { font-size: 11.5px; color: var(--text-3); margin-top: 4px; text-align: right; }
+
+.src-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: auto;
+  padding-top: 14px;
+  margin-top: 16px;
+  border-top: 1px solid var(--border);
+}
+.btn-test { font-size: 13px; color: var(--text-2); }
+.foot-right { display: flex; align-items: center; gap: 8px; }
 </style>
