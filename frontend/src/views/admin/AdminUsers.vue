@@ -36,7 +36,10 @@
         <el-table v-loading="loading" :data="users" row-key="id">
           <el-table-column label="用户名" min-width="150">
             <template #default="{ row }">
-              <span class="cell-title">{{ row.username }}</span>
+              <div class="cell-line">
+                <span class="cell-title">{{ row.username }}</span>
+                <el-tag v-if="row.id === myId" size="small" effect="plain" type="info">我</el-tag>
+              </div>
             </template>
           </el-table-column>
 
@@ -72,10 +75,10 @@
                 </el-tag>
                 <el-tooltip
                   v-if="row.is_marked_admin"
-                  content="来自统一认证, 不可在本地移除"
+                  content="由系统标记/认证来源决定，不随角色分配移除"
                   placement="top"
                 >
-                  <el-tag size="small" effect="plain" type="warning" class="tag">SSO 管理员</el-tag>
+                  <el-tag size="small" effect="plain" type="warning" class="tag">内部管理员</el-tag>
                 </el-tooltip>
                 <span v-if="!row.roles.length && !row.is_marked_admin" class="muted">—</span>
               </div>
@@ -98,21 +101,39 @@
           <el-table-column label="操作" width="330" align="right">
             <template #default="{ row }">
               <div class="row-actions">
-                <el-button size="small" :disabled="saving" @click="openEdit(row)">编辑</el-button>
-                <el-button size="small" :disabled="saving" @click="toggleActive(row)">
+                <el-tooltip content="资料由统一认证同步维护" :disabled="row.is_local" placement="top">
+                  <span class="tt">
+                    <el-button size="small" :disabled="!row.is_local || isRowBusy(row.id)" @click="openEdit(row)">
+                      编辑
+                    </el-button>
+                  </span>
+                </el-tooltip>
+                <el-button
+                  size="small"
+                  :loading="isSaving('toggle:' + row.id)"
+                  :disabled="isRowBusy(row.id)"
+                  @click="toggleActive(row)"
+                >
                   {{ row.is_active ? '禁用' : '启用' }}
                 </el-button>
                 <el-tooltip content="仅本地账号可重置密码" :disabled="row.is_local" placement="top">
                   <span class="tt">
-                    <el-button size="small" :disabled="saving || !row.is_local" @click="resetPassword(row)">
+                    <el-button
+                      size="small"
+                      :loading="isSaving('pwd:' + row.id)"
+                      :disabled="!row.is_local || isRowBusy(row.id)"
+                      @click="resetPassword(row)"
+                    >
                       重置密码
                     </el-button>
                   </span>
                 </el-tooltip>
-                <el-button size="small" :disabled="saving" @click="openRoles(row)">角色</el-button>
+                <el-button size="small" :disabled="isRowBusy(row.id)" @click="openRoles(row)">角色</el-button>
                 <el-tooltip content="由登录同步维护" :disabled="row.is_local" placement="top">
                   <span class="tt">
-                    <el-button size="small" :disabled="saving || !row.is_local" @click="openGroups(row)">组</el-button>
+                    <el-button size="small" :disabled="!row.is_local || isRowBusy(row.id)" @click="openGroups(row)">
+                      组
+                    </el-button>
                   </span>
                 </el-tooltip>
               </div>
@@ -178,7 +199,7 @@
             <el-option v-for="r in roleOptions" :key="r.name" :label="r.display_name" :value="r.name" />
           </el-select>
           <div v-if="rolesError" class="field-hint">
-            角色目录加载失败，请确认拥有 role.manage 权限
+            加载失败，请检查网络后重试
             <el-button link size="small" @click="loadOptions">重试</el-button>
           </div>
         </el-form-item>
@@ -195,7 +216,7 @@
             <el-option v-for="g in groupOptions" :key="g.name" :label="g.name" :value="g.name" />
           </el-select>
           <div v-if="groupsError" class="field-hint">
-            组目录加载失败，请确认拥有 group.manage 权限
+            加载失败，请检查网络后重试
             <el-button link size="small" @click="loadOptions">重试</el-button>
           </div>
           <div v-else class="field-hint">组用于控制资源可见范围；SSO/LDAP 用户的组由登录同步维护，本地账号可自由调整。</div>
@@ -203,7 +224,12 @@
       </el-form>
       <template #footer>
         <el-button @click="createOpen = false">取消</el-button>
-        <el-button type="primary" :loading="saving" :disabled="saving" @click="saveCreate">创建</el-button>
+        <el-button
+          type="primary"
+          :loading="isSaving('create')"
+          :disabled="savingKey !== null"
+          @click="saveCreate"
+        >创建</el-button>
       </template>
     </el-dialog>
 
@@ -222,7 +248,12 @@
       </el-form>
       <template #footer>
         <el-button @click="editOpen = false">取消</el-button>
-        <el-button type="primary" :loading="saving" :disabled="saving" @click="saveEdit">保存</el-button>
+        <el-button
+          type="primary"
+          :loading="isSaving('edit:' + (editTarget?.id || ''))"
+          :disabled="savingKey !== null"
+          @click="saveEdit"
+        >保存</el-button>
       </template>
     </el-dialog>
 
@@ -241,14 +272,19 @@
         <el-option v-for="r in roleOptions" :key="r.name" :label="r.display_name" :value="r.name" />
       </el-select>
       <div v-if="rolesError" class="field-hint">
-        角色目录加载失败，请确认拥有 role.manage 权限
+        加载失败，请检查网络后重试
         <el-button link size="small" @click="loadOptions">重试</el-button>
       </div>
       <div v-else class="field-hint">保存后按所选角色全量替换，留空表示不赋予任何角色。</div>
-      <div class="field-hint">SSO 管理员标记由认证源决定，不受此处影响。</div>
+      <div class="field-hint">内部管理员标记由系统标记/认证来源决定，不随角色分配移除。</div>
       <template #footer>
         <el-button @click="rolesOpen = false">取消</el-button>
-        <el-button type="primary" :loading="saving" :disabled="saving" @click="saveRoles">保存</el-button>
+        <el-button
+          type="primary"
+          :loading="isSaving('roles:' + (rolesTarget?.id || ''))"
+          :disabled="savingKey !== null"
+          @click="saveRoles"
+        >保存</el-button>
       </template>
     </el-dialog>
 
@@ -267,23 +303,30 @@
         <el-option v-for="g in groupOptions" :key="g.name" :label="g.name" :value="g.name" />
       </el-select>
       <div v-if="groupsError" class="field-hint">
-        组目录加载失败，请确认拥有 group.manage 权限
+        加载失败，请检查网络后重试
         <el-button link size="small" @click="loadOptions">重试</el-button>
       </div>
       <div v-else class="field-hint">保存后按所选组全量替换（内部管理员标记不受影响）。</div>
       <template #footer>
         <el-button @click="groupsOpen = false">取消</el-button>
-        <el-button type="primary" :loading="saving" :disabled="saving" @click="saveGroups">保存</el-button>
+        <el-button
+          type="primary"
+          :loading="isSaving('groups:' + (groupsTarget?.id || ''))"
+          :disabled="savingKey !== null"
+          @click="saveGroups"
+        >保存</el-button>
       </template>
     </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Search } from 'lucide-vue-next'
 import http from '../../api/http'
+import { useAuthStore } from '../../stores/auth'
+import { errText } from '../../utils/error'
 
 interface RoleBrief {
   name: string
@@ -308,6 +351,9 @@ interface GroupOption {
   name: string
 }
 
+const auth = useAuthStore()
+const myId = computed(() => auth.user?.id || '')
+
 const users = ref<UserRow[]>([])
 const total = ref(0)
 const page = ref(1)
@@ -317,7 +363,7 @@ const activeQuery = ref('')
 const loading = ref(false)
 const loadError = ref(false)
 const loadedOnce = ref(false)
-const saving = ref(false)
+const savingKey = ref<string | null>(null)
 
 const roleOptions = ref<RoleOption[]>([])
 const groupOptions = ref<GroupOption[]>([])
@@ -347,9 +393,16 @@ const groupsTarget = ref<UserRow | null>(null)
 const groupsForm = ref<string[]>([])
 
 let reqSeq = 0
+let optionsSeq = 0
 
-function errText(e: any, fallback = '操作失败'): string {
-  return e?.response?.data?.detail || fallback
+/** 全局进行中的写操作键(create / edit:<id> / toggle:<id> / pwd:<id> / roles:<id> / groups:<id>) */
+function isSaving(key: string): boolean {
+  return savingKey.value === key
+}
+
+/** 该行是否有写操作进行中:行内其余按钮一并禁用,但不影响其他行 */
+function isRowBusy(id: string): boolean {
+  return savingKey.value !== null && savingKey.value.endsWith(`:${id}`)
 }
 
 function visibleGroups(u: UserRow): string[] {
@@ -393,12 +446,14 @@ function search() {
 }
 
 async function loadOptions() {
+  const seq = ++optionsSeq
   rolesError.value = false
   groupsError.value = false
   const [r, g] = await Promise.allSettled([
     http.get('/api/admin/roles'),
     http.get('/api/admin/groups'),
   ])
+  if (seq !== optionsSeq) return
   if (r.status === 'fulfilled') {
     roleOptions.value = r.value.data.items || []
   } else {
@@ -433,7 +488,7 @@ async function saveCreate() {
     ElMessage.warning('请填写密码')
     return
   }
-  saving.value = true
+  savingKey.value = 'create'
   try {
     await http.post('/api/admin/users', {
       username,
@@ -449,11 +504,12 @@ async function saveCreate() {
   } catch (e: any) {
     ElMessage.error(errText(e))
   } finally {
-    saving.value = false
+    savingKey.value = null
   }
 }
 
 function openEdit(u: UserRow) {
+  if (!u.is_local) return
   editTarget.value = u
   editForm.display_name = u.display_name
   editForm.email = u.email
@@ -462,7 +518,7 @@ function openEdit(u: UserRow) {
 
 async function saveEdit() {
   if (!editTarget.value) return
-  saving.value = true
+  savingKey.value = `edit:${editTarget.value.id}`
   try {
     await http.put(`/api/admin/users/${editTarget.value.id}`, {
       display_name: editForm.display_name.trim(),
@@ -474,12 +530,23 @@ async function saveEdit() {
   } catch (e: any) {
     ElMessage.error(errText(e))
   } finally {
-    saving.value = false
+    savingKey.value = null
   }
 }
 
 async function toggleActive(u: UserRow) {
-  saving.value = true
+  if (u.is_active) {
+    try {
+      await ElMessageBox.confirm(
+        `确认禁用用户「${u.username}」？禁用后该用户将无法登录，已登录会话也会失效。`,
+        '确认',
+        { type: 'warning' }
+      )
+    } catch {
+      return
+    }
+  }
+  savingKey.value = `toggle:${u.id}`
   try {
     await http.put(`/api/admin/users/${u.id}`, { is_active: !u.is_active })
     ElMessage.success(u.is_active ? '已禁用' : '已启用')
@@ -487,7 +554,7 @@ async function toggleActive(u: UserRow) {
   } catch (e: any) {
     ElMessage.error(errText(e))
   } finally {
-    saving.value = false
+    savingKey.value = null
   }
 }
 
@@ -505,7 +572,7 @@ async function resetPassword(u: UserRow) {
   } catch {
     return
   }
-  saving.value = true
+  savingKey.value = `pwd:${u.id}`
   try {
     await http.post(`/api/admin/users/${u.id}/password`, { password })
     ElMessage.success('密码已重置')
@@ -513,7 +580,7 @@ async function resetPassword(u: UserRow) {
   } catch (e: any) {
     ElMessage.error(errText(e))
   } finally {
-    saving.value = false
+    savingKey.value = null
   }
 }
 
@@ -525,7 +592,7 @@ function openRoles(u: UserRow) {
 
 async function saveRoles() {
   if (!rolesTarget.value) return
-  saving.value = true
+  savingKey.value = `roles:${rolesTarget.value.id}`
   try {
     await http.put(`/api/admin/users/${rolesTarget.value.id}/roles`, { roles: rolesForm.value })
     rolesOpen.value = false
@@ -534,7 +601,7 @@ async function saveRoles() {
   } catch (e: any) {
     ElMessage.error(errText(e))
   } finally {
-    saving.value = false
+    savingKey.value = null
   }
 }
 
@@ -547,7 +614,7 @@ function openGroups(u: UserRow) {
 
 async function saveGroups() {
   if (!groupsTarget.value) return
-  saving.value = true
+  savingKey.value = `groups:${groupsTarget.value.id}`
   try {
     await http.put(`/api/admin/users/${groupsTarget.value.id}/groups`, { groups: groupsForm.value })
     groupsOpen.value = false
@@ -556,7 +623,7 @@ async function saveGroups() {
   } catch (e: any) {
     ElMessage.error(errText(e))
   } finally {
-    saving.value = false
+    savingKey.value = null
   }
 }
 
@@ -571,6 +638,7 @@ onMounted(() => {
 .search { width: 250px; }
 .search :deep(.el-input__wrapper) { box-shadow: 0 0 0 1px var(--border) inset; }
 
+.cell-line { display: flex; align-items: center; gap: 8px; }
 .cell-title { font-size: 13.5px; font-weight: 550; color: var(--text); }
 .muted { color: var(--text-3); font-size: 13px; }
 

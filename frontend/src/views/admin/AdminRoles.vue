@@ -132,6 +132,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Trash2 } from 'lucide-vue-next'
 import http from '../../api/http'
+import { errText } from '../../utils/error'
 
 interface PermissionItem {
   key: string
@@ -215,7 +216,7 @@ async function load() {
       catalog.value = []
       loadError.value = true
     }
-    ElMessage.error(e?.response?.data?.detail || '加载失败')
+    ElMessage.error(errText(e, '加载失败'))
   } finally {
     loading.value = false
   }
@@ -267,7 +268,7 @@ async function save() {
     ElMessage.success('已保存')
     await load()
   } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail || '操作失败')
+    ElMessage.error(errText(e))
   } finally {
     saving.value = false
   }
@@ -288,7 +289,7 @@ async function remove(r: Role) {
     ElMessage.success('已删除')
     await load()
   } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail || '操作失败')
+    ElMessage.error(errText(e))
   }
 }
 
