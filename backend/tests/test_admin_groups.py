@@ -1,4 +1,6 @@
 """组注册表:列表引用计数、新建、删除拦截、成员管理(仅本地账号)。"""
+import pytest
+
 from app.models.database import (
     CompileTemplate, Group, Notebook, Pipeline, User, UserGroup, WikiPage, WikiSpace,
     get_session,
@@ -41,16 +43,32 @@ def test_members_local_only(api_client, api_engine, as_user):
         "add": ["u-loc", "u-sso"], "remove": [],
     })
     assert res.status_code == 400
+    db = get_session(api_engine)
+    try:
+        # 拒绝的请求不得部分写入
+        assert db.query(UserGroup).filter(UserGroup.group_name == "成员组").count() == 0
+    finally:
+        db.close()
     res = api_client.put(f"/api/admin/groups/{gid}/members", json={"add": ["u-loc"], "remove": []})
     assert res.status_code == 200
     members = api_client.get(f"/api/admin/groups/{gid}/members").json()
     assert [m["id"] for m in members["items"]] == ["u-loc"]
 
 
-def test_groups_require_group_manage(api_client, as_user):
+@pytest.mark.parametrize("method,path_tpl,body", [
+    ("GET", "/api/admin/groups", None),
+    ("POST", "/api/admin/groups", {"name": "无权组"}),
+    ("DELETE", "/api/admin/groups/{gid}", None),
+    ("GET", "/api/admin/groups/{gid}/members", None),
+    ("PUT", "/api/admin/groups/{gid}/members", {"add": [], "remove": []}),
+])
+def test_groups_require_group_manage(api_client, as_user, method, path_tpl, body):
+    """五个端点均须 group.manage:无权限一律 403(操作对象为已建组)。"""
+    as_user(["__local_admin__"])
+    gid = api_client.post("/api/admin/groups", json={"name": "无权组"}).json()["id"]
     as_user([])
-    assert api_client.get("/api/admin/groups").status_code == 403
-    assert api_client.post("/api/admin/groups", json={"name": "无权组"}).status_code == 403
+    kwargs = {"json": body} if body is not None else {}
+    assert api_client.request(method, path_tpl.format(gid=gid), **kwargs).status_code == 403
 
 
 def test_create_group_validations(api_client, as_user):
@@ -82,6 +100,37 @@ def test_ref_count_covers_five_resource_tables(api_client, api_engine, as_user):
     assert api_client.delete(f"/api/admin/groups/{gid}").status_code == 409
 
 
+def test_list_shows_non_local_source(api_client, api_engine, as_user):
+    """注册表可含 LDAP/SSO 同步来源组,列表原样展示 source。"""
+    as_user(["__local_admin__"])
+    db = get_session(api_engine)
+    try:
+        db.add(Group(id="g-ldap", name="LDAP组", source="ldap"))
+        db.commit()
+    finally:
+        db.close()
+    row = next(g for g in api_client.get("/api/admin/groups").json()["items"] if g["id"] == "g-ldap")
+    assert row["source"] == "ldap"
+    assert row["member_count"] == 0 and row["ref_count"] == 0
+
+
+def test_member_count_dedupes_legacy_duplicate_rows(api_client, api_engine, as_user):
+    """历史重复成员行不应让 member_count 大于成员列表长度。"""
+    as_user(["__local_admin__"])
+    db = get_session(api_engine)
+    try:
+        db.add(User(id="u-dup", username="dup", is_local=True))
+        db.add(UserGroup(id="ug-dup-1", user_id="u-dup", group_name="重复成员组"))
+        db.add(UserGroup(id="ug-dup-2", user_id="u-dup", group_name="重复成员组"))
+        db.commit()
+    finally:
+        db.close()
+    gid = api_client.post("/api/admin/groups", json={"name": "重复成员组"}).json()["id"]
+    row = next(g for g in api_client.get("/api/admin/groups").json()["items"] if g["id"] == gid)
+    assert row["member_count"] == 1
+    assert len(api_client.get(f"/api/admin/groups/{gid}/members").json()["items"]) == 1
+
+
 def test_delete_group_cleans_members_but_keeps_admin_marker(api_client, api_engine, as_user):
     as_user(["__local_admin__"])
     db = get_session(api_engine)
@@ -109,7 +158,7 @@ def test_delete_group_cleans_members_but_keeps_admin_marker(api_client, api_engi
 
 
 def test_delete_internal_group_defensively_rejected(api_client, api_engine, as_user):
-    """注册表本不应有 __ 内部组(seed 已跳过);误入也不允许经 API 删除。"""
+    """注册表本不应有 __ 内部组(seed 已跳过);误入也不展示/不允许经 API 操作。"""
     as_user(["__local_admin__"])
     db = get_session(api_engine)
     try:
@@ -117,6 +166,8 @@ def test_delete_internal_group_defensively_rejected(api_client, api_engine, as_u
         db.commit()
     finally:
         db.close()
+    listed = api_client.get("/api/admin/groups").json()["items"]
+    assert all(not g["name"].startswith("__") for g in listed)
     assert api_client.delete("/api/admin/groups/g-internal").status_code == 400
     assert api_client.put(
         "/api/admin/groups/g-internal/members", json={"add": [], "remove": []}
@@ -147,6 +198,11 @@ def test_members_add_remove_idempotent_and_unknown(api_client, api_engine, as_us
     }).status_code == 200
     items = api_client.get(f"/api/admin/groups/{gid}/members").json()["items"]
     assert [m["username"] for m in items] == ["l2"]
+    # 同一用户同现于 add/remove → remove 胜出(先加后删)
+    assert api_client.put(f"/api/admin/groups/{gid}/members", json={
+        "add": ["u-l2"], "remove": ["u-l2"],
+    }).status_code == 200
+    assert api_client.get(f"/api/admin/groups/{gid}/members").json()["items"] == []
     # 不存在用户 → 400 且 detail 可读
     res = api_client.put(f"/api/admin/groups/{gid}/members", json={"add": ["u-nope"]})
     assert res.status_code == 400

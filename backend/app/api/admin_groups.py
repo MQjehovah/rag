@@ -50,7 +50,12 @@ def _ref_count(db: Session, name: str) -> int:
 
 
 def _member_count(db: Session, name: str) -> int:
-    return db.query(func.count(UserGroup.id)).filter(UserGroup.group_name == name).scalar() or 0
+    """按用户去重计数:历史重复成员行不应让计数大于成员列表长度。"""
+    return (
+        db.query(func.count(func.distinct(UserGroup.user_id)))
+        .filter(UserGroup.group_name == name)
+        .scalar() or 0
+    )
 
 
 def _group_out(db: Session, group: Group) -> dict:
@@ -92,7 +97,8 @@ def _clean_user_ids(ids: list[str]) -> list[str]:
 def list_groups(current_user=Depends(get_current_user), db: Session = Depends(get_db)):
     require_permission(current_user, "group.manage")
     groups = db.query(Group).order_by(Group.name.asc()).all()
-    return {"items": [_group_out(db, g) for g in groups]}
+    # 防御:内部标记组(如 __local_admin__)不进注册表,误入也不展示
+    return {"items": [_group_out(db, g) for g in groups if not g.name.startswith("__")]}
 
 
 @router.post("/groups")
@@ -118,6 +124,11 @@ def create_group(body: GroupCreate, current_user=Depends(get_current_user), db: 
 
 @router.delete("/groups/{group_id}")
 def delete_group(group_id: str, current_user=Depends(get_current_user), db: Session = Depends(get_db)):
+    """删除注册表行并级联清理同名成员关系;有资源引用(五表)时 409。
+
+    check-then-act:引用检查与删除之间存在并发窗口(期间新增的引用可能漏拦截);
+    低并发管理场景可接受,与 admin_users 的守卫同模式。
+    """
     require_permission(current_user, "group.manage")
     group = _get_group_or_404(group_id, db)
     if group.name.startswith("__"):
@@ -146,6 +157,10 @@ def set_members(
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    """增删组成员(仅本地账号;同步用户的组由登录同步维护)。
+
+    同一用户同现于 add/remove 时 remove 胜出(先加后删,净效果为移除)。
+    """
     require_permission(current_user, "group.manage")
     group = _get_group_or_404(group_id, db)
     if group.name.startswith("__"):
