@@ -119,3 +119,32 @@ def test_seed_idempotent_with_preexisting_rows(tmp_path):
         assert {"研发部", "产品部", "运营部"} <= first_names
     finally:
         db.close()
+
+
+def test_seed_backfill_skips_null_and_blank_group_ids(tmp_path):
+    """资源表 NULL/空 group_id 不得混入注册表。
+
+    生产回归:Postgres 中大量 group_id IS NULL 的历史行曾使 sorted() 混合 None 崩溃,
+    导致启动 seed 失败、组注册表为空。
+    """
+    engine = _mk_engine(tmp_path)
+    db = get_session(engine)
+    try:
+        db.add(Notebook(id="nb-null", name="n1"))                   # group_id = None
+        db.add(Notebook(id="nb-blank", name="n2", group_id=""))     # 空串
+        db.add(Notebook(id="nb-real", name="n3", group_id="研发部"))
+        db.add(WikiSpace(id="ws-null", name="s1"))                  # None
+        db.add(Pipeline(id="pl-null", name="p1"))                   # None
+        db.add(CompileTemplate(id="ct-null", name="t1"))            # None
+        db.commit()
+    finally:
+        db.close()
+
+    seed_rbac(engine)  # 不应抛异常
+    db = get_session(engine)
+    try:
+        names = {g.name for g in db.query(Group).all()}
+        assert names == {"研发部"}
+        assert None not in names
+    finally:
+        db.close()

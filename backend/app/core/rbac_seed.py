@@ -16,8 +16,10 @@ INTERNAL_ADMIN_GROUP = "__local_admin__"
 
 
 def _is_internal_name(name: str | None) -> bool:
-    """内部标记名(如 __local_admin__)不进入组注册表。"""
-    return bool(name) and name.startswith("__")
+    """内部标记名(如 __local_admin__)不进入组注册表;None/空/非字符串同样跳过。"""
+    if not isinstance(name, str) or not name:
+        return True
+    return name.startswith("__")
 
 
 def _ensure_admin_role(db: Session) -> Role:
