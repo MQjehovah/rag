@@ -20,7 +20,8 @@ router = APIRouter(prefix="/api/admin", tags=["RBAC 管理"])
 class RoleBody(BaseModel):
     name: str = ""
     display_name: str = ""
-    permissions: list[str] = []
+    # None 表示"本次不改权限"(PUT 部分更新);POST 视为空列表
+    permissions: list[str] | None = None
 
 
 def _validate_permissions(perms: list[str]) -> list[str]:
@@ -74,7 +75,7 @@ def create_role(body: RoleBody, current_user=Depends(get_current_user), db: Sess
         raise HTTPException(status_code=409, detail="角色名已存在")
     role = Role(
         id=str(uuid.uuid4()), name=name, display_name=display_name,
-        permissions=json.dumps(_validate_permissions(body.permissions)), is_system=False,
+        permissions=json.dumps(_validate_permissions(body.permissions or [])), is_system=False,
     )
     db.add(role)
     try:
@@ -94,7 +95,9 @@ def update_role(role_id: str, body: RoleBody, current_user=Depends(get_current_u
         raise HTTPException(status_code=400, detail="内置角色不可修改")
     if body.display_name.strip():
         role.display_name = body.display_name.strip()
-    role.permissions = json.dumps(_validate_permissions(body.permissions))
+    # 部分更新:permissions 缺省(None)时保留原权限,不再静默清空
+    if body.permissions is not None:
+        role.permissions = json.dumps(_validate_permissions(body.permissions))
     db.commit()
     return _role_out(role)
 
