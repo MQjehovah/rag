@@ -12,6 +12,7 @@ from app.api.deps import get_db
 from app.core import sso_auth
 from app.core.jwt_utils import create_access_token, get_current_user, _resolve_sso_user
 from app.core.user_utils import sync_user_groups
+from app.core.rbac_seed import seed_rbac
 from app.config import settings
 
 router = APIRouter(prefix="/api/auth", tags=["认证"])
@@ -56,6 +57,7 @@ def startup():
         _create_local_admin(db)
     finally:
         db.close()
+    seed_rbac(engine)
 
 
 @router.post("/login", response_model=LoginResponse)

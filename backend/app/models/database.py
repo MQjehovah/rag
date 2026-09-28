@@ -285,6 +285,41 @@ class UserGroup(Base):
     group_name = Column(String(255), nullable=False, index=True)
 
 
+class Role(Base):
+    """RBAC 角色:permissions 为权限键 JSON 列表; 内置 admin = ["*"]。"""
+    __tablename__ = 'roles'
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    name = Column(String(64), unique=True, nullable=False)
+    display_name = Column(String(128), default='')
+    permissions = Column(Text, default='[]')  # JSON list[str]
+    is_system = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class UserRole(Base):
+    __tablename__ = 'user_roles'
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = Column(String(36), ForeignKey('users.id'), nullable=False, index=True)
+    role_id = Column(String(36), ForeignKey('roles.id', ondelete='CASCADE'), nullable=False, index=True)
+
+    __table_args__ = (
+        Index('uq_user_roles_user_role', 'user_id', 'role_id', unique=True),
+    )
+
+
+class Group(Base):
+    """组注册表:登记可用的组名(资源可见域仍存自由文本 group_id; 本表用于管理/下拉)。"""
+    __tablename__ = 'groups'
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    name = Column(String(255), unique=True, nullable=False)
+    source = Column(String(16), default='local')  # local | ldap | sso
+    created_at = Column(DateTime, default=datetime.now)
+
+
 class EmbeddingProfile(Base):
     """可配置的嵌入模型档案：api_url + model + dimensions + 鉴权。
 
