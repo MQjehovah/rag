@@ -1306,7 +1306,21 @@ const savePage = async (target?: Page) => {
     }
     const idx = treePages.value.findIndex(p => p.id === page.id)
     if (idx >= 0) {
-      treePages.value[idx] = { ...treePages.value[idx], title: page.title }
+      treePages.value[idx] = { ...treePages.value[idx], title: page.title, icon: page.icon || '' }
+      // 同步树缓存(键路径同一数组; 防御性双写), 避免重新展开时命中旧的 icon/title
+      if (currentNotebook.value) {
+        const cached = treeCache.get(currentNotebook.value.id)
+        const ci = cached ? cached.findIndex(p => p.id === page.id) : -1
+        if (cached && ci >= 0) {
+          cached[ci] = { ...cached[ci], title: page.title, icon: page.icon || '' }
+        }
+      }
+      // 最近访问列表同步(本地存储)
+      const ri = recentPages.value.findIndex(r => r.id === page.id)
+      if (ri >= 0) {
+        recentPages.value[ri] = { ...recentPages.value[ri], title: page.title, icon: page.icon || '' }
+        localStorage.setItem('rag-recent-pages', JSON.stringify(recentPages.value))
+      }
     }
   } catch (e) {
     ElMessage.error('保存失败')
