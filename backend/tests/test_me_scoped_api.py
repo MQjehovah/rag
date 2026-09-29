@@ -251,6 +251,52 @@ def test_chat_messages_order_limit_sources_and_validation(api_client, api_engine
         db.close()
 
 
+def test_chat_sources_non_list_rejected(api_client, api_engine, as_user):
+    """sources 非 list/None(如字符串) → 400, 不落库。"""
+    _seed(api_engine)
+    _login_a(as_user)
+    for bad in ("not-a-list", 123, {"page_id": "p-pub"}):
+        res = api_client.post("/api/me/chat-messages", json={
+            "role": "user", "content": "你好", "sources": bad,
+        })
+        assert res.status_code == 400, f"sources={bad!r} -> {res.status_code}"
+    assert api_client.get("/api/me/chat-messages").json()["items"] == []
+
+
+def test_chat_sources_too_large_rejected(api_client, api_engine, as_user):
+    """sources 序列化后超过 CHAT_SOURCES_MAX(200_000) → 400, 不落库。"""
+    _seed(api_engine)
+    _login_a(as_user)
+    huge = [{"page_id": "p-pub", "content": "x" * 200_000}]
+    res = api_client.post("/api/me/chat-messages", json={
+        "role": "assistant", "content": "回复", "sources": huge,
+    })
+    assert res.status_code == 400
+    assert res.json()["detail"] == "sources 过大"
+    assert api_client.get("/api/me/chat-messages").json()["items"] == []
+
+
+def test_chat_messages_same_created_at_id_tiebreaker(api_client, api_engine, as_user):
+    """同 created_at 时按 id desc 取窗口, 再翻转为升序返回(确定性)。"""
+    _seed(api_engine)
+    _login_a(as_user)
+    ts = datetime.now() - timedelta(hours=1)
+    db = get_session(api_engine)
+    try:
+        db.add(UserChatMessage(id="m-a", user_id="u-a", role="user", content="先", created_at=ts))
+        db.add(UserChatMessage(id="m-b", user_id="u-a", role="assistant", content="后", created_at=ts))
+        db.add(UserChatMessage(id="m-c", user_id="u-a", role="user", content="更早",
+                               created_at=ts - timedelta(minutes=1)))
+        db.commit()
+    finally:
+        db.close()
+    # 同刻取窗口: id desc → 取到 id 最大者
+    assert [m["id"] for m in api_client.get("/api/me/chat-messages?limit=1").json()["items"]] == ["m-b"]
+    assert [m["id"] for m in api_client.get("/api/me/chat-messages?limit=2").json()["items"]] == ["m-a", "m-b"]
+    # 全量: 时间升序, 同刻按 id 升序(窗口翻转后)
+    assert [m["id"] for m in api_client.get("/api/me/chat-messages").json()["items"]] == ["m-c", "m-a", "m-b"]
+
+
 def test_me_endpoints_require_auth(api_client):
     """未登录(无 Authorization 头)全部 401。"""
     calls = [

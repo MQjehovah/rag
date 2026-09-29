@@ -7,10 +7,11 @@ user_id == 当前用户 条件,不命中即 404;未登录经 get_current_user 40
 import json
 import uuid
 from datetime import datetime
-from typing import Any, List, Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
@@ -33,6 +34,7 @@ CHAT_LIMIT_MAX = 500
 TEMPLATE_NAME_MAX = 128
 TEMPLATE_CONTENT_MAX = 200_000
 CHAT_CONTENT_MAX = 100_000
+CHAT_SOURCES_MAX = 200_000
 CHAT_ROLES = ("user", "assistant")
 
 
@@ -48,7 +50,7 @@ class TemplateBody(BaseModel):
 class ChatMessageBody(BaseModel):
     role: str = ""
     content: str = ""
-    sources: Optional[List[Any]] = None
+    sources: Optional[Any] = None
 
 
 def _clamp_limit(raw: int, default: int, maximum: int) -> int:
@@ -86,7 +88,7 @@ def _page_items(db: Session, current_user, model, order_col, limit: Optional[int
             Page.deleted_at.is_(None),
             page_visible_condition(current_user),
         )
-        .order_by(order_col.desc())
+        .order_by(order_col.desc(), Page.id.desc())
     )
     if limit is not None:
         query = query.limit(limit)
@@ -142,9 +144,18 @@ def touch_recent_page(body: PageIdBody, db: Session = Depends(get_db),
     now = datetime.now()
     if row is None:
         db.add(UserRecentPage(id=str(uuid.uuid4()), user_id=user_id, page_id=page.id, visited_at=now))
+        try:
+            db.commit()
+        except IntegrityError:
+            # 并发下另一请求已插入同一 (user, page): 回滚后按幂等刷新 visited_at
+            db.rollback()
+            db.query(UserRecentPage).filter(
+                UserRecentPage.user_id == user_id, UserRecentPage.page_id == page.id
+            ).update({UserRecentPage.visited_at: now}, synchronize_session=False)
+            db.commit()
     else:
         row.visited_at = now
-    db.commit()
+        db.commit()
     return {"ok": True}
 
 
@@ -177,7 +188,11 @@ def add_favorite(body: PageIdBody, db: Session = Depends(get_db),
     )
     if exists is None:
         db.add(UserPageFavorite(id=str(uuid.uuid4()), user_id=user_id, page_id=page.id))
-        db.commit()
+        try:
+            db.commit()
+        except IntegrityError:
+            # 并发下另一请求已收藏: 回滚后按幂等成功处理
+            db.rollback()
     return {"ok": True}
 
 
@@ -281,7 +296,7 @@ def list_chat_messages(limit: int = CHAT_LIMIT_DEFAULT, db: Session = Depends(ge
     rows = (
         db.query(UserChatMessage)
         .filter(UserChatMessage.user_id == current_user["id"])
-        .order_by(UserChatMessage.created_at.desc())
+        .order_by(UserChatMessage.created_at.desc(), UserChatMessage.id.desc())
         .limit(limit)
         .all()
     )
@@ -301,12 +316,17 @@ def create_chat_message(body: ChatMessageBody, db: Session = Depends(get_db),
     if len(content) > CHAT_CONTENT_MAX:
         raise HTTPException(status_code=400, detail=f"消息内容不能超过 {CHAT_CONTENT_MAX} 字符")
     sources = body.sources if body.sources is not None else []
+    if not isinstance(sources, list):
+        raise HTTPException(status_code=400, detail="sources 必须是数组")
+    sources_json = json.dumps(sources, ensure_ascii=False)
+    if len(sources_json) > CHAT_SOURCES_MAX:
+        raise HTTPException(status_code=400, detail="sources 过大")
     m = UserChatMessage(
         id=str(uuid.uuid4()),
         user_id=current_user["id"],
         role=role,
         content=content,
-        sources=json.dumps(sources, ensure_ascii=False),
+        sources=sources_json,
     )
     db.add(m)
     db.commit()
