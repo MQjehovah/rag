@@ -348,6 +348,60 @@ class Group(Base):
     created_at = Column(DateTime, default=datetime.now)
 
 
+class UserRecentPage(Base):
+    """用户最近访问的页面(服务端按 user_id 隔离, 替代前端 localStorage)。"""
+    __tablename__ = 'user_recent_pages'
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = Column(String(36), ForeignKey('users.id', ondelete='CASCADE'), nullable=False, index=True)
+    page_id = Column(String(36), ForeignKey('pages.id', ondelete='CASCADE'), nullable=False)
+    visited_at = Column(DateTime, default=datetime.now)
+
+    __table_args__ = (
+        # 每人每页只保留一条最近访问记录(upsert 去重)
+        Index('uq_user_recent_pages_user_page', 'user_id', 'page_id', unique=True),
+    )
+
+
+class UserPageFavorite(Base):
+    """用户收藏的页面(服务端按 user_id 隔离, 替代前端 localStorage)。"""
+    __tablename__ = 'user_page_favorites'
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = Column(String(36), ForeignKey('users.id', ondelete='CASCADE'), nullable=False, index=True)
+    page_id = Column(String(36), ForeignKey('pages.id', ondelete='CASCADE'), nullable=False)
+    created_at = Column(DateTime, default=datetime.now)
+
+    __table_args__ = (
+        # 收藏幂等:每人每页至多一条
+        Index('uq_user_page_favorites_user_page', 'user_id', 'page_id', unique=True),
+    )
+
+
+class UserTemplate(Base):
+    """用户笔记模板(纯本人资源, 服务端按 user_id 隔离)。"""
+    __tablename__ = 'user_templates'
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = Column(String(36), ForeignKey('users.id', ondelete='CASCADE'), nullable=False, index=True)
+    name = Column(String(255), nullable=False)
+    content = Column(Text, default='')
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class UserChatMessage(Base):
+    """用户聊天记录(单线程, 服务端按 user_id 隔离, 替代前端 localStorage)。"""
+    __tablename__ = 'user_chat_messages'
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = Column(String(36), nullable=False, index=True)
+    role = Column(String(16), nullable=False)  # user | assistant
+    content = Column(Text, default='')
+    sources = Column(Text, default='[]')  # JSON list
+    created_at = Column(DateTime, default=datetime.now)
+
+
 class EmbeddingProfile(Base):
     """可配置的嵌入模型档案：api_url + model + dimensions + 鉴权。
 

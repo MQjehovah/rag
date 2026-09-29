@@ -1,0 +1,322 @@
+"""当前用户的个人数据接口: 最近访问 / 收藏 / 模板 / 聊天记录。
+
+服务端按 current_user["id"] 隔离(替代前端 localStorage):
+一律不接受客户端传入 user_id;按 id 的 UPDATE/DELETE 必须带
+user_id == 当前用户 条件,不命中即 404;未登录经 get_current_user 401。
+"""
+import json
+import uuid
+from datetime import datetime
+from typing import Any, List, Optional
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
+
+from app.api.deps import get_db
+from app.api.search_common import page_visible_condition
+from app.core.jwt_utils import get_current_user
+from app.models.database import (
+    Page,
+    UserChatMessage,
+    UserPageFavorite,
+    UserRecentPage,
+    UserTemplate,
+)
+
+router = APIRouter(prefix="/api/me", tags=["用户数据"])
+
+RECENT_LIMIT_DEFAULT = 5
+RECENT_LIMIT_MAX = 50
+CHAT_LIMIT_DEFAULT = 200
+CHAT_LIMIT_MAX = 500
+TEMPLATE_NAME_MAX = 128
+TEMPLATE_CONTENT_MAX = 200_000
+CHAT_CONTENT_MAX = 100_000
+CHAT_ROLES = ("user", "assistant")
+
+
+class PageIdBody(BaseModel):
+    page_id: str = ""
+
+
+class TemplateBody(BaseModel):
+    name: str = ""
+    content: str = ""
+
+
+class ChatMessageBody(BaseModel):
+    role: str = ""
+    content: str = ""
+    sources: Optional[List[Any]] = None
+
+
+def _clamp_limit(raw: int, default: int, maximum: int) -> int:
+    """limit 归一:非法值取默认,并夹取到 1..maximum。"""
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        value = default
+    return max(1, min(value, maximum))
+
+
+def _get_visible_page_or_404(db: Session, current_user, page_id: str) -> Page:
+    """页面存在、未删、可见(admin 恒真)才放行,否则 404(不泄露存在性)。"""
+    page = (
+        db.query(Page)
+        .filter(
+            Page.id == page_id,
+            Page.deleted_at.is_(None),
+            page_visible_condition(current_user),
+        )
+        .first()
+    )
+    if page is None:
+        raise HTTPException(status_code=404, detail="笔记不存在或不可见")
+    return page
+
+
+def _page_items(db: Session, current_user, model, order_col, limit: Optional[int] = None) -> list:
+    """用户页面关联(最近/收藏) join Page,过滤回收站与不可见页,输出 {id,title,icon}。"""
+    query = (
+        db.query(Page.id, Page.title, Page.icon)
+        .join(model, model.page_id == Page.id)
+        .filter(
+            model.user_id == current_user["id"],
+            Page.deleted_at.is_(None),
+            page_visible_condition(current_user),
+        )
+        .order_by(order_col.desc())
+    )
+    if limit is not None:
+        query = query.limit(limit)
+    return [
+        {"id": pid, "title": title or "无标题", "icon": icon or ""}
+        for pid, title, icon in query.all()
+    ]
+
+
+def _template_out(t: UserTemplate) -> dict:
+    return {"id": t.id, "name": t.name, "content": t.content or "", "updated_at": t.updated_at}
+
+
+def _parse_sources(raw: Optional[str]) -> list:
+    """sources JSON 文本 → list;解析失败回 []。"""
+    try:
+        data = json.loads(raw or "[]")
+    except (TypeError, ValueError):
+        return []
+    return data if isinstance(data, list) else []
+
+
+def _chat_out(m: UserChatMessage) -> dict:
+    return {
+        "id": m.id,
+        "role": m.role,
+        "content": m.content or "",
+        "sources": _parse_sources(m.sources),
+        "created_at": m.created_at,
+    }
+
+
+# ---------------- 最近访问 ----------------
+
+@router.get("/recent-pages")
+def list_recent_pages(limit: int = RECENT_LIMIT_DEFAULT, db: Session = Depends(get_db),
+                      current_user=Depends(get_current_user)):
+    limit = _clamp_limit(limit, RECENT_LIMIT_DEFAULT, RECENT_LIMIT_MAX)
+    return {"items": _page_items(db, current_user, UserRecentPage, UserRecentPage.visited_at, limit)}
+
+
+@router.post("/recent-pages")
+def touch_recent_page(body: PageIdBody, db: Session = Depends(get_db),
+                      current_user=Depends(get_current_user)):
+    """记录访问(upsert):存在则仅刷新 visited_at。"""
+    page = _get_visible_page_or_404(db, current_user, (body.page_id or "").strip())
+    user_id = current_user["id"]
+    row = (
+        db.query(UserRecentPage)
+        .filter(UserRecentPage.user_id == user_id, UserRecentPage.page_id == page.id)
+        .first()
+    )
+    now = datetime.now()
+    if row is None:
+        db.add(UserRecentPage(id=str(uuid.uuid4()), user_id=user_id, page_id=page.id, visited_at=now))
+    else:
+        row.visited_at = now
+    db.commit()
+    return {"ok": True}
+
+
+@router.delete("/recent-pages")
+def clear_recent_pages(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    db.query(UserRecentPage).filter(UserRecentPage.user_id == current_user["id"]).delete(
+        synchronize_session=False
+    )
+    db.commit()
+    return {"ok": True}
+
+
+# ---------------- 收藏 ----------------
+
+@router.get("/favorites")
+def list_favorites(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    return {"items": _page_items(db, current_user, UserPageFavorite, UserPageFavorite.created_at)}
+
+
+@router.post("/favorites")
+def add_favorite(body: PageIdBody, db: Session = Depends(get_db),
+                 current_user=Depends(get_current_user)):
+    """收藏(幂等):已存在不报错。"""
+    page = _get_visible_page_or_404(db, current_user, (body.page_id or "").strip())
+    user_id = current_user["id"]
+    exists = (
+        db.query(UserPageFavorite.id)
+        .filter(UserPageFavorite.user_id == user_id, UserPageFavorite.page_id == page.id)
+        .first()
+    )
+    if exists is None:
+        db.add(UserPageFavorite(id=str(uuid.uuid4()), user_id=user_id, page_id=page.id))
+        db.commit()
+    return {"ok": True}
+
+
+@router.delete("/favorites")
+def clear_favorites(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    db.query(UserPageFavorite).filter(UserPageFavorite.user_id == current_user["id"]).delete(
+        synchronize_session=False
+    )
+    db.commit()
+    return {"ok": True}
+
+
+@router.delete("/favorites/{page_id}")
+def remove_favorite(page_id: str, db: Session = Depends(get_db),
+                    current_user=Depends(get_current_user)):
+    """取消收藏(幂等):不存在也返回成功。"""
+    db.query(UserPageFavorite).filter(
+        UserPageFavorite.user_id == current_user["id"],
+        UserPageFavorite.page_id == page_id,
+    ).delete(synchronize_session=False)
+    db.commit()
+    return {"ok": True}
+
+
+# ---------------- 模板 ----------------
+
+def _validate_template(name: str, content: str):
+    name = (name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="模板名称不能为空")
+    if len(name) > TEMPLATE_NAME_MAX:
+        raise HTTPException(status_code=400, detail=f"模板名称不能超过 {TEMPLATE_NAME_MAX} 字符")
+    content = content or ""
+    if len(content) > TEMPLATE_CONTENT_MAX:
+        raise HTTPException(status_code=400, detail=f"模板内容不能超过 {TEMPLATE_CONTENT_MAX} 字符")
+    return name, content
+
+
+@router.get("/templates")
+def list_templates(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    rows = (
+        db.query(UserTemplate)
+        .filter(UserTemplate.user_id == current_user["id"])
+        .order_by(UserTemplate.updated_at.desc())
+        .all()
+    )
+    return {"items": [_template_out(t) for t in rows]}
+
+
+@router.post("/templates")
+def create_template(body: TemplateBody, db: Session = Depends(get_db),
+                    current_user=Depends(get_current_user)):
+    name, content = _validate_template(body.name, body.content)
+    t = UserTemplate(id=str(uuid.uuid4()), user_id=current_user["id"], name=name, content=content)
+    db.add(t)
+    db.commit()
+    db.refresh(t)
+    return _template_out(t)
+
+
+@router.put("/templates/{template_id}")
+def update_template(template_id: str, body: TemplateBody, db: Session = Depends(get_db),
+                    current_user=Depends(get_current_user)):
+    name, content = _validate_template(body.name, body.content)
+    t = (
+        db.query(UserTemplate)
+        .filter(UserTemplate.id == template_id, UserTemplate.user_id == current_user["id"])
+        .first()
+    )
+    if t is None:
+        raise HTTPException(status_code=404, detail="模板不存在")
+    t.name = name
+    t.content = content
+    t.updated_at = datetime.now()
+    db.commit()
+    db.refresh(t)
+    return _template_out(t)
+
+
+@router.delete("/templates/{template_id}")
+def delete_template(template_id: str, db: Session = Depends(get_db),
+                    current_user=Depends(get_current_user)):
+    t = (
+        db.query(UserTemplate)
+        .filter(UserTemplate.id == template_id, UserTemplate.user_id == current_user["id"])
+        .first()
+    )
+    if t is None:
+        raise HTTPException(status_code=404, detail="模板不存在")
+    db.delete(t)
+    db.commit()
+    return {"ok": True}
+
+
+# ---------------- 聊天记录 ----------------
+
+@router.get("/chat-messages")
+def list_chat_messages(limit: int = CHAT_LIMIT_DEFAULT, db: Session = Depends(get_db),
+                       current_user=Depends(get_current_user)):
+    limit = _clamp_limit(limit, CHAT_LIMIT_DEFAULT, CHAT_LIMIT_MAX)
+    rows = (
+        db.query(UserChatMessage)
+        .filter(UserChatMessage.user_id == current_user["id"])
+        .order_by(UserChatMessage.created_at.asc())
+        .limit(limit)
+        .all()
+    )
+    return {"items": [_chat_out(m) for m in rows]}
+
+
+@router.post("/chat-messages")
+def create_chat_message(body: ChatMessageBody, db: Session = Depends(get_db),
+                        current_user=Depends(get_current_user)):
+    role = (body.role or "").strip()
+    if role not in CHAT_ROLES:
+        raise HTTPException(status_code=400, detail="role 仅支持 user/assistant")
+    content = body.content or ""
+    if not content.strip():
+        raise HTTPException(status_code=400, detail="消息内容不能为空")
+    if len(content) > CHAT_CONTENT_MAX:
+        raise HTTPException(status_code=400, detail=f"消息内容不能超过 {CHAT_CONTENT_MAX} 字符")
+    sources = body.sources if body.sources is not None else []
+    m = UserChatMessage(
+        id=str(uuid.uuid4()),
+        user_id=current_user["id"],
+        role=role,
+        content=content,
+        sources=json.dumps(sources, ensure_ascii=False),
+    )
+    db.add(m)
+    db.commit()
+    db.refresh(m)
+    return _chat_out(m)
+
+
+@router.delete("/chat-messages")
+def clear_chat_messages(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    db.query(UserChatMessage).filter(UserChatMessage.user_id == current_user["id"]).delete(
+        synchronize_session=False
+    )
+    db.commit()
+    return {"ok": True}

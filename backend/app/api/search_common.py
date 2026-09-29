@@ -1,6 +1,6 @@
 from typing import Any, Dict, Set
 
-from sqlalchemy import or_, select
+from sqlalchemy import or_, select, true
 from sqlalchemy import text as sql_text
 from sqlalchemy.orm import Session
 
@@ -19,17 +19,26 @@ def visible_wiki_filter(current_user):
     return wiki_page_visible_condition(current_user)
 
 
+def page_visible_condition(current_user):
+    """Page 可见性 SQL 条件(get_visible_page_ids 的语义, 供列表过滤直接复用)。
+
+    admin(has_permission "*", 含 __local_admin__ 桥接)返回恒真条件;
+    其余用户:未归属笔记本的页面视为公共, 归属页要求所属笔记本可见。
+    回收站过滤(deleted_at IS NULL)由调用方负责, 见 get_visible_page_ids。
+    """
+    if has_permission(current_user, "*"):
+        return true()
+    visible_nb_ids = select(Notebook.id).where(notebook_visible_condition(current_user))
+    return or_(Page.notebook_id.is_(None), Page.notebook_id.in_(visible_nb_ids))
+
+
 def get_visible_page_ids(db: Session, current_user) -> Set[str]:
     """Page ids the user may see (unassigned pages are public). Excludes trash."""
-    base = db.query(Page.id).filter(Page.deleted_at.is_(None))
-    if has_permission(current_user, "*"):
-        return set(p[0] for p in base.all())
-    visible_nb_ids = select(Notebook.id).where(notebook_visible_condition(current_user))
     return set(
         p[0]
-        for p in base.filter(
-            or_(Page.notebook_id.is_(None), Page.notebook_id.in_(visible_nb_ids))
-        ).all()
+        for p in db.query(Page.id)
+        .filter(Page.deleted_at.is_(None), page_visible_condition(current_user))
+        .all()
     )
 
 
