@@ -88,6 +88,7 @@ def test_sso_provisions_all_profile_fields(sso_env, db):
     assert payload["name"] == "张三"
     assert payload["work_id"] == SSO_EMP_NO
     assert payload["phone"] == "13800000000"
+    assert payload["department"] == "研发部"
 
 
 def test_sso_provision_falls_back_name_to_work_id(sso_env, db):

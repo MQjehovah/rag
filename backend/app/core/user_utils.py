@@ -76,6 +76,7 @@ def build_user_payload(db: Session, user: User) -> dict:
         "name": user.name or "",
         "work_id": user.work_id or "",
         "phone": user.phone or "",
+        "department": user.department or "",
         "is_local": user.is_local,
         "is_active": user.is_active,
         "groups": current_groups,

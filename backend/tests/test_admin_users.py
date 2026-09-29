@@ -95,6 +95,14 @@ def test_disabled_user_token_rejected(api_client, api_engine):
     assert res.status_code == 401
 
 
+def test_auth_me_includes_department(api_client, as_user):
+    """/api/auth/me 经 UserResponse 透出 department(与 market/agent 对齐)。"""
+    as_user([], department="研发部")
+    res = api_client.get("/api/auth/me")
+    assert res.status_code == 200
+    assert res.json()["department"] == "研发部"
+
+
 def test_reset_password_local_only(api_client, api_engine, as_user):
     db = get_session(api_engine)
     try:

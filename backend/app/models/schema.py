@@ -308,6 +308,7 @@ class UserResponse(BaseModel):
     name: str = ""
     work_id: str = ""
     phone: str = ""
+    department: str = ""
     is_local: bool = False
     groups: List[str] = []
     is_active: bool = True
