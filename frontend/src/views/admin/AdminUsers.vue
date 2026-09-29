@@ -34,10 +34,16 @@
         </div>
 
         <el-table v-loading="loading" :data="users" row-key="id">
+          <el-table-column label="ID" width="90" show-overflow-tooltip>
+            <template #default="{ row }">
+              <span class="cell-id">{{ row.id }}</span>
+            </template>
+          </el-table-column>
+
           <el-table-column label="工号" min-width="150">
             <template #default="{ row }">
               <div class="cell-line">
-                <span class="cell-title">{{ row.username }}</span>
+                <span class="cell-title">{{ row.work_id || '—' }}</span>
                 <el-tag v-if="row.id === myId" size="small" effect="plain" type="info">我</el-tag>
               </div>
             </template>
@@ -669,6 +675,7 @@ onMounted(() => {
 
 .cell-line { display: flex; align-items: center; gap: 8px; }
 .cell-title { font-size: 13.5px; font-weight: 550; color: var(--text); }
+.cell-id { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; color: var(--text-3); }
 .muted { color: var(--text-3); font-size: 13px; }
 
 .tag-wrap { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
