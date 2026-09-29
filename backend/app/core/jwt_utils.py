@@ -76,7 +76,7 @@ def _resolve_hs256_user(db: Session, payload: dict) -> dict:
 
 
 def _resolve_sso_user(db: Session, claims: dict) -> dict:
-    """SSO 轨:按 username=工号 查/建 User。
+    """SSO 轨:按 工号(work_id=sub) -> 邮箱 -> 用户名 匹配/建 User。
 
     已禁用 -> 403;新建账号按 claims 填充 name(空回退工号)/work_id/phone/department/email;
     已有账号按 SSO 权威源回写 name/phone/department(非空才写)/work_id(恒对齐 sub),
@@ -86,10 +86,10 @@ def _resolve_sso_user(db: Session, claims: dict) -> dict:
     raw_email = (claims.get("email") or "").strip() or None
     claim_email = raw_email.lower() if raw_email else None
 
-    # 邮箱优先: 与系统自建账号(本地注册/按邮箱登录的)对齐, 避免同一人两份账号;
-    # 邮箱缺失时退回按工号匹配(SSO 侧未取到 LDAP mail 的极少数情况)。
-    user = None
-    if claim_email:
+    # 统一身份匹配顺序: 工号(work_id) -> 邮箱 -> 用户名(老账号兼容, username 曾即工号)。
+    # 邮箱命中的老账号由 _write_back_claims 补上 work_id=sub, 此后按工号直达。
+    user = db.query(User).filter(User.work_id == username).first()
+    if user is None and claim_email:
         user = db.query(User).filter(func.lower(User.email) == claim_email).first()
     if user is None:
         user = db.query(User).filter(User.username == username).first()
@@ -111,12 +111,13 @@ def _resolve_sso_user(db: Session, claims: dict) -> dict:
             db.commit()
             db.refresh(user)
         except IntegrityError:
-            # 并发建号竞态:username 唯一约束被别的请求抢建,回滚后回查兜底
+            # 并发建号竞态:username 唯一约束被别的请求抢建,回滚后按同一顺序回查兜底
             db.rollback()
-            user = db.query(User).filter(User.username == username).first()
+            user = db.query(User).filter(User.work_id == username).first()
             if user is None and claim_email:
-                # 也可能是邮箱撞了并发/已存在账号, 再按邮箱回查一次
                 user = db.query(User).filter(func.lower(User.email) == claim_email).first()
+            if user is None:
+                user = db.query(User).filter(User.username == username).first()
             if user is None:
                 raise
 

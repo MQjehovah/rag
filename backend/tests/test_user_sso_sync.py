@@ -102,6 +102,103 @@ def test_sso_provision_falls_back_name_to_work_id(sso_env, db):
     assert user.work_id == SSO_EMP_NO
 
 
+def test_sso_matches_existing_account_by_work_id(sso_env, db):
+    """工号命中: work_id=sub 的已有账号直接复用(不新建, username 不改)。"""
+    key, _ = sso_env
+    existing = User(
+        id=str(uuid.uuid4()), username="jimingqing", email="jmq@example.com",
+        name="旧名字", work_id=SSO_EMP_NO,
+        is_local=False, is_active=True,
+    )
+    db.add(existing)
+    db.commit()
+
+    token = _sso_token(key, name="季明清", email="new@example.com")
+    payload = get_current_user(credentials=_bearer(token), db=db)
+
+    assert payload["id"] == existing.id
+    assert payload["username"] == "jimingqing"
+    assert db.query(User).filter(User.username == SSO_EMP_NO).count() == 0
+    db.refresh(existing)
+    assert existing.work_id == SSO_EMP_NO
+
+
+def test_sso_matches_by_email_and_backfills_work_id(sso_env, db):
+    """邮箱命中老账号: 复用账号并补 work_id=sub(此后可按工号直达, 与 market 一致)。"""
+    key, _ = sso_env
+    existing = User(
+        id=str(uuid.uuid4()), username="jimingqing", email="jimingqing@example.com",
+        name="旧名字", work_id="",
+        is_local=False, is_active=True,
+    )
+    db.add(existing)
+    db.commit()
+
+    token = _sso_token(key, name="季明清", email="jimingqing@example.com")
+    payload = get_current_user(credentials=_bearer(token), db=db)
+
+    assert payload["id"] == existing.id
+    assert db.query(User).count() == 1
+    db.refresh(existing)
+    assert existing.work_id == SSO_EMP_NO
+
+    # 补号后二次登录按 work_id 直达, 仍不新建
+    get_current_user(credentials=_bearer(token), db=db)
+    assert db.query(User).count() == 1
+
+
+def test_sso_matches_legacy_account_by_username(sso_env, db):
+    """老账号兼容: 工号/邮箱均未命中时回退 username, 并补工号。"""
+    key, _ = sso_env
+    existing = User(
+        id=str(uuid.uuid4()), username=SSO_EMP_NO, email="old@example.com",
+        name="旧名字", work_id="",
+        is_local=False, is_active=True,
+    )
+    db.add(existing)
+    db.commit()
+
+    token = _sso_token(key, email="new@example.com")
+    payload = get_current_user(credentials=_bearer(token), db=db)
+
+    assert payload["id"] == existing.id
+    assert db.query(User).count() == 1
+    db.refresh(existing)
+    assert existing.work_id == SSO_EMP_NO
+
+
+def test_sso_match_priority_work_id_over_email_and_username(sso_env, db):
+    """匹配顺序: 工号优先于邮箱与用户名(三账号并存时命中 work_id 账号)。"""
+    key, _ = sso_env
+    by_work_id = User(
+        id="u-work", username="acct-work", email="work@example.com",
+        name="工号账号", work_id=SSO_EMP_NO,
+        is_local=False, is_active=True,
+    )
+    by_email = User(
+        id="u-mail", username="acct-mail", email="mail@example.com",
+        name="邮箱账号", work_id="",
+        is_local=False, is_active=True,
+    )
+    by_username = User(
+        id="u-name", username=SSO_EMP_NO, email="name@example.com",
+        name="用户账号", work_id="",
+        is_local=False, is_active=True,
+    )
+    for u in (by_work_id, by_email, by_username):
+        db.add(u)
+    db.commit()
+
+    token = _sso_token(key, email="mail@example.com")
+    payload = get_current_user(credentials=_bearer(token), db=db)
+
+    assert payload["id"] == "u-work"
+    assert db.query(User).count() == 3
+    # 邮箱账号未被误匹配, 其 work_id 不被改写
+    db.refresh(by_email)
+    assert by_email.work_id == ""
+
+
 def test_sso_repeat_login_writes_back_changed_fields(sso_env, db):
     """重复登录: name/phone/department/email 变化回写, work_id 对齐 sub, 组不受影响。"""
     key, _ = sso_env

@@ -176,7 +176,7 @@ def test_get_current_user_sso_keeps_groups_when_no_groups_claim(sso_env, db):
 def test_get_current_user_sso_matches_existing_account_by_email(db, sso_env):
     """SSO token 的邮箱命中系统自建账号时复用该账号(不新建、不改 username)。
 
-    与网关控制台/market 一致: 邮箱是首选唯一标识, 避免同一人两份账号。
+    与网关控制台/market 一致: 工号未命中时按邮箱对齐, 避免同一人两份账号。
     """
     key, _ = sso_env
     existing = User(
