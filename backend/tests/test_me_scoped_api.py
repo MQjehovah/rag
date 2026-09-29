@@ -224,7 +224,9 @@ def test_chat_messages_order_limit_sources_and_validation(api_client, api_engine
     assert [m["id"] for m in items] == ["m1", "m2", "m3"]  # created_at 升序,不含他用户
     assert items[1]["sources"] == [{"page_id": "p-pub"}]
     assert items[2]["sources"] == []  # 解析失败回 []
-    assert [m["id"] for m in api_client.get("/api/me/chat-messages?limit=2").json()["items"]] == ["m1", "m2"]
+    # limit 取最近 N 条并按时间升序返回(重载后可见最新窗口), 不含他用户
+    assert [m["id"] for m in api_client.get("/api/me/chat-messages?limit=2").json()["items"]] == ["m2", "m3"]
+    assert [m["id"] for m in api_client.get("/api/me/chat-messages?limit=1").json()["items"]] == ["m3"]
     assert len(api_client.get("/api/me/chat-messages?limit=0").json()["items"]) == 1
 
     # 校验:role 仅 user|assistant;content 非空 ≤100_000

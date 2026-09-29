@@ -281,10 +281,11 @@ def list_chat_messages(limit: int = CHAT_LIMIT_DEFAULT, db: Session = Depends(ge
     rows = (
         db.query(UserChatMessage)
         .filter(UserChatMessage.user_id == current_user["id"])
-        .order_by(UserChatMessage.created_at.asc())
+        .order_by(UserChatMessage.created_at.desc())
         .limit(limit)
         .all()
     )
+    rows.reverse()  # 先取最近 N 条, 再翻转为时间升序(重载后可见最新窗口)
     return {"items": [_chat_out(m) for m in rows]}
 
 
