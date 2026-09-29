@@ -20,7 +20,7 @@
           <div class="panel-tools">
             <el-input
               v-model="searchInput"
-              placeholder="搜索用户名 / 姓名 / 邮箱"
+              placeholder="搜索工号 / 姓名 / 邮箱"
               clearable
               class="search"
               @keyup.enter="search"
@@ -34,7 +34,7 @@
         </div>
 
         <el-table v-loading="loading" :data="users" row-key="id">
-          <el-table-column label="用户名" min-width="150">
+          <el-table-column label="工号" min-width="150">
             <template #default="{ row }">
               <div class="cell-line">
                 <span class="cell-title">{{ row.username }}</span>
@@ -47,8 +47,16 @@
             <template #default="{ row }">{{ row.name || '—' }}</template>
           </el-table-column>
 
+          <el-table-column label="手机" min-width="130">
+            <template #default="{ row }">{{ row.phone || '—' }}</template>
+          </el-table-column>
+
           <el-table-column label="邮箱" min-width="180" show-overflow-tooltip>
             <template #default="{ row }">{{ row.email || '—' }}</template>
+          </el-table-column>
+
+          <el-table-column label="部门" min-width="140" show-overflow-tooltip>
+            <template #default="{ row }">{{ row.department || '—' }}</template>
           </el-table-column>
 
           <el-table-column label="类型" width="80">
@@ -337,6 +345,9 @@ interface UserRow {
   username: string
   email: string
   name: string
+  work_id: string
+  phone: string
+  department: string
   is_local: boolean
   is_active: boolean
   roles: RoleBrief[]
