@@ -296,6 +296,8 @@ class User(Base):
     # 工号(SSO sub);历史上 username 即工号,故迁移时按 username 回填
     work_id = Column(String(64), default="", index=True)
     phone = Column(String(32), default="")
+    # 部门(SSO dept 回写, 列表展示用; 可见性仍走 user_groups 的「dept 即 group」)
+    department = Column(String(100), default="")
     is_local = Column(Boolean, default=False)
     password_hash = Column(String(255), default="")
     is_active = Column(Boolean, default=True)
@@ -581,6 +583,10 @@ def run_user_column_migrations(engine):
         if "phone" not in cols:
             conn.execute(sqlalchemy_text(
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(32) DEFAULT ''"
+            ))
+        if "department" not in cols:
+            conn.execute(sqlalchemy_text(
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS department VARCHAR(100) DEFAULT ''"
             ))
         conn.execute(sqlalchemy_text(
             "CREATE INDEX IF NOT EXISTS ix_users_work_id ON users(work_id)"

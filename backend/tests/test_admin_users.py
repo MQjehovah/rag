@@ -31,6 +31,8 @@ def test_list_and_create_local_user(api_client, api_engine, as_user):
     assert item["is_local"] is True
     assert item["roles"] == [] and item["groups"] == ["研发部"]
     assert item["is_marked_admin"] is False
+    # 统一用户表字段:列表输出必含 工号/手机/部门(新建本地号均落空串)
+    assert (item["work_id"], item["phone"], item["department"]) == ("", "", "")
     login = api_client.post("/api/auth/login", json={"username": "lisi", "password": "Passw0rd!"})
     assert login.status_code == 200
     assert api_client.post("/api/admin/users", json={

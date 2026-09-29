@@ -98,8 +98,8 @@ The frontend nginx proxies `/api/collab` → `rag-collab:1234` with `Upgrade`; t
   资源轨校验强制 token 带 `aud`(无 aud 拒绝)且须命中所配受众; 回调拿到的 id_token `aud` 是本系统自己的 client_id,
   与资源轨受众不同,故 `verify_sso_token(token, audience=...)` 支持显式覆盖。SSO 只签发 `roles`(无 `groups`),
   `_normalize_claims_groups` 同时采纳两者,且 `roles` 含 `admin` 时补内部管理员标记 `__local_admin__`(全库管理端点均按该组名判定)。
-  **用户资料随登录回写(SSO 权威源, 空 claim 不覆盖)**: `users.name`(姓名)/`work_id`(工号=sub)/`phone`(mobile)/`email`;
-  部门/角色沿用既有语义(再经 `_normalize_claims_groups` 落 `user_groups`, 不新增 User 列)。
+  **用户资料随登录回写(SSO 权威源, 空 claim 不覆盖)**: `users.name`(姓名)/`work_id`(工号=sub)/`phone`(mobile)/`department`(dept, 仅列表展示)/`email`;
+  部门/角色可见性沿用既有语义(再经 `_normalize_claims_groups` 落 `user_groups`)。
 - **子路径部署**: 对外 `https://ai.xzrobot.com/rag/...` 由 45 的 nginx **剥掉 `/rag` 前缀**再转发到 34:8092,
   故前端 nginx 只需处理根路径的 `/api`(不需要子路径规则);`PUBLIC_BASE_PATH=/rag` 仅用于生成对外绝对 URL。
   **重建 backend 后必须一并重启/重建 frontend**(其 nginx 会缓存 backend 容器 IP)。

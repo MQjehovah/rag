@@ -78,8 +78,8 @@ def _resolve_hs256_user(db: Session, payload: dict) -> dict:
 def _resolve_sso_user(db: Session, claims: dict) -> dict:
     """SSO 轨:按 username=工号 查/建 User。
 
-    已禁用 -> 403;新建账号按 claims 填充 name(空回退工号)/work_id/phone/email;
-    已有账号按 SSO 权威源回写 name/phone(非空才写)/work_id(恒对齐 sub),
+    已禁用 -> 403;新建账号按 claims 填充 name(空回退工号)/work_id/phone/department/email;
+    已有账号按 SSO 权威源回写 name/phone/department(非空才写)/work_id(恒对齐 sub),
     email 保持原语义;有 groups 声明才同步。
     """
     username = str(claims["sub"])
@@ -102,6 +102,7 @@ def _resolve_sso_user(db: Session, claims: dict) -> dict:
             name=(claims.get("name") or "").strip() or username,
             work_id=username,
             phone=(claims.get("mobile") or "").strip(),
+            department=_claim_dept(claims),
             is_local=False,
             is_active=True,
         )
@@ -132,10 +133,30 @@ def _resolve_sso_user(db: Session, claims: dict) -> dict:
     return build_user_payload(db, user)
 
 
+def _claim_dept(claims: dict) -> str:
+    """部门 claim 归一为去空白字符串(首选 dept, 兼容 department 别名)。
+
+    取值来源与 _normalize_claims_groups 一致(dept 优先, 兼容 department 别名);
+    list 型 claim 取首个非空元素, 非 str/list 视为缺失。
+    仅用于 users.department 展示列, 可见性组不受影响。
+    """
+    raw = claims.get("dept")
+    if not raw:
+        raw = claims.get("department")
+    if isinstance(raw, str):
+        return raw.strip()
+    if isinstance(raw, list):
+        for item in raw:
+            if isinstance(item, str) and item.strip():
+                return item.strip()
+    return ""
+
+
 def _write_back_claims(db: Session, user: User, claims: dict, username: str) -> None:
     """把 claims 的资料字段回写到已有用户:非空才写、变化才 commit。
 
     - name/phone:claim 缺失或空白时保留库中原值(管理员手工维护的值不被清空);
+    - department:同 name/phone 语义(dept 缺失或空白时保留);
     - work_id:恒对齐 SSO sub(工号),为空或漂移都校正;
     - email:保持原语义(claims 里有值即覆盖)。
     新建用户建号时已按 claims 填充,此处通常为空操作,避免每个 SSO 请求都产生无谓 commit。
@@ -143,6 +164,7 @@ def _write_back_claims(db: Session, user: User, claims: dict, username: str) -> 
     email = claims.get("email", user.email)
     claim_name = (claims.get("name") or "").strip()
     claim_phone = (claims.get("mobile") or "").strip()
+    claim_dept = _claim_dept(claims)
     changed = False
     if email != user.email:
         user.email = email
@@ -152,6 +174,9 @@ def _write_back_claims(db: Session, user: User, claims: dict, username: str) -> 
         changed = True
     if claim_phone and (user.phone or "") != claim_phone:
         user.phone = claim_phone
+        changed = True
+    if claim_dept and (user.department or "") != claim_dept:
+        user.department = claim_dept
         changed = True
     if (user.work_id or "") != username:
         user.work_id = username
