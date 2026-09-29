@@ -37,7 +37,7 @@
           </div>
           <div class="tpl-list">
             <div v-for="t in templates" :key="t.id" class="page-item tpl" @click="newFromTemplate(t)">
-              <span class="tpl-icon">{{ t.icon || '📄' }}</span>
+              <span class="tpl-icon">📄</span>
               <span class="page-title">{{ t.name }}</span>
               <button class="icon-btn" title="删除模板" @click.stop="deleteTemplate(t.id)">✕</button>
             </div>
@@ -701,7 +701,6 @@ import { ElMessage, ElNotification, ElMessageBox } from 'element-plus'
 import type { UploadFile as ElUploadFile } from 'element-plus'
 import http from '../api/http'
 import TipTapEditor from '../components/TipTapEditor.vue'
-import { scopedGetJSON, scopedSetJSON } from '../utils/userStorage'
 import { useAuthStore } from '../stores/auth'
 import { PERM } from '../constants/perms'
 import MarkdownIt from 'markdown-it'
@@ -1316,11 +1315,10 @@ const savePage = async (target?: Page) => {
           cached[ci] = { ...cached[ci], title: page.title, icon: page.icon || '' }
         }
       }
-      // 最近访问列表同步(本地存储)
+      // 最近访问列表同步(仅内存; 服务端列表从 pages 表读取标题/图标)
       const ri = recentPages.value.findIndex(r => r.id === page.id)
       if (ri >= 0) {
         recentPages.value[ri] = { ...recentPages.value[ri], title: page.title, icon: page.icon || '' }
-        saveRecent()
       }
     }
   } catch (e) {
@@ -1409,17 +1407,30 @@ const setIcon = (emoji: string) => {
 }
 
 // ---------------- Notion 风格增强: 收藏 / 快速切换 / 大纲 / 页面菜单 / 回收站 ----------------
-const favPages = ref<{ id: string; title: string }[]>(scopedGetJSON('rag-fav-pages', []))
-const storedRecent = scopedGetJSON<{ id: string; title: string; icon?: string }[]>('rag-recent-pages', [])
-const recentPages = ref<{ id: string; title: string; icon?: string }[]>(Array.isArray(storedRecent) ? storedRecent.slice(0, 5) : [])
-const saveRecent = () => scopedSetJSON('rag-recent-pages', recentPages.value)
+const favPages = ref<{ id: string; title: string }[]>([])
+const recentPages = ref<{ id: string; title: string; icon?: string }[]>([])
+
+const loadRecent = async () => {
+  try {
+    const res = await http.get('/api/me/recent-pages', { params: { limit: 5 } })
+    recentPages.value = (res.data.items || []).slice(0, 5)
+  } catch {
+    // 加载失败保持空列表, 不阻断编辑
+  }
+}
+
+let recentPostedId = ''
 const pushRecent = () => {
   const p = currentPage.value
   if (!p || !p.id) return
   const title = p.title && p.title !== '加载中...' ? p.title : ''
   if (!title) return
   recentPages.value = [{ id: p.id, title, icon: p.icon || '' }, ...recentPages.value.filter(r => r.id !== p.id)].slice(0, 5)
-  saveRecent()
+  // 打开页面时向服务端记录访问(每页每次打开仅一次); 失败静默, 不阻断阅读
+  if (recentPostedId !== p.id) {
+    recentPostedId = p.id
+    http.post('/api/me/recent-pages', { page_id: p.id }).catch(() => {})
+  }
 }
 const trashPages = ref<{ id: string; title: string; notebook_id: string | null; deleted_at: string }[]>([])
 const trashOpen = ref(false)
@@ -1427,17 +1438,38 @@ const outlineOpen = ref(false)
 const pageWide = ref(false)
 const pageSmall = ref(false)
 
-const saveFavs = () => scopedSetJSON('rag-fav-pages', favPages.value)
+const loadFavorites = async () => {
+  try {
+    const res = await http.get('/api/me/favorites')
+    favPages.value = (res.data.items || []).map((p: { id: string; title: string }) => ({ id: p.id, title: p.title }))
+  } catch {
+    // 加载失败保持空列表, 不阻断编辑
+  }
+}
+
 const isFav = computed(() => !!currentPage.value && favPages.value.some(p => p.id === currentPage.value!.id))
-const toggleFav = () => {
+const toggleFav = async () => {
   if (!currentPage.value) return
   const id = currentPage.value.id
+  const title = currentPage.value.title || '无标题'
+  const prev = favPages.value.slice()
   if (favPages.value.some(p => p.id === id)) {
     favPages.value = favPages.value.filter(p => p.id !== id)
+    try {
+      await http.delete(`/api/me/favorites/${id}`)
+    } catch {
+      favPages.value = prev
+      ElMessage.error('取消收藏失败')
+    }
   } else {
-    favPages.value = [{ id, title: currentPage.value.title || '无标题' }, ...favPages.value]
+    favPages.value = [{ id, title }, ...favPages.value]
+    try {
+      await http.post('/api/me/favorites', { page_id: id })
+    } catch {
+      favPages.value = prev
+      ElMessage.error('收藏失败')
+    }
   }
-  saveFavs()
 }
 
 const backlinks = ref<{ id: string; title: string }[]>([])
@@ -1747,10 +1779,17 @@ const startCoverDrag = (ev: MouseEvent) => {
 }
 
 // ---------------- 模板库 ----------------
-const templates = ref<{ id: string; name: string; icon: string; content: string; created_at: string }[]>(
-  scopedGetJSON('rag-templates', [])
-)
-const saveTemplates = () => scopedSetJSON('rag-templates', templates.value)
+const templates = ref<{ id: string; name: string; content: string; updated_at?: string }[]>([])
+
+const loadTemplates = async () => {
+  try {
+    const res = await http.get('/api/me/templates')
+    templates.value = res.data.items || []
+  } catch {
+    // 加载失败保持空列表, 不阻断编辑
+  }
+}
+
 const saveAsTemplate = async () => {
   if (!currentPage.value) return
   let name = currentPage.value.title || '未命名模板'
@@ -1758,22 +1797,42 @@ const saveAsTemplate = async () => {
     const res = await ElMessageBox.prompt('模板名称', '另存为模板', { inputValue: name })
     name = res.value
   } catch { return }
-  const id = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now())
-  templates.value = [{ id, name, icon: currentPage.value.icon || '', content: currentPage.value.content || '', created_at: new Date().toISOString() }, ...templates.value]
-  saveTemplates()
-  ElMessage.success('已保存为模板')
+  name = name.trim()
+  if (!name) { ElMessage.warning('模板名称不能为空'); return }
+  const content = currentPage.value.content || ''
+  const existing = templates.value.find(t => t.name === name)
+  try {
+    if (existing) {
+      const res = await http.put(`/api/me/templates/${existing.id}`, { name, content })
+      const idx = templates.value.findIndex(t => t.id === existing.id)
+      if (idx >= 0) templates.value[idx] = res.data
+      ElMessage.success('已更新模板')
+    } else {
+      const res = await http.post('/api/me/templates', { name, content })
+      templates.value = [res.data, ...templates.value]
+      ElMessage.success('已保存为模板')
+    }
+  } catch (e: any) {
+    ElMessage.error(e.response?.data?.detail || '保存模板失败')
+  }
 }
-const newFromTemplate = async (t: { name: string; icon: string; content: string }) => {
+const newFromTemplate = async (t: { name: string; content: string }) => {
   if (!currentNotebook.value) { ElMessage.warning('请先选择笔记本'); return }
   try {
-    const res = await http.post('/api/pages', { title: t.name, content: t.content, icon: t.icon, notebook_id: currentNotebook.value.id })
+    const res = await http.post('/api/pages', { title: t.name, content: t.content, notebook_id: currentNotebook.value.id })
     currentPage.value = res.data
     await loadTree()
   } catch { ElMessage.error('创建失败') }
 }
-const deleteTemplate = (id: string) => {
+const deleteTemplate = async (id: string) => {
+  const prev = templates.value
   templates.value = templates.value.filter(t => t.id !== id)
-  saveTemplates()
+  try {
+    await http.delete(`/api/me/templates/${id}`)
+  } catch {
+    templates.value = prev
+    ElMessage.error('删除模板失败')
+  }
 }
 
 // ---------------- 笔记本分组 + 拖拽排序 ----------------
@@ -2137,6 +2196,9 @@ onMounted(async () => {
   await loadNotebooks()
   await loadProfiles()
   await loadTags()
+  loadRecent()
+  loadFavorites()
+  loadTemplates()
   auth.fetchMe().catch(() => {})
   // 协同编辑暂时停用: 修复"每次打开重复插入内容"的问题, 改为单机编辑(内容以 Markdown 为准)。
   collabEnabled.value = false

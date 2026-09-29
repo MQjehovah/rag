@@ -1,5 +1,8 @@
 <template>
   <div class="chat-page">
+    <div class="chat-toolbar">
+      <el-button size="small" text @click="clearHistory">清空对话</el-button>
+    </div>
     <div class="chat-messages" ref="messagesRef">
       <div v-if="messages.length === 0" class="chat-empty">
         <div class="empty-icon">💬</div>
@@ -124,12 +127,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, nextTick, watch, onMounted, onBeforeUnmount } from 'vue'
+import { ref, nextTick, watch, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import http from '../api/http'
 import { signImageElement, signRenderedImages } from '../utils/imageSign'
-import { scopedKey } from '../utils/userStorage'
 import MarkdownIt from 'markdown-it'
 import taskLists from 'markdown-it-task-lists'
 import hljs from 'highlight.js'
@@ -163,32 +165,52 @@ interface Message {
   sources?: Source[]
 }
 
-const STORAGE_KEY = scopedKey('rag_chat_history_v1')
-
-const loadHistory = (): Message[] => {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    if (!raw) return []
-    const parsed = JSON.parse(raw)
-    if (!Array.isArray(parsed)) return []
-    // Drop malformed messages and unfinished assistant answers (empty
-    // content means the page was refreshed mid-stream).
-    return parsed.filter((m: any) =>
-      m &&
-      (m.role === 'user' || m.role === 'assistant') &&
-      typeof m.content === 'string' &&
-      (m.role === 'user' || m.content.length > 0)
-    )
-  } catch {
-    return []
-  }
-}
-
-const messages = ref<Message[]>(loadHistory())
+const messages = ref<Message[]>([])
 const input = ref('')
 const loading = ref(false)
 const messagesRef = ref<HTMLElement>()
 const saveLoading = ref(false)
+
+// 载入服务端聊天记录(用户级隔离); 失败静默, 不阻断对话
+const loadHistory = async () => {
+  try {
+    const res = await http.get('/api/me/chat-messages', { params: { limit: 200 } })
+    const items = Array.isArray(res.data.items) ? res.data.items : []
+    messages.value = items
+      .filter((m: any) =>
+        m &&
+        (m.role === 'user' || m.role === 'assistant') &&
+        typeof m.content === 'string' &&
+        (m.role === 'user' || m.content.length > 0)
+      )
+      .map((m: any) => ({
+        role: m.role,
+        content: m.content,
+        sources: Array.isArray(m.sources) && m.sources.length ? m.sources : undefined,
+      }))
+  } catch { /* 静默 */ }
+}
+
+// 追加消息持久化; 失败静默, 不阻断对话(不回落到 localStorage)
+const persistMessage = (msg: Message) => {
+  http.post('/api/me/chat-messages', {
+    role: msg.role,
+    content: msg.content,
+    sources: msg.sources || [],
+  }).catch(() => {})
+}
+
+const clearHistory = async () => {
+  try {
+    await ElMessageBox.confirm('确定清空全部聊天记录？', '清空对话', { type: 'warning' })
+  } catch { return }
+  try {
+    await http.delete('/api/me/chat-messages')
+    messages.value = []
+  } catch {
+    ElMessage.error('清空失败')
+  }
+}
 
 const saveDialogVisible = ref(false)
 const saveForm = ref<{ should_save: boolean; action: string; title: string; notebook_id: string | null; new_notebook_name: string; update_page_id: string | null; summary: string; content: string; notebooks: { id: string; name: string }[]; pages: { id: string; title: string }[]; msgIdx: number }>({
@@ -203,16 +225,6 @@ const scrollToBottom = () => {
   })
 }
 
-let saveTimer: number | null = null
-watch(messages, () => {
-  if (saveTimer) clearTimeout(saveTimer)
-  saveTimer = window.setTimeout(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(messages.value))
-    } catch { /* storage full / unavailable */ }
-  }, 600)
-}, { deep: true })
-
 // 渲染完成后统一把图片换成带签名的地址（含历史消息与流式结束时的引用图）。
 const signMessageImages = () => {
   if (messagesRef.value) signRenderedImages(messagesRef.value)
@@ -222,19 +234,10 @@ watch(loading, (busy) => {
   if (!busy) nextTick(signMessageImages)
 })
 
-onMounted(() => {
+onMounted(async () => {
+  await loadHistory()
   scrollToBottom()
   nextTick(signMessageImages)
-})
-
-onBeforeUnmount(() => {
-  if (saveTimer) {
-    clearTimeout(saveTimer)
-    saveTimer = null
-  }
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(messages.value))
-  } catch { /* ignore */ }
 })
 
 const renderContent = (text: string) => {
@@ -251,6 +254,7 @@ const sendMessage = async () => {
     .map(m => ({ role: m.role, content: m.content }))
 
   messages.value.push({ role: 'user', content: query })
+  persistMessage({ role: 'user', content: query })
   input.value = ''
   loading.value = true
   scrollToBottom()
@@ -308,6 +312,11 @@ const sendMessage = async () => {
           // skip
         }
       }
+    }
+
+    // 助手回复完成(含 sources 事件)后持久化; 失败静默
+    if (assistantMsg.content.trim()) {
+      persistMessage({ role: 'assistant', content: assistantMsg.content, sources: assistantMsg.sources })
     }
   } catch (e: any) {
     assistantMsg.content = `请求失败: ${e.message}`
