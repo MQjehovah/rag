@@ -1,7 +1,7 @@
 <template>
   <div class="chat-page">
     <div class="chat-toolbar">
-      <el-button size="small" text @click="clearHistory">清空对话</el-button>
+      <el-button size="small" text :disabled="loading" @click="clearHistory">清空对话</el-button>
     </div>
     <div class="chat-messages" ref="messagesRef">
       <div v-if="messages.length === 0" class="chat-empty">

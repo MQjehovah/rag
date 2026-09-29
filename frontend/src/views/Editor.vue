@@ -1410,9 +1410,13 @@ const setIcon = (emoji: string) => {
 const favPages = ref<{ id: string; title: string }[]>([])
 const recentPages = ref<{ id: string; title: string; icon?: string }[]>([])
 
+// 最近访问请求序号: pushRecent/更新的 loadRecent 推进后, 在途 GET 回包作废
+let recentSeq = 0
 const loadRecent = async () => {
+  const seq = ++recentSeq
   try {
     const res = await http.get('/api/me/recent-pages', { params: { limit: 5 } })
+    if (seq !== recentSeq) return
     recentPages.value = (res.data.items || []).slice(0, 5)
   } catch {
     // 加载失败保持空列表, 不阻断编辑
@@ -1425,6 +1429,7 @@ const pushRecent = () => {
   if (!p || !p.id) return
   const title = p.title && p.title !== '加载中...' ? p.title : ''
   if (!title) return
+  recentSeq++
   recentPages.value = [{ id: p.id, title, icon: p.icon || '' }, ...recentPages.value.filter(r => r.id !== p.id)].slice(0, 5)
   // 打开页面时向服务端记录访问(每页每次打开仅一次); 失败静默, 不阻断阅读
   if (recentPostedId !== p.id) {
@@ -1452,22 +1457,21 @@ const toggleFav = async () => {
   if (!currentPage.value) return
   const id = currentPage.value.id
   const title = currentPage.value.title || '无标题'
-  const prev = favPages.value.slice()
   if (favPages.value.some(p => p.id === id)) {
     favPages.value = favPages.value.filter(p => p.id !== id)
     try {
       await http.delete(`/api/me/favorites/${id}`)
     } catch {
-      favPages.value = prev
       ElMessage.error('取消收藏失败')
+      void loadFavorites() // 失败不猜状态, 以服务端为准重同步
     }
   } else {
     favPages.value = [{ id, title }, ...favPages.value]
     try {
       await http.post('/api/me/favorites', { page_id: id })
     } catch {
-      favPages.value = prev
       ElMessage.error('收藏失败')
+      void loadFavorites() // 失败不猜状态, 以服务端为准重同步
     }
   }
 }
@@ -1825,13 +1829,12 @@ const newFromTemplate = async (t: { name: string; content: string }) => {
   } catch { ElMessage.error('创建失败') }
 }
 const deleteTemplate = async (id: string) => {
-  const prev = templates.value
   templates.value = templates.value.filter(t => t.id !== id)
   try {
     await http.delete(`/api/me/templates/${id}`)
   } catch {
-    templates.value = prev
     ElMessage.error('删除模板失败')
+    void loadTemplates() // 失败不猜状态, 以服务端为准重同步
   }
 }
 
