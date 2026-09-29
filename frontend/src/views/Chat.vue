@@ -129,6 +129,7 @@ import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import http from '../api/http'
 import { signImageElement, signRenderedImages } from '../utils/imageSign'
+import { scopedKey } from '../utils/userStorage'
 import MarkdownIt from 'markdown-it'
 import taskLists from 'markdown-it-task-lists'
 import hljs from 'highlight.js'
@@ -162,7 +163,7 @@ interface Message {
   sources?: Source[]
 }
 
-const STORAGE_KEY = 'rag_chat_history_v1'
+const STORAGE_KEY = scopedKey('rag_chat_history_v1')
 
 const loadHistory = (): Message[] => {
   try {

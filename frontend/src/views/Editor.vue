@@ -701,6 +701,7 @@ import { ElMessage, ElNotification, ElMessageBox } from 'element-plus'
 import type { UploadFile as ElUploadFile } from 'element-plus'
 import http from '../api/http'
 import TipTapEditor from '../components/TipTapEditor.vue'
+import { scopedGetJSON, scopedSetJSON } from '../utils/userStorage'
 import { useAuthStore } from '../stores/auth'
 import { PERM } from '../constants/perms'
 import MarkdownIt from 'markdown-it'
@@ -1319,7 +1320,7 @@ const savePage = async (target?: Page) => {
       const ri = recentPages.value.findIndex(r => r.id === page.id)
       if (ri >= 0) {
         recentPages.value[ri] = { ...recentPages.value[ri], title: page.title, icon: page.icon || '' }
-        localStorage.setItem('rag-recent-pages', JSON.stringify(recentPages.value))
+        saveRecent()
       }
     }
   } catch (e) {
@@ -1408,16 +1409,17 @@ const setIcon = (emoji: string) => {
 }
 
 // ---------------- Notion 风格增强: 收藏 / 快速切换 / 大纲 / 页面菜单 / 回收站 ----------------
-const favPages = ref<{ id: string; title: string }[]>(JSON.parse(localStorage.getItem('rag-fav-pages') || '[]'))
-const storedRecent = JSON.parse(localStorage.getItem('rag-recent-pages') || '[]')
+const favPages = ref<{ id: string; title: string }[]>(scopedGetJSON('rag-fav-pages', []))
+const storedRecent = scopedGetJSON<{ id: string; title: string; icon?: string }[]>('rag-recent-pages', [])
 const recentPages = ref<{ id: string; title: string; icon?: string }[]>(Array.isArray(storedRecent) ? storedRecent.slice(0, 5) : [])
+const saveRecent = () => scopedSetJSON('rag-recent-pages', recentPages.value)
 const pushRecent = () => {
   const p = currentPage.value
   if (!p || !p.id) return
   const title = p.title && p.title !== '加载中...' ? p.title : ''
   if (!title) return
   recentPages.value = [{ id: p.id, title, icon: p.icon || '' }, ...recentPages.value.filter(r => r.id !== p.id)].slice(0, 5)
-  localStorage.setItem('rag-recent-pages', JSON.stringify(recentPages.value))
+  saveRecent()
 }
 const trashPages = ref<{ id: string; title: string; notebook_id: string | null; deleted_at: string }[]>([])
 const trashOpen = ref(false)
@@ -1425,7 +1427,7 @@ const outlineOpen = ref(false)
 const pageWide = ref(false)
 const pageSmall = ref(false)
 
-const saveFavs = () => localStorage.setItem('rag-fav-pages', JSON.stringify(favPages.value))
+const saveFavs = () => scopedSetJSON('rag-fav-pages', favPages.value)
 const isFav = computed(() => !!currentPage.value && favPages.value.some(p => p.id === currentPage.value!.id))
 const toggleFav = () => {
   if (!currentPage.value) return
@@ -1746,9 +1748,9 @@ const startCoverDrag = (ev: MouseEvent) => {
 
 // ---------------- 模板库 ----------------
 const templates = ref<{ id: string; name: string; icon: string; content: string; created_at: string }[]>(
-  JSON.parse(localStorage.getItem('rag-templates') || '[]')
+  scopedGetJSON('rag-templates', [])
 )
-const saveTemplates = () => localStorage.setItem('rag-templates', JSON.stringify(templates.value))
+const saveTemplates = () => scopedSetJSON('rag-templates', templates.value)
 const saveAsTemplate = async () => {
   if (!currentPage.value) return
   let name = currentPage.value.title || '未命名模板'
