@@ -523,6 +523,7 @@ import ToggleNodeView from './ToggleNodeView.vue'
 import AttachmentNodeView from './AttachmentNodeView.vue'
 import MathNodeView from './MathNodeView.vue'
 import { TableFold } from './editorTableFold'
+import { CvAutoVisibility } from './editorAutoVisibility'
 import { createLazyObserver, type LazyObserver } from '../utils/lazyRender'
 import { printExpand } from '../utils/printExpand'
 import FootnoteItemView from './FootnoteItemView.vue'
@@ -2536,6 +2537,13 @@ const editor = useEditor({
       },
     }).configure({ resizable: true }),
     TableFold,
+    // 长文渲染优化: 视口外顶层块 content-visibility 跳渲(选区/幽灵建议所在块除外)
+    CvAutoVisibility.configure({
+      isBlockProtected: (node, pos, state) => {
+        const ghost = GHOST_PLUGIN_KEY.getState(state)
+        return !!ghost && ghost.pos >= pos && ghost.pos <= pos + node.nodeSize
+      },
+    }),
     TableRow,
     TableCell,
     TableHeader,
@@ -4496,6 +4504,13 @@ html.dark .editor-content :deep(.find-hit-current) {
   border-radius: 999px;
   padding: 1px 8px;
   background: var(--surface);
+}
+
+/* 长文渲染优化: 视口外顶层块跳过布局/绘制(CvAutoVisibility 装饰加类);
+   打印时强制可见, 见 Editor.vue 的 @media print 兜底 */
+.ProseMirror .cv-auto {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 80px;
 }
 
 /* 知识库检索/全库搜索弹窗 */

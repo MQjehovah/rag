@@ -3785,6 +3785,8 @@ html, body, #app { height: 100%; }
   /* 折叠的代码块/表格在打印时全部展开 */
   .code-block.is-collapsed pre.is-collapsed-pre { max-height: none !important; overflow: visible !important; }
   table.table-folded tr { display: table-row !important; }
+  /* 长文渲染优化兜底: content-visibility 跳渲的块打印时强制完整渲染(否则打印稿可能缺内容) */
+  .ProseMirror .cv-auto { content-visibility: visible !important; contain-intrinsic-size: none !important; }
   /* 展开后折叠按钮不再有意义, 打印时隐藏(内容已由上方规则全部展开) */
   .table-fold-toggle, .code-fold { display: none !important; }
 }
