@@ -1035,7 +1035,7 @@ function performSeed(): void {
     })
   }
   mermaidCache.clear()
-  nextTick(() => { scheduleMermaid(); disableSpellcheck() })
+  nextTick(() => { scheduleMermaid(); disableAutocorrect() })
 }
 
 /**
@@ -1060,7 +1060,7 @@ function applyExternalContentNow(markdown: string) {
   e.commands.setContent(markdown, false)
   applyingExternal = false
   mermaidCache.clear()
-  nextTick(() => { scheduleMermaid(); disableSpellcheck() })
+  nextTick(() => { scheduleMermaid(); disableAutocorrect() })
 }
 
 defineExpose({ applyExternalContent, prepareForPrint, finishPrint, findQuery })
@@ -2624,7 +2624,7 @@ const editor = useEditor({
     if (!applyingExternal && !(props.collab && !collabSynced)) emit('update:modelValue', markdown)
     if (find.open) refreshFind()
     noteGhostActivity()
-    nextTick(() => { scheduleMermaid(); disableSpellcheck() })
+    nextTick(() => { scheduleMermaid(); disableAutocorrect() })
   },
   onCreate: () => {
     if (pendingFindQuery !== null) {
@@ -2632,7 +2632,7 @@ const editor = useEditor({
       pendingFindQuery = null
       nextTick(() => findQuery(q))
     }
-    nextTick(() => { scheduleMermaid(); disableSpellcheck() })
+    nextTick(() => { scheduleMermaid(); disableAutocorrect() })
   },
   onBlur: () => {
     ghostSeq++
@@ -2647,6 +2647,7 @@ const editor = useEditor({
     noteGhostActivity()
   },
   editorProps: {
+    attributes: { spellcheck: 'true', lang: 'zh-CN' },
     transformPastedHTML: (html: string) => sanitizePastedHTML(html),
     handleClick: (_view, _pos, event) => {
       const target = event.target as HTMLElement | null
@@ -3485,7 +3486,7 @@ watch(() => props.modelValue, (newValue) => {
     editor.value.commands.setContent(newValue || '')
     applyingExternal = false
     mermaidCache.clear()
-    nextTick(() => { scheduleMermaid(); disableSpellcheck() })
+    nextTick(() => { scheduleMermaid(); disableAutocorrect() })
   }
   if (typeof requestIdleCallback !== 'undefined') {
     requestIdleCallback(apply, { timeout: 300 })
@@ -3573,10 +3574,10 @@ const renderMermaid = () => {
   }
 }
 
-const disableSpellcheck = () => {
+// 拼写检查保持开启(见 editorProps.attributes); 仅关闭自动纠正/补全, 代码块由浏览器自带忽略
+const disableAutocorrect = () => {
   const editorEl = document.querySelector('.ProseMirror')
   if (!editorEl) return
-  editorEl.setAttribute('spellcheck', 'false')
   editorEl.setAttribute('autocorrect', 'off')
   editorEl.setAttribute('autocomplete', 'off')
 }

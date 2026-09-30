@@ -41,6 +41,11 @@
               <span class="page-title">{{ t.name }}</span>
               <button
                 class="icon-btn"
+                title="模板历史（查看/恢复旧版本）"
+                @click.stop="openTemplateHistory(t)"
+              >🕘</button>
+              <button
+                class="icon-btn"
                 :title="t.visibility === 'public' ? '取消共享（他人不可见）' : '共享给所有用户（只读）'"
                 @click.stop="toggleTemplateVisibility(t)"
               >{{ t.visibility === 'public' ? '🌐' : '🔒' }}</button>
@@ -798,6 +803,41 @@
         <el-button @click="tplVarOpen = false">取消</el-button>
         <el-button type="primary" @click="confirmTemplateVars">生成笔记</el-button>
       </template>
+    </el-dialog>
+
+    <!-- 模板历史版本(仅本人模板) -->
+    <el-dialog v-model="tplHistoryOpen" :title="`模板历史：${tplHistoryTemplate?.name || ''}`" width="760px">
+      <div class="history-wrap">
+        <div class="history-list">
+          <div v-if="!tplHistoryItems.length" class="muted-hint" style="padding: 10px">暂无历史版本</div>
+          <div
+            v-for="r in tplHistoryItems"
+            :key="r.id"
+            class="history-item"
+            :class="{ active: tplHistorySelected?.id === r.id }"
+            @click="selectTemplateRevision(r)"
+          >
+            <div class="history-time">{{ formatTime(r.created_at) }}</div>
+            <div class="history-meta">{{ r.name }}</div>
+          </div>
+        </div>
+        <div class="history-preview">
+          <template v-if="tplHistorySelected">
+            <div class="history-preview-head">
+              <div class="history-preview-title-box">
+                <span class="history-preview-title">{{ tplHistorySelected.name }}</span>
+                <span class="history-preview-sub">{{ formatTime(tplHistorySelected.created_at) }}</span>
+              </div>
+              <el-button size="small" type="primary" @click="restoreTemplateRevision">恢复此版本</el-button>
+            </div>
+            <pre class="history-content">{{ tplHistorySelected.content_preview }}</pre>
+            <div v-if="tplHistorySelected.content_truncated" class="muted-hint" style="padding: 4px 10px 10px">
+              内容过长，仅预览前 500 字；恢复将取完整内容。
+            </div>
+          </template>
+          <div v-else class="muted-hint" style="padding: 14px">选择左侧版本查看内容</div>
+        </div>
+      </div>
     </el-dialog>
 
     <!-- 笔记本 zip 导出进度 -->
@@ -2457,6 +2497,64 @@ const deleteTemplate = async (id: string) => {
   } catch {
     ElMessage.error('删除模板失败')
     void loadTemplates() // 失败不猜状态, 以服务端为准重同步
+  }
+}
+
+// 模板历史版本(仅本人): 更新/恢复前自动存快照, 每模板保留最近 20 条
+interface TemplateRevisionItem {
+  id: string
+  name: string
+  created_at: string
+  content_preview: string
+  content_truncated: boolean
+}
+const tplHistoryOpen = ref(false)
+const tplHistoryTemplate = ref<TemplateItem | null>(null)
+const tplHistoryItems = ref<TemplateRevisionItem[]>([])
+const tplHistorySelected = ref<TemplateRevisionItem | null>(null)
+
+const loadTemplateHistory = async (t: TemplateItem) => {
+  try {
+    const res = await http.get(`/api/me/templates/${t.id}/revisions`)
+    tplHistoryItems.value = res.data.items || []
+  } catch {
+    tplHistoryItems.value = []
+    ElMessage.error('加载模板历史失败')
+  }
+  tplHistorySelected.value = tplHistoryItems.value[0] || null
+}
+
+const openTemplateHistory = async (t: TemplateItem) => {
+  tplHistoryTemplate.value = t
+  tplHistoryItems.value = []
+  tplHistorySelected.value = null
+  tplHistoryOpen.value = true
+  await loadTemplateHistory(t)
+}
+
+const selectTemplateRevision = (r: TemplateRevisionItem) => {
+  tplHistorySelected.value = r
+}
+
+const restoreTemplateRevision = async () => {
+  const t = tplHistoryTemplate.value
+  const r = tplHistorySelected.value
+  if (!t || !r) return
+  try {
+    await ElMessageBox.confirm(
+      `恢复 ${formatTime(r.created_at)} 的版本「${r.name}」将覆盖当前模板；当前版本会先存为历史。`,
+      '恢复模板版本',
+      { type: 'warning', confirmButtonText: '恢复', cancelButtonText: '取消' },
+    )
+  } catch { return }
+  try {
+    const res = await http.post(`/api/me/templates/${t.id}/revisions/${r.id}/restore`)
+    const idx = templates.value.findIndex(x => x.id === t.id)
+    if (idx >= 0) templates.value[idx] = { ...templates.value[idx], ...res.data }
+    ElMessage.success('已恢复模板版本')
+    await loadTemplateHistory(t) // 恢复前置快照, 刷新历史列表
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail || '恢复失败')
   }
 }
 

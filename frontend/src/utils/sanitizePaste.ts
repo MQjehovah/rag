@@ -19,6 +19,8 @@ interface Frame {
   wrappers: string[]
   /** 是否输出过真实开标签 */
   kept: boolean
+  /** 实际输出的标签名(Word 标题: p/div → h1..h6); 缺省同 name */
+  outName?: string
 }
 
 /** 整段丢弃内容的标签(含嵌套) */
@@ -114,6 +116,27 @@ function stylesToMarks(style: string): string[] {
 }
 
 const wrapperTag: Record<string, string> = { strong: 'strong', em: 'em', s: 's', u: 'u' }
+
+/**
+ * Word 标题识别: `mso-outline-level: N`(仅 1..6) 或样式名(class / mso-style-name)
+ * 匹配「标题 N / Heading N」→ 返回标题层级 1..6; 无则 0。N 超出范围时按 1..6 夹取。
+ */
+function headingLevelFromAttrs(attrs: [string, string][]): number {
+  // 先解实体: Word 的 style 里引号常写成 &quot;, 其分号会干扰属性值截取
+  const style = decodeEntities(attrs.find(([k]) => k === 'style')?.[1] || '')
+  const cls = attrs.find(([k]) => k === 'class')?.[1] || ''
+  const outline = /mso-outline-level\s*:\s*([^;"']+)/i.exec(style)?.[1]?.trim()
+  if (outline) {
+    const level = Number(outline)
+    return Number.isInteger(level) && level >= 1 && level <= 6 ? level : 0
+  }
+  const styleName = /mso-style-name\s*:\s*["']?([^;"']+)/i.exec(style)?.[1] || ''
+  for (const source of [cls, styleName]) {
+    const match = /(?:heading|标题)\s*([1-9]\d*)/i.exec(source)
+    if (match) return Math.min(6, Math.max(1, Number(match[1])))
+  }
+  return 0
+}
 
 interface ParsedTag {
   name: string
@@ -308,7 +331,7 @@ export function sanitizePastedHTML(html: string): string {
       while (stack.length > idx) {
         const frame = stack.pop()!
         for (let k = frame.wrappers.length - 1; k >= 0; k--) out += `</${frame.wrappers[k]}>`
-        if (frame.kept) out += `</${frame.name}>`
+        if (frame.kept) out += `</${frame.outName || frame.name}>`
       }
       continue
     }
@@ -320,12 +343,15 @@ export function sanitizePastedHTML(html: string): string {
 
     const attrs = parseAttrs(parsed.tag.attrs)
     const kept = KEEP_TAGS.has(name)
-    const frame: Frame = { name, wrappers: [], kept }
+    // Word 标题: 段落/容器带 mso-outline-level 或「标题 N / Heading N」样式名 → 输出为 h1..h6
+    const headingLevel = name === 'p' || name === 'div' ? headingLevelFromAttrs(attrs) : 0
+    const outName = headingLevel > 0 ? `h${headingLevel}` : name
+    const frame: Frame = { name, wrappers: [], kept, outName }
 
-    if (kept) out += renderOpenTag(name, attrs)
+    if (kept) out += renderOpenTag(outName, attrs)
 
     // span/div/section 等容器(或不含语义的标签)若带 style 表达加粗/斜体等, 用语义标签包一层
-    if (name !== 'pre' && name !== 'code') {
+    if (headingLevel === 0 && name !== 'pre' && name !== 'code') {
       const style = attrs.find(([k]) => k === 'style')?.[1] || ''
       const own = SEMANTIC_FOR[name] || []
       for (const mark of stylesToMarks(style)) {
@@ -342,7 +368,7 @@ export function sanitizePastedHTML(html: string): string {
   while (stack.length) {
     const frame = stack.pop()!
     for (let k = frame.wrappers.length - 1; k >= 0; k--) out += `</${frame.wrappers[k]}>`
-    if (frame.kept) out += `</${frame.name}>`
+    if (frame.kept) out += `</${frame.outName || frame.name}>`
   }
 
   return collapseEmptyParagraphs(out).trim()
