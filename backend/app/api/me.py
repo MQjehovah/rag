@@ -361,8 +361,9 @@ def update_template(template_id: str, body: TemplateBody, db: Session = Depends(
     name, content = _validate_template(body.name, body.content)
     visibility = _validate_template_visibility(body.visibility) if body.visibility is not None else None
     t = _get_own_template_or_404(db, current_user, template_id)
-    # 更新前把旧版本存一条修订(恢复也走这里覆盖)
-    _snapshot_template_revision(db, t)
+    # 仅 name/content 实际变化才存修订快照(纯 visibility 切换与同名同内容保存不产生)
+    if (t.name or "") != name or (t.content or "") != content:
+        _snapshot_template_revision(db, t)
     t.name = name
     t.content = content
     if visibility is not None:
@@ -403,7 +404,9 @@ def restore_template_revision(template_id: str, revision_id: str, db: Session = 
     )
     if r is None:
         raise HTTPException(status_code=404, detail="版本不存在")
-    _snapshot_template_revision(db, t)
+    # 仅恢复目标与当前 name/content 实际不同才存当前版本快照(重复恢复同版本不产生修订)
+    if (t.name or "") != (r.name or "") or (t.content or "") != (r.content or ""):
+        _snapshot_template_revision(db, t)
     t.name = r.name or ""
     t.content = r.content or ""
     t.updated_at = datetime.now()

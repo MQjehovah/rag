@@ -321,6 +321,26 @@ def test_template_revision_snapshot_on_update_and_prune(api_client, api_engine, 
     assert snapshots[0].name == "tpl" and snapshots[0].content == "v2"  # 更新前快照
 
 
+def test_template_revision_snapshot_only_on_content_change(api_client, api_engine, as_user):
+    """仅 name/content 实际变化才存修订: 纯 visibility 切换与同名同内容保存不产生快照。"""
+    _seed(api_engine)
+    _login_a(as_user)
+    t = api_client.post("/api/me/templates", json={"name": "t", "content": "v0"}).json()
+    tid = t["id"]
+    # 纯 visibility 变更(PUT 带同名同内容): 不新增修订
+    api_client.put(f"/api/me/templates/{tid}", json={
+        "name": "t", "content": "v0", "visibility": "public",
+    })
+    assert api_client.get(f"/api/me/templates/{tid}/revisions").json()["items"] == []
+    # 同名同内容重复保存: 仍不新增修订
+    api_client.put(f"/api/me/templates/{tid}", json={"name": "t", "content": "v0"})
+    assert api_client.get(f"/api/me/templates/{tid}/revisions").json()["items"] == []
+    # 内容变化: 存一条旧版本快照(仍为 v0)
+    api_client.put(f"/api/me/templates/{tid}", json={"name": "t", "content": "v1"})
+    revs = api_client.get(f"/api/me/templates/{tid}/revisions").json()["items"]
+    assert len(revs) == 1 and revs[0]["content_preview"] == "v0"
+
+
 def test_template_revision_restore(api_client, api_engine, as_user):
     _seed(api_engine)
     _login_a(as_user)

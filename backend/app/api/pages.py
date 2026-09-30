@@ -4,6 +4,7 @@ from sqlalchemy import or_, select, text, func
 from typing import Optional
 import uuid
 import secrets
+import re
 import time
 from datetime import datetime
 import logging
@@ -509,8 +510,23 @@ def set_page_view(page_id: str, data: PageViewUpdate, db: Session = Depends(get_
     db.commit()
     return {"view_type": page.view_type}
 
+_TS_FRACTION_RE = re.compile(r"\.(\d+)")
+
+
+def _normalize_ts_fraction(s: str) -> str:
+    """小数秒归一化为 6 位: 超长(如 9 位纳秒)截断, 不足补零。
+
+    Python 3.10- 的 fromisoformat 只接受 3/6 位小数, 截断可避免纳秒字符串解析失败
+    被当作"不可解析 base"而误报 409。
+    """
+    def _repl(m: "re.Match") -> str:
+        digits = m.group(1)[:6]
+        return "." + digits.ljust(6, "0")
+    return _TS_FRACTION_RE.sub(_repl, s)
+
+
 def _parse_updated_at(value) -> Optional[datetime]:
-    """解析客户端回传的 updated_at(容忍毫秒/时区/空格分隔), 不可解析返回 None。"""
+    """解析客户端回传的 updated_at(容忍毫秒/微秒/纳秒/时区/空格分隔), 不可解析返回 None。"""
     if isinstance(value, datetime):
         return value
     if not isinstance(value, str):
@@ -518,8 +534,9 @@ def _parse_updated_at(value) -> Optional[datetime]:
     s = value.strip()
     if not s:
         return None
+    s = _normalize_ts_fraction(s.replace("Z", "+00:00").replace("z", "+00:00"))
     try:
-        return datetime.fromisoformat(s.replace("Z", "+00:00").replace("z", "+00:00"))
+        return datetime.fromisoformat(s)
     except ValueError:
         pass
     for fmt in ("%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S.%f",
@@ -531,11 +548,22 @@ def _parse_updated_at(value) -> Optional[datetime]:
     return None
 
 
+def _to_naive_local(a: Optional[datetime]) -> Optional[datetime]:
+    """aware 时间先换算到服务器本地时区再去 tzinfo(服务端落库为 naive 本地时间)。"""
+    if a is None:
+        return None
+    if a.tzinfo is not None:
+        a = a.astimezone()
+    return a.replace(microsecond=0, tzinfo=None)
+
+
 def _same_second(a: Optional[datetime], b: Optional[datetime]) -> bool:
-    """乐观锁比较: 秒级相等即可(毫秒/时区精度差异不视为他人修改)。"""
-    if a is None or b is None:
+    """乐观锁比较: 换算本地时区后秒级相等即可(毫秒/时区精度差异不视为他人修改)。"""
+    na = _to_naive_local(a)
+    nb = _to_naive_local(b)
+    if na is None or nb is None:
         return False
-    return a.replace(microsecond=0, tzinfo=None) == b.replace(microsecond=0, tzinfo=None)
+    return na == nb
 
 
 @router.put("/{page_id}", response_model=PageResponse)

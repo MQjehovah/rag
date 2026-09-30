@@ -2,9 +2,10 @@
 
 - base 过期(或不可解析) → 409, 且不落库、不产生修订;
 - base 匹配(秒级) → 200, 行为与旧客户端一致;
-- 未传 base(旧客户端/协作模式) → 200, 行为不变。
+- 未传 base(旧客户端/协作模式) → 200, 行为不变;
+- 带时区(Z)与 9 位纳秒小数的 base: 换算本地时区/截断到微秒后匹配 → 不误 409。
 """
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import app.api.pages as pages
 from app.models.database import Page, PageRevision, get_session
@@ -107,4 +108,46 @@ def test_update_without_base_keeps_legacy_behavior(api_client, api_engine, as_us
     as_user([])
     res = api_client.put("/api/pages/p-lock", json={"content": "v2"})
     assert res.status_code == 200
+    assert _page_content(api_engine) == "v2"
+
+
+def test_utc_z_base_converted_to_local_not_false_conflict(api_client, api_engine, as_user, monkeypatch):
+    """带 Z 的 UTC ISO 基准: 旧实现直接丢 tzinfo 比 naive 本地时间会误报 409; 换算后应 200。"""
+    monkeypatch.setattr(pages, "background_index_page", _noop_async)
+    _seed_page(api_engine)
+    as_user([])
+    server_local = datetime(2026, 1, 2, 3, 4, 5, 678901)
+    db = get_session(api_engine)
+    try:
+        db.query(Page).filter(Page.id == "p-lock").update(
+            {Page.updated_at: server_local}, synchronize_session=False)
+        db.commit()
+    finally:
+        db.close()
+
+    aware_utc = server_local.astimezone(timezone.utc)
+    base_z = aware_utc.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+    res = api_client.put("/api/pages/p-lock", json={"content": "v2", "base_updated_at": base_z})
+    assert res.status_code == 200, res.text
+    assert _page_content(api_engine) == "v2"
+
+
+def test_nanosecond_fraction_base_truncated_not_false_conflict(api_client, api_engine, as_user, monkeypatch):
+    """9 位纳秒小数基准: 截断到微秒后秒级一致 → 200(旧解析器可能解析失败按 409 fail-closed)。"""
+    monkeypatch.setattr(pages, "background_index_page", _noop_async)
+    _seed_page(api_engine)
+    as_user([])
+    db = get_session(api_engine)
+    try:
+        db.query(Page).filter(Page.id == "p-lock").update(
+            {Page.updated_at: datetime(2026, 1, 2, 3, 4, 5, 678901)}, synchronize_session=False)
+        db.commit()
+    finally:
+        db.close()
+
+    res = api_client.put(
+        "/api/pages/p-lock",
+        json={"content": "v2", "base_updated_at": "2026-01-02T03:04:05.678901789"},
+    )
+    assert res.status_code == 200, res.text
     assert _page_content(api_engine) == "v2"
