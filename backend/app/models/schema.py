@@ -207,6 +207,8 @@ class PageUpdate(BaseModel):
     cover: Optional[str] = None
     cover_offset: Optional[int] = None
     status: Optional[str] = None
+    # 非协作模式乐观锁: 客户端回传上次见到的 updated_at, 与服务端不一致时 409
+    base_updated_at: Optional[str] = None
 
 class PageMove(BaseModel):
     parent_id: Optional[str] = None

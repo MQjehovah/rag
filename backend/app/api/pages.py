@@ -350,6 +350,8 @@ def page_revisions(page_id: str, db: Session = Depends(get_db), current_user=Dep
                 "id": r.id,
                 "title": r.title or "无标题",
                 "editor": r.editor or "",
+                "author_id": r.author_id or "",
+                "author_name": r.author_name or "",
                 "created_at": r.created_at,
                 "size": len(r.content or ""),
             }
@@ -371,6 +373,8 @@ def page_revision(page_id: str, rev_id: str, db: Session = Depends(get_db), curr
         "title": rev.title or "无标题",
         "content": rev.content or "",
         "editor": rev.editor or "",
+        "author_id": rev.author_id or "",
+        "author_name": rev.author_name or "",
         "created_at": rev.created_at,
     }
 
@@ -505,12 +509,47 @@ def set_page_view(page_id: str, data: PageViewUpdate, db: Session = Depends(get_
     db.commit()
     return {"view_type": page.view_type}
 
+def _parse_updated_at(value) -> Optional[datetime]:
+    """解析客户端回传的 updated_at(容忍毫秒/时区/空格分隔), 不可解析返回 None。"""
+    if isinstance(value, datetime):
+        return value
+    if not isinstance(value, str):
+        return None
+    s = value.strip()
+    if not s:
+        return None
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00").replace("z", "+00:00"))
+    except ValueError:
+        pass
+    for fmt in ("%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S.%f",
+                "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+        try:
+            return datetime.strptime(s, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _same_second(a: Optional[datetime], b: Optional[datetime]) -> bool:
+    """乐观锁比较: 秒级相等即可(毫秒/时区精度差异不视为他人修改)。"""
+    if a is None or b is None:
+        return False
+    return a.replace(microsecond=0, tzinfo=None) == b.replace(microsecond=0, tzinfo=None)
+
+
 @router.put("/{page_id}", response_model=PageResponse)
 def update_page(page_id: str, data: PageUpdate, background_tasks: BackgroundTasks, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     page = db.query(Page).filter(Page.id == page_id).first()
     if not page or page.deleted_at is not None:
         raise HTTPException(status_code=404, detail="笔记不存在")
     _check_page_access(page, current_user, db)
+
+    # 非协作模式乐观锁: base 与服务端 updated_at 秒级不一致(或不可解析)即拒绝,
+    # 不落库、不记修订; 旧客户端不传该字段时行为不变。
+    if data.base_updated_at is not None:
+        if not _same_second(page.updated_at, _parse_updated_at(data.base_updated_at)):
+            raise HTTPException(status_code=409, detail="页面已被他人修改，请刷新后再保存")
 
     if data.title is not None:
         page.title = data.title
@@ -547,15 +586,15 @@ def update_page(page_id: str, data: PageUpdate, background_tasks: BackgroundTask
             last.content != (page.content or "")
             and (now - (last.created_at or now)).total_seconds() > 120
         ):
-            editor_name = ""
-            if isinstance(current_user, dict):
-                editor_name = current_user.get("name") or current_user.get("username") or ""
+            uid, author_name = _comment_user(db, current_user)
             db.add(PageRevision(
                 id=str(uuid.uuid4()),
                 page_id=page.id,
                 title=page.title or "",
                 content=page.content or "",
-                editor=editor_name,
+                editor=author_name,
+                author_id=uid,
+                author_name=author_name,
                 created_at=now,
             ))
             db.flush()

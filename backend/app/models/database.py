@@ -76,6 +76,9 @@ class PageRevision(Base):
     title = Column(String(255), default='')
     content = Column(Text, default='')
     editor = Column(String(255), default='')
+    # 修订作者(user id / 显示名); 历史行经迁移回填空串
+    author_id = Column(String(36), default='')
+    author_name = Column(String(255), default='')
     created_at = Column(DateTime, default=datetime.now)
 
 
@@ -668,10 +671,36 @@ def run_user_template_column_migrations(engine):
     logger.info("Added column visibility to table user_templates")
 
 
+def run_page_revision_author_migrations(engine):
+    """page_revisions 幂等迁移(Postgres+SQLite 兼容): 补修订作者列 author_id/author_name。
+
+    Base.metadata.create_all 不会给已存在表加列; 必须在 _migrate_schema 之前调用,
+    ALTER 带 DEFAULT '', 存量行即回填空串。缺列才加, 重复执行无副作用。
+    """
+    inspector = inspect(engine)
+    if not inspector.has_table("page_revisions"):
+        return
+    existing = {c["name"] for c in inspector.get_columns("page_revisions")}
+    missing = [name for name in ("author_id", "author_name") if name not in existing]
+    if not missing:
+        return
+    with engine.begin() as conn:
+        if "author_id" in missing:
+            conn.execute(sqlalchemy_text(
+                "ALTER TABLE page_revisions ADD COLUMN author_id VARCHAR(36) DEFAULT ''"
+            ))
+        if "author_name" in missing:
+            conn.execute(sqlalchemy_text(
+                "ALTER TABLE page_revisions ADD COLUMN author_name VARCHAR(255) DEFAULT ''"
+            ))
+    logger.info("Added revision author columns to table page_revisions")
+
+
 def init_db(engine):
     Base.metadata.create_all(engine)
     run_user_column_migrations(engine)
     run_user_template_column_migrations(engine)
+    run_page_revision_author_migrations(engine)
     _migrate_schema(engine)
     _backfill_text_defaults(engine)
     _ensure_wiki_group_index(engine)
