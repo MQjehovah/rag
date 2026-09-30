@@ -1,11 +1,19 @@
-"""编辑器 AI 助手接口: POST /api/editor/ai。
+"""编辑器 AI 助手接口。
 
-按 action 选用专用提示词,经由 app.core.llm.call_llm_text 调用已配置的 LLM,
-统一返回 Markdown 文本;不写审计表、不落库,输入仅截断 200 字记录日志。
+- POST /api/editor/ai: 按 action 选用专用提示词,经由 app.core.llm.call_llm_text
+  调用已配置的 LLM,统一返回 Markdown 文本;
+- POST /api/editor/ai/stream: 同一请求体,直连 LLM 流式转发增量(SSE delta + [DONE]);
+- POST /api/editor/ai/complete: 行内补全,根据光标前后文返回一小段续写建议。
+
+三个接口均不写审计表、不落库,输入仅截断 200 字记录日志。
 """
+import json
 import logging
+import re
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.config import settings
@@ -20,6 +28,12 @@ TEXT_MAX = 8000
 CONTEXT_MAX = 4000
 DEFAULT_TARGET_LANG = "英文"
 LOG_SNIPPET = 200
+
+COMPLETE_BEFORE_MAX = 2000
+COMPLETE_AFTER_MAX = 1000
+COMPLETE_CONTEXT_MAX = 2000
+SUGGESTION_MAX = 120
+COMPLETE_TIMEOUT = 60.0
 
 # 每个 action 独立 system/user 提示词;统一要求输出 Markdown、不解释、不寒暄。
 # system/user 中除 {text}/{target_lang} 外不得出现花括号,组装时直接 format。
@@ -106,9 +120,8 @@ def _build_messages(action: str, text: str, context: str, target_lang: str) -> l
     ]
 
 
-@router.post("/ai")
-async def editor_ai(request: EditorAIRequest, current_user=Depends(get_current_user)):
-    """编辑器 AI 助手:按 action 调用 LLM,返回 {"result": "<Markdown 文本>"}。"""
+def _validate_editor_request(request: EditorAIRequest):
+    """共用校验:返回 (action, text, context, target_lang),非法时抛 400。"""
     action = request.action.strip()
     if action not in ACTION_PROMPTS:
         raise HTTPException(status_code=400, detail="不支持的 action")
@@ -119,12 +132,19 @@ async def editor_ai(request: EditorAIRequest, current_user=Depends(get_current_u
         raise HTTPException(status_code=400, detail=f"text 超过 {TEXT_MAX} 字符限制")
     if len(request.context) > CONTEXT_MAX:
         raise HTTPException(status_code=400, detail=f"context 超过 {CONTEXT_MAX} 字符限制")
+    target_lang = request.target_lang.strip() or DEFAULT_TARGET_LANG
+    return action, text, request.context, target_lang
+
+
+@router.post("/ai")
+async def editor_ai(request: EditorAIRequest, current_user=Depends(get_current_user)):
+    """编辑器 AI 助手:按 action 调用 LLM,返回 {"result": "<Markdown 文本>"}。"""
+    action, text, context, target_lang = _validate_editor_request(request)
 
     if not settings.llm_api_url:
         raise HTTPException(status_code=500, detail="未配置 LLM API")
 
-    target_lang = request.target_lang.strip() or DEFAULT_TARGET_LANG
-    messages = _build_messages(action, text, request.context, target_lang)
+    messages = _build_messages(action, text, context, target_lang)
     try:
         result = await call_llm_text(messages, context=f"editor-ai:{action}")
     except Exception as e:
@@ -134,3 +154,134 @@ async def editor_ai(request: EditorAIRequest, current_user=Depends(get_current_u
         logger.warning(f"editor-ai[{action}] LLM 返回为空; input(截断): {text[:LOG_SNIPPET]}")
         raise HTTPException(status_code=502, detail="LLM 返回为空")
     return {"result": result}
+
+
+async def _stream_llm_text(messages: list):
+    """直连 LLM 的 SSE 流,逐段产出内容增量(供测试替换的内部 helper)。"""
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        async with client.stream(
+            "POST",
+            settings.llm_api_url,
+            headers={
+                "Authorization": f"Bearer {settings.llm_api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": settings.llm_model,
+                "messages": messages,
+                "stream": True,
+            },
+        ) as resp:
+            resp.raise_for_status()
+            async for line in resp.aiter_lines():
+                if not line.startswith("data: "):
+                    continue
+                data_str = line[6:]
+                if data_str.strip() == "[DONE]":
+                    break
+                try:
+                    data = json.loads(data_str)
+                except json.JSONDecodeError:
+                    continue
+                delta = data.get("choices", [{}])[0].get("delta", {})
+                content = delta.get("content", "")
+                if content:
+                    yield content
+
+
+@router.post("/ai/stream")
+async def editor_ai_stream(request: EditorAIRequest, current_user=Depends(get_current_user)):
+    """编辑器 AI 流式接口:逐 delta 推送 SSE,结束发 [DONE];错误也转为 error 事件。"""
+    action, text, context, target_lang = _validate_editor_request(request)
+
+    if not settings.llm_api_url:
+        raise HTTPException(status_code=500, detail="未配置 LLM API")
+
+    messages = _build_messages(action, text, context, target_lang)
+
+    async def generate():
+        try:
+            async for delta in _stream_llm_text(messages):
+                yield f"data: {json.dumps({'type': 'delta', 'content': delta}, ensure_ascii=False)}\n\n"
+        except httpx.HTTPStatusError as e:
+            logger.warning(
+                f"editor-ai-stream[{action}] LLM HTTP error: {e}; input(截断): {text[:LOG_SNIPPET]}"
+            )
+            yield f"data: {json.dumps({'type': 'error', 'content': f'LLM API 调用失败: {e.response.status_code}'}, ensure_ascii=False)}\n\n"
+        except Exception as e:
+            logger.warning(f"editor-ai-stream[{action}] LLM call failed: {e}; input(截断): {text[:LOG_SNIPPET]}")
+            yield f"data: {json.dumps({'type': 'error', 'content': str(e)[:200]}, ensure_ascii=False)}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+class EditorCompleteRequest(BaseModel):
+    text_before: str = ""
+    text_after: str = ""
+    context: str = ""
+
+
+# 行内补全:只续写一小段,到句号/换行即止,输出不带任何 Markdown 装饰。
+COMPLETE_PROMPT = {
+    "system": (
+        "你是行内写作补全助手,负责根据光标前文自然续写一小段文字:"
+        "紧接前文继续写,不要重复前文已有内容;只输出续写文字本身,不超过约120字符,"
+        "到句号或换行立即结束;不要解释,不要寒暄,不要标题、列表、加粗等 Markdown 装饰。"
+    ),
+    "user": "光标前文(请在此之后续写):\n\n{text_before}",
+}
+
+_QUOTE_CHARS = "\"'“”‘’「」『』《》"
+_PREFIX_RE = re.compile(r"^(?:续写内容|建议内容|续写|补全|接续|建议|内容)\s*[:：]\s*")
+
+
+def _build_complete_messages(text_before: str, text_after: str, context: str) -> list:
+    """组装行内补全提示词:前文为主,后文与上下文仅作衔接参考。"""
+    user = COMPLETE_PROMPT["user"].format(text_before=text_before)
+    if text_after:
+        user += f"\n\n光标后文(续写需与其衔接,不要重复):\n\n{text_after}"
+    if context:
+        user += f"\n\n参考上下文:\n\n{context}"
+    return [
+        {"role": "system", "content": COMPLETE_PROMPT["system"]},
+        {"role": "user", "content": user},
+    ]
+
+
+def _clean_suggestion(raw: str) -> str:
+    """模型输出去噪:取首行、去首尾引号与「续写:」类前缀、截断到 120 字符。"""
+    text = (raw or "").strip()
+    if not text:
+        return ""
+    text = text.splitlines()[0].strip()
+    text = text.lstrip(_QUOTE_CHARS)
+    text = _PREFIX_RE.sub("", text).lstrip(_QUOTE_CHARS)
+    if len(text) > SUGGESTION_MAX:
+        text = text[:SUGGESTION_MAX]
+    return text.rstrip(_QUOTE_CHARS).rstrip()
+
+
+@router.post("/ai/complete")
+async def editor_ai_complete(request: EditorCompleteRequest, current_user=Depends(get_current_user)):
+    """行内补全:根据光标前后文返回 {"suggestion": "<≤120 字续写>"}。"""
+    text_before = request.text_before
+    if not text_before.strip():
+        raise HTTPException(status_code=400, detail="text_before 不能为空")
+    if len(text_before) > COMPLETE_BEFORE_MAX:
+        raise HTTPException(status_code=400, detail=f"text_before 超过 {COMPLETE_BEFORE_MAX} 字符限制")
+    if len(request.text_after) > COMPLETE_AFTER_MAX:
+        raise HTTPException(status_code=400, detail=f"text_after 超过 {COMPLETE_AFTER_MAX} 字符限制")
+    if len(request.context) > COMPLETE_CONTEXT_MAX:
+        raise HTTPException(status_code=400, detail=f"context 超过 {COMPLETE_CONTEXT_MAX} 字符限制")
+
+    if not settings.llm_api_url:
+        raise HTTPException(status_code=500, detail="未配置 LLM API")
+
+    messages = _build_complete_messages(text_before, request.text_after, request.context)
+    try:
+        raw = await call_llm_text(messages, context="editor-complete", timeout=COMPLETE_TIMEOUT)
+    except Exception as e:
+        logger.warning(f"editor-complete LLM call failed: {e}; input(截断): {text_before[:LOG_SNIPPET]}")
+        raise HTTPException(status_code=502, detail=f"LLM 调用失败: {str(e)[:100]}")
+    return {"suggestion": _clean_suggestion(raw)}
