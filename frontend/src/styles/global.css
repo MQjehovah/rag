@@ -294,13 +294,13 @@ html.dark .ProseMirror h4 { color: var(--text) !important; }
 html.dark .ProseMirror code { background: var(--surface-3) !important; color: #f472b6 !important; }
 html.dark .ProseMirror mark { background: #6b5f1a; color: #fde68a; }
 html.dark .ProseMirror blockquote { background: var(--surface-2) !important; color: var(--text-2) !important; border-left-color: var(--primary) !important; }
-html.dark .ProseMirror table th { background: var(--surface-2) !important; }
+html.dark .ProseMirror table th:not([style*='background-color']) { background: var(--surface-2) !important; }
 html.dark .ProseMirror th, html.dark .ProseMirror td { border-color: var(--border) !important; }
 html.dark .markdown-body pre { background: #0c1017 !important; border-color: var(--border) !important; }
 html.dark .markdown-body code { background: var(--surface-3) !important; color: #f472b6 !important; }
 html.dark .markdown-body blockquote { color: var(--text-2) !important; border-left-color: var(--primary) !important; }
 html.dark .markdown-body th, html.dark .markdown-body td { border-color: var(--border) !important; }
-html.dark .markdown-body th { background: var(--surface-2) !important; }
+html.dark .markdown-body th:not([style*='background-color']) { background: var(--surface-2) !important; }
 html.dark .markdown-body strong { color: var(--text) !important; }
 html.dark .chat-message.assistant .message-content { background: var(--surface-2) !important; border-color: var(--border) !important; color: var(--text) !important; }
 html.dark .source-chip { background: var(--surface-2) !important; border-color: var(--border) !important; color: var(--text-2) !important; }
@@ -308,3 +308,13 @@ html.dark .chat-input-area .el-textarea__inner { background: var(--surface-2) !i
 html.dark .wiki-body h1, html.dark .wiki-body h2, html.dark .wiki-body h3 { color: var(--text) !important; }
 html.dark .login-card { background: var(--surface) !important; }
 html.dark .login-page { background: var(--bg) !important; }
+
+/* 单元格底色的浅色底在深色主题下强制深色文字(含后代), 保证对比度 */
+html.dark .ProseMirror td[style*='background-color'],
+html.dark .ProseMirror th[style*='background-color'],
+html.dark .ProseMirror td[style*='background-color'] *,
+html.dark .ProseMirror th[style*='background-color'] *,
+html.dark .markdown-body td[style*='background-color'],
+html.dark .markdown-body th[style*='background-color'],
+html.dark .markdown-body td[style*='background-color'] *,
+html.dark .markdown-body th[style*='background-color'] * { color: #37352f !important; }

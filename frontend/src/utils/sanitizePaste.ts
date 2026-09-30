@@ -4,10 +4,13 @@
  * 仅保留: 标题(p/h1-h6)/段落/列表(ul/ol/li)/表格/链接/加粗/斜体/下划线/删除线/代码/引用/图片,
  * 以及编辑器既有节点所需的 marker(callout/折叠块/附件/引用卡片/任务列表/高亮)。
  * 剥离 style/class/id/data-* (明确白名单的 marker 除外) 与 script/iframe 等;
+ * 单元格(td/th)的 style 仅保留安全的 background-color 并转为 `data-bg`;
  * 空段落(`<p></p>`/`<p><br></p>`/`<p>&nbsp;</p>`)折叠。
  *
  * 不依赖 DOM(纯函数), 供 transformPastedHTML 与单测共用。
  */
+
+import { extractSafeBackgroundFromStyle } from './tableCellColor'
 
 interface Frame {
   /** 原始标签名(小写); 未保留的标签用于配对闭合 */
@@ -69,8 +72,8 @@ const KEEP_ATTRS: Record<string, string[]> = {
   img: ['src', 'alt', 'title', 'width'],
   span: ['data-math-inline', 'data-latex'],
   sup: ['data-fn', 'data-fn-id'],
-  table: [], thead: [], tbody: [], tfoot: [], tr: [], td: ['colspan', 'rowspan'],
-  th: ['colspan', 'rowspan'], caption: [], colgroup: [], col: ['span'],
+  table: [], thead: [], tbody: [], tfoot: [], tr: [], td: ['colspan', 'rowspan', 'data-bg'],
+  th: ['colspan', 'rowspan', 'data-bg'], caption: [], colgroup: [], col: ['span'],
   div: ['data-callout', 'data-attachment', 'data-url', 'data-name', 'data-size', 'data-mime', 'data-math-block', 'data-latex', 'data-footnotes', 'data-footnote', 'data-indent', 'data-citation', 'data-id', 'data-kind', 'data-title', 'data-summary'],
   details: ['data-toggle', 'open'], summary: [],
 }
@@ -195,7 +198,14 @@ function renderOpenTag(name: string, attrs: [string, string][]): string {
   const allowed = KEEP_ATTRS[name] ?? []
   const parts: string[] = []
   for (const [key, value] of attrs) {
-    if (key === 'style') continue
+    if (key === 'style') {
+      // 单元格底色: style 整段剥离, 仅把安全的 background-color 转成 data-bg(parseHTML 还原)
+      if (name === 'td' || name === 'th') {
+        const bg = extractSafeBackgroundFromStyle(value)
+        if (bg) parts.push(`data-bg="${escapeAttr(bg)}"`)
+      }
+      continue
+    }
     if (key === 'class') {
       const marker = MARKER_CLASSES[name]
       if (marker && marker(value.trim())) parts.push(`class="${escapeAttr(value.trim())}"`)

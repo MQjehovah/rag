@@ -23,6 +23,11 @@ function hasSpan(node: any): boolean {
   return (node.attrs?.colspan ?? 1) > 1 || (node.attrs?.rowspan ?? 1) > 1
 }
 
+/** 单元格底色(R4a): GFM 表格无法表达, 回退整表 HTML 以保证往返无损。 */
+function hasCellBackground(node: any): boolean {
+  return !!node.attrs?.backgroundColor
+}
+
 function childNodes(node: any): any[] {
   const out: any[] = []
   if (node) node.forEach((child: any) => { out.push(child) })
@@ -33,8 +38,8 @@ export function isMarkdownSerializableTable(node: any): boolean {
   const rows = childNodes(node)
   const firstRow = rows[0]
   if (!firstRow) return false
-  if (childNodes(firstRow).some((cell) => cell.type.name !== 'tableHeader' || hasSpan(cell))) return false
-  if (rows.slice(1).some((row) => childNodes(row).some((cell) => cell.type.name === 'tableHeader' || hasSpan(cell)))) return false
+  if (childNodes(firstRow).some((cell) => cell.type.name !== 'tableHeader' || hasSpan(cell) || hasCellBackground(cell))) return false
+  if (rows.slice(1).some((row) => childNodes(row).some((cell) => cell.type.name === 'tableHeader' || hasSpan(cell) || hasCellBackground(cell)))) return false
   return true
 }
 
@@ -74,7 +79,7 @@ export function serializeTableMarkdown(state: any, node: any, parent: any): void
   const rows: any[] = []
   node.forEach((row: any) => { rows.push(row) })
   for (const row of rows) {
-    row.forEach((cell: any) => { if (!isSimpleCell(cell)) fallback = true })
+    row.forEach((cell: any) => { if (!isSimpleCell(cell) || hasCellBackground(cell)) fallback = true })
   }
   if (fallback) {
     state.write(serializeNodeHtml(node, parent))

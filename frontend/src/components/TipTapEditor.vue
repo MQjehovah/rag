@@ -188,6 +188,23 @@
         <button class="ctx-item" :disabled="!canMove('column', 'left')" @click="ctxTableMove('column', 'left')"><ArrowLeft :size="14" /> 左移本列</button>
         <button class="ctx-item" :disabled="!canMove('column', 'right')" @click="ctxTableMove('column', 'right')"><ArrowRight :size="14" /> 右移本列</button>
         <div class="ctx-sep"></div>
+        <button class="ctx-item" @click="tableMenu.colorOpen = !tableMenu.colorOpen">
+          <PaintBucket :size="14" /> 单元格底色
+          <span class="ctx-caret">{{ tableMenu.colorOpen ? '▾' : '▸' }}</span>
+        </button>
+        <div v-if="tableMenu.colorOpen" class="ctx-colors">
+          <button
+            v-for="c in CELL_BG_PALETTE"
+            :key="c.value"
+            class="ctx-color"
+            :class="{ active: cellColorsEqual(currentCellBg, c.value) }"
+            :style="{ background: c.value }"
+            :title="c.label"
+            @click="ctxSetCellBg(c.value)"
+          ></button>
+          <button class="ctx-color-clear" :disabled="!currentCellBg" title="清除底色" @click="ctxSetCellBg(null)">清除</button>
+        </div>
+        <div class="ctx-sep"></div>
         <button class="ctx-item danger" @click="ctxTable('deleteRow')"><Trash2 :size="14" /> 删除本行</button>
         <button class="ctx-item danger" @click="ctxTable('deleteColumn')"><Trash2 :size="14" /> 删除本列</button>
         <button class="ctx-item danger" @click="ctxTable('deleteTable')"><Trash2 :size="14" /> 删除表格</button>
@@ -500,8 +517,6 @@ import Placeholder from '@tiptap/extension-placeholder'
 import Image from '@tiptap/extension-image'
 import Table from '@tiptap/extension-table'
 import TableRow from '@tiptap/extension-table-row'
-import TableCell from '@tiptap/extension-table-cell'
-import TableHeader from '@tiptap/extension-table-header'
 import TaskList from '@tiptap/extension-task-list'
 import TaskItem from '@tiptap/extension-task-item'
 import Link from '@tiptap/extension-link'
@@ -533,6 +548,7 @@ import ToggleNodeView from './ToggleNodeView.vue'
 import AttachmentNodeView from './AttachmentNodeView.vue'
 import MathNodeView from './MathNodeView.vue'
 import { TableFold } from './editorTableFold'
+import { TableCellWithColor, TableHeaderWithColor } from './editorTableCell'
 import { CvAutoVisibility } from './editorAutoVisibility'
 import { createLazyObserver, type LazyObserver } from '../utils/lazyRender'
 import { printExpand } from '../utils/printExpand'
@@ -562,9 +578,10 @@ import { nextFootnoteLabel } from '../utils/markdownFootnotes'
 import { serializeTextMarkdown } from '../utils/markdownText'
 import { serializeTableMarkdown } from '../utils/markdownTable'
 import {
-  canMoveColumn, canMoveRow, moveTableColumn, moveTableRow,
+  canMoveColumn, canMoveRow, findTableCellContext, moveTableColumn, moveTableRow,
   type MoveAxis, type MoveDirection,
 } from '../utils/tableMove'
+import { CELL_BG_PALETTE, cellColorsEqual } from '../utils/tableCellColor'
 import type { CollabPeer, CollabMetaSnapshot } from '../utils/collab'
 import { decideSeed, isPersistenceEnabled, isPersistedBaseStale, readSeedClaim } from '../utils/collab'
 import {
@@ -582,7 +599,7 @@ import {
   Image as ImageIcon, Table as TableIcon, Workflow, Undo2, Redo2, Plus, Trash2, Copy,
   ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Pilcrow, GripVertical, Heading1, Heading2, Heading3, Eraser,
   Settings2, Keyboard, FileText, BetweenHorizontalEnd, Search, ChevronUp, ChevronDown, X, Sparkles, Paperclip,
-  Combine, Split, IndentIncrease, IndentDecrease, WandSparkles, Library, FileSearch, WholeWord,
+  Combine, Split, IndentIncrease, IndentDecrease, WandSparkles, Library, FileSearch, WholeWord, PaintBucket,
 } from 'lucide-vue-next'
 
 const uploadAndInsert = (view: any, file: File) => {
@@ -2559,8 +2576,8 @@ const editor = useEditor({
       },
     }),
     TableRow,
-    TableCell,
-    TableHeader,
+    TableCellWithColor,
+    TableHeaderWithColor,
     TaskList,
     TaskItem.configure({ nested: true }),
     Link.configure({
@@ -2712,7 +2729,7 @@ const charCount = computed(() => editor.value?.storage.characterCount.characters
 const isInTable = computed(() => editor.value?.isActive('table') ?? false)
 
 // ---------------- 表格操作(工具条 + 右键菜单) ----------------
-const tableMenu = reactive({ open: false, x: 0, y: 0 })
+const tableMenu = reactive({ open: false, x: 0, y: 0, colorOpen: false })
 
 /**
  * 安全执行表格命令: 空表格/无表格选区/合并拆分不适用等边界下 can() 为 false,
@@ -2748,6 +2765,23 @@ function moveTable(axis: MoveAxis, dir: MoveDirection) {
   e.view.focus()
 }
 
+/** 当前单元格底色(右键菜单色盘高亮用)。 */
+const currentCellBg = computed(() => {
+  const e = editor.value
+  if (!e) return null
+  return (findTableCellContext(e.state)?.cell.attrs?.backgroundColor as string | null) || null
+})
+
+/** 设置/清除当前单元格底色(null = 清除)。 */
+function setCellBackground(color: string | null) {
+  const e = editor.value
+  if (!e) return
+  const ctx = findTableCellContext(e.state)
+  if (!ctx) return
+  const attrs = { ...ctx.cell.attrs, backgroundColor: color }
+  e.view.dispatch(e.state.tr.setNodeMarkup(ctx.cellPos, undefined, attrs))
+}
+
 function onTableContextMenu(ev: MouseEvent) {
   const e = editor.value
   if (!e) return
@@ -2760,12 +2794,14 @@ function onTableContextMenu(ev: MouseEvent) {
     e.chain().focus().setTextSelection(Math.min(pos, e.state.doc.content.size)).run()
   } catch { /* ignore */ }
   tableMenu.open = true
+  tableMenu.colorOpen = false
   tableMenu.x = Math.max(8, Math.min(ev.clientX, window.innerWidth - 196))
   tableMenu.y = Math.max(8, Math.min(ev.clientY, window.innerHeight - 460))
 }
 
 function closeTableMenu() {
   tableMenu.open = false
+  tableMenu.colorOpen = false
 }
 
 function ctxTable(name: string) {
@@ -2776,6 +2812,12 @@ function ctxTable(name: string) {
 function ctxTableMove(axis: MoveAxis, dir: MoveDirection) {
   tableMenu.open = false
   moveTable(axis, dir)
+}
+
+function ctxSetCellBg(color: string | null) {
+  tableMenu.open = false
+  setCellBackground(color)
+  editor.value?.view.focus()
 }
 
 function setHeading(ev: Event) {
@@ -4775,6 +4817,37 @@ html.dark .editor-content :deep(.find-hit-current) {
 .table-ctx .ctx-item.danger { color: #dc2626; }
 .table-ctx .ctx-item.danger:hover { background: #fef2f2; }
 .table-ctx .ctx-sep { height: 1px; background: #f0f1f4; margin: 4px 0; }
+.table-ctx .ctx-caret { margin-left: auto; color: #9ca3af; font-size: 11px; }
+
+/* R4a 单元格底色: 8 色盘 + 清除 */
+.table-ctx .ctx-colors {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px 6px;
+}
+.table-ctx .ctx-color {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid rgba(15, 23, 42, 0.14);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.table-ctx .ctx-color.active { outline: 2px solid var(--primary); outline-offset: 1px; }
+.table-ctx .ctx-color-clear {
+  height: 22px;
+  padding: 0 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: 12px;
+  cursor: pointer;
+}
+.table-ctx .ctx-color-clear:hover:not(:disabled) { background: var(--surface-hover); color: var(--text); }
+.table-ctx .ctx-color-clear:disabled { opacity: 0.45; cursor: default; }
 
 /* Yjs 协同光标 */
 .collaboration-cursor__caret {
@@ -4821,6 +4894,8 @@ html.dark .editor-content :deep(.find-hit-current) {
   .block-handle .handle-btn { width: 40px; height: 40px; touch-action: none; }
   .block-menu .bm-item { min-height: 42px; }
   .table-ctx .ctx-item { min-height: 42px; }
+  .table-ctx .ctx-color { width: 32px; height: 32px; }
+  .table-ctx .ctx-color-clear { height: 32px; }
   .editor-ai-dropdown .el-dropdown-menu__item { min-height: 40px; display: flex; align-items: center; }
 }
 </style>
