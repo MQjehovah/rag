@@ -24,13 +24,22 @@ export const formatBytes = (size: number): string => {
   return `${text} ${units[i]}`
 }
 
-/** 判断附件是否适合在新窗口直接预览(图片/PDF),否则触发下载。 */
-export const canPreviewAttachment = (mime: string, name: string): boolean => {
+export type AttachmentPreviewKind = 'image' | 'pdf' | 'none'
+
+/** 预览类型:图片(含 svg)/PDF/不支持(仅下载)。mime 优先,回退扩展名。 */
+export const attachmentPreviewKind = (mime: string, name: string): AttachmentPreviewKind => {
   const type = (mime || '').toLowerCase()
-  if (type.startsWith('image/') || type === 'application/pdf') return true
+  if (type.startsWith('image/')) return 'image'
+  if (type === 'application/pdf') return 'pdf'
   const ext = (name.split('.').pop() || '').toLowerCase()
-  return ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'avif', 'svg', 'pdf'].includes(ext)
+  if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'avif', 'svg'].includes(ext)) return 'image'
+  if (ext === 'pdf') return 'pdf'
+  return 'none'
 }
+
+/** 判断附件是否适合内联预览(图片/PDF),否则触发下载。 */
+export const canPreviewAttachment = (mime: string, name: string): boolean =>
+  attachmentPreviewKind(mime, name) !== 'none'
 
 /**
  * 把附件地址映射为可直接访问的 URL:
@@ -64,6 +73,25 @@ export const openAttachment = async (url: string): Promise<void> => {
     win?.close()
     throw e
   }
+}
+
+/** 签名 URL 是否已过期(带 30s 时钟偏差余量);无 exp 参数视为不过期。 */
+export const isSignedUrlExpired = (url: string, skewSeconds = 30): boolean => {
+  const query = url.split('?')[1] || ''
+  const exp = new URLSearchParams(query).get('exp')
+  if (!exp) return false
+  const ts = Number(exp)
+  return Number.isFinite(ts) && ts * 1000 <= Date.now() + skewSeconds * 1000
+}
+
+/**
+ * 预览用地址解析:先走既有签名逻辑;若拿到的签名 URL 已过期(或已无 exp),
+ * 重新签名再取一次(仅重试一次,避免死循环)。
+ */
+export const resolveAttachmentUrlForPreview = async (url: string): Promise<string> => {
+  const href = await resolveAttachmentUrl(url)
+  if (isSignedUrlExpired(href)) return resolveAttachmentUrl(url)
+  return href
 }
 
 /** 触发附件下载(同源签名 URL 下 download 属性生效)。 */
