@@ -114,6 +114,7 @@
                 <template #dropdown>
                   <el-dropdown-menu>
                     <el-dropdown-item command="newPage">新建笔记</el-dropdown-item>
+                    <el-dropdown-item command="exportZip">导出本笔记本 (zip)</el-dropdown-item>
                     <el-dropdown-item command="settings">设置</el-dropdown-item>
                     <el-dropdown-item command="delete" divided>删除</el-dropdown-item>
                   </el-dropdown-menu>
@@ -237,7 +238,8 @@
                   <el-dropdown-item command="dup">创建副本</el-dropdown-item>
                   <el-dropdown-item command="export">导出 Markdown</el-dropdown-item>
                   <el-dropdown-item command="export-html">导出 HTML</el-dropdown-item>
-                  <el-dropdown-item command="export-pdf">导出 PDF</el-dropdown-item>
+                  <el-dropdown-item command="export-docx">导出 Word (.docx)</el-dropdown-item>
+                  <el-dropdown-item command="export-pdf">导出 PDF（含大纲）</el-dropdown-item>
                   <el-dropdown-item command="template">另存为模板</el-dropdown-item>
                   <el-dropdown-item command="view-doc" divided>视图：文档</el-dropdown-item>
                   <el-dropdown-item command="view-table">视图：表格</el-dropdown-item>
@@ -739,6 +741,17 @@
         </div>
       </div>
     </el-dialog>
+
+    <!-- 笔记本 zip 导出进度 -->
+    <div v-if="zipExport.running" class="zip-progress">
+      <div class="zip-progress-box">
+        <div class="zip-progress-title">正在导出「{{ zipExport.notebook }}」…</div>
+        <div class="zip-progress-bar"><div class="zip-progress-fill" :style="{ width: zipPercent + '%' }"></div></div>
+        <div class="zip-progress-text">
+          {{ zipExport.done }}/{{ zipExport.total }} 页<template v-if="zipExport.failed">（失败 {{ zipExport.failed }}）</template>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -757,6 +770,14 @@ import DOMPurify from 'dompurify'
 import hljs from 'highlight.js'
 import { diffLines, diffStats } from '../utils/diff'
 import { loadDraft, saveDraft, clearDraft, shouldOfferDraft } from '../utils/draft'
+import {
+  ARCHIVE_ERRORS_FILE, buildArchiveEntries, mapLimit, renderArchivePage, sanitizeFileSegment,
+  type ArchiveTreePage,
+} from '../utils/pageArchive'
+import { inlineImagesInHtml } from '../utils/exportAssets'
+import { extractHeadings } from '../utils/wikiAnchors'
+import { asBlob as htmlToDocxBlob } from 'html-docx-js-typescript'
+import JSZip from 'jszip'
 import {
   isCollabFeatureEnabled, getCachedCollabProbe, setCachedCollabProbe,
   probeCollabServer, type CollabPeer,
@@ -1429,6 +1450,10 @@ const handleNotebookCmd = async (cmd: string, nb: Notebook) => {
     openNotebookSettings(nb)
     return
   }
+  if (cmd === 'exportZip') {
+    await exportNotebookZip(nb)
+    return
+  }
   if (cmd === 'delete') {
     try {
       await http.delete(`/api/notebooks/${nb.id}`)
@@ -1833,7 +1858,8 @@ const onPageMenu = (cmd: string) => {
   else if (cmd === 'history') openHistory()
   else if (cmd === 'share') openShare()
   else if (cmd === 'export-html') exportHtml()
-  else if (cmd === 'export-pdf') exportPdf()
+  else if (cmd === 'export-docx') void exportDocx()
+  else if (cmd === 'export-pdf') void exportPdf()
   else if (cmd === 'template') saveAsTemplate()
   else if (cmd.startsWith('view-')) setViewType(cmd.slice(5))
   else if (cmd === 'import') importDialogVisible.value = true
@@ -1975,7 +2001,20 @@ const deleteComment = async (cid: string) => {
 }
 const commentTime = (s: string) => (s ? new Date(s).toLocaleString('zh-CN', { hour12: false }) : '')
 
-// ---------------- 导出 HTML / PDF ----------------
+// ---------------- 导出 HTML / PDF / Word ----------------
+const escapeHtmlText = (text: string) => String(text)
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+
+const downloadBlob = (blob: Blob, filename: string) => {
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(blob)
+  a.download = filename
+  a.click()
+  window.setTimeout(() => URL.revokeObjectURL(a.href), 1000)
+}
+
+const safeFilename = (name: string) => (name || 'note').replace(/[\\/:*?"<>|]/g, '_')
+
 const buildExportHtml = () => {
   const title = currentPage.value?.title || '无标题'
   const body = DOMPurify.sanitize(exportMd.render(currentPage.value?.content || ''), {
@@ -1988,22 +2027,81 @@ const buildExportHtml = () => {
     + "blockquote{border-left:3px solid #93c5fd;padding-left:14px;color:#4b5563;background:#f8fafc;margin:12px 0}"
     + "table{border-collapse:collapse;width:100%}th,td{border:1px solid #e5e7eb;padding:8px 12px}th{background:#f8fafc}"
     + "mark{background:#fef08a}.callout{border-left:4px solid #3b82f6;background:#eff6ff;padding:12px 16px;border-radius:10px;margin:14px 0}"
-  return `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><title>${title}</title><style>${css}</style></head><body><h1>${title}</h1>${body}</body></html>`
+  return `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><title>${escapeHtmlText(title)}</title><style>${css}</style></head><body><h1>${escapeHtmlText(title)}</h1>${body}</body></html>`
 }
+
+/** 打印版 HTML: 正文前插入 h1-h3 大纲页 + 打印分页样式(标题不孤行/表格代码块不跨页)。 */
+const buildPrintHtml = () => {
+  const title = currentPage.value?.title || '无标题'
+  const content = currentPage.value?.content || ''
+  const body = DOMPurify.sanitize(exportMd.render(content), {
+    ADD_TAGS: ['details', 'summary'],
+    ADD_ATTR: ['data-callout', 'data-toggle', 'open', 'target'],
+  })
+  const headings = extractHeadings(content).filter(h => h.level <= 3)
+  const outlineItems = headings
+    .map(h => `<li class="lv${h.level}"><span class="ol-text">${escapeHtmlText(h.text)}</span><span class="ol-dots"></span><span class="ol-page">&nbsp;</span></li>`)
+    .join('')
+  const outline = headings.length
+    ? `<section class="pdf-outline"><h1>目录</h1><ol>${outlineItems}</ol>`
+      + '<p class="pdf-outline-note">页码请在浏览器打印对话框「更多设置 → 页眉和页脚」中勾选显示。</p></section>'
+    : ''
+  const css = "body{font-family:-apple-system,'PingFang SC','Microsoft YaHei',sans-serif;max-width:820px;margin:0 auto;padding:48px 24px;color:#1f2430;line-height:1.75}"
+    + "h1{font-size:32px}h2{font-size:24px;margin-top:1.2em}h3{font-size:19px}img{max-width:100%;border-radius:10px}"
+    + "pre{background:#282c34;color:#abb2bf;padding:14px 18px;border-radius:10px;overflow:auto}code{font-family:'Fira Code',monospace}"
+    + "blockquote{border-left:3px solid #93c5fd;padding-left:14px;color:#4b5563;background:#f8fafc;margin:12px 0}"
+    + "table{border-collapse:collapse;width:100%}th,td{border:1px solid #e5e7eb;padding:8px 12px}th{background:#f8fafc}"
+    + "mark{background:#fef08a}.callout{border-left:4px solid #3b82f6;background:#eff6ff;padding:12px 16px;border-radius:10px;margin:14px 0}"
+    + ".pdf-outline{page-break-after:always;break-after:page;border-bottom:1px dashed #cbd5e1;padding-bottom:24px;margin-bottom:24px}"
+    + ".pdf-outline h1{font-size:26px;margin-bottom:14px}.pdf-outline ol{list-style:none;padding:0;margin:0}"
+    + ".pdf-outline li{display:flex;align-items:baseline;gap:6px;margin:7px 0;font-size:15px}"
+    + ".pdf-outline li.lv2{padding-left:22px}.pdf-outline li.lv3{padding-left:44px;font-size:14px;color:#475569}"
+    + ".ol-dots{flex:1;border-bottom:1px dotted #cbd5e1;transform:translateY(-3px)}"
+    + ".ol-page{min-width:34px;text-align:right;color:#64748b}"
+    + ".pdf-outline-note{margin-top:16px;font-size:12px;color:#94a3b8}"
+    + "@media print{@page{margin:18mm 16mm}"
+    + "h1,h2,h3,h4,h5,h6{break-after:avoid;page-break-after:avoid}"
+    + "table,pre,blockquote,img,.callout,li{break-inside:avoid;page-break-inside:avoid}"
+    + "tr,img{break-inside:avoid;page-break-inside:avoid}"
+    + ".pdf-outline{break-after:page;page-break-after:always}}"
+  return `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><title>${escapeHtmlText(title)}</title><style>${css}</style></head><body>${outline}<h1>${escapeHtmlText(title)}</h1>${body}</body></html>`
+}
+
 const exportHtml = () => {
   if (!currentPage.value) return
   const blob = new Blob([buildExportHtml()], { type: 'text/html;charset=utf-8' })
-  const a = document.createElement('a')
-  a.href = URL.createObjectURL(blob)
-  a.download = (currentPage.value.title || 'note').replace(/[\\/:*?"<>|]/g, '_') + '.html'
-  a.click()
-  URL.revokeObjectURL(a.href)
+  downloadBlob(blob, safeFilename(currentPage.value.title) + '.html')
 }
-const exportPdf = () => {
+
+/** Word (.docx): 当前内容 → HTML(图片尽力 base64 内嵌) → html-docx-js → .docx 下载。 */
+const exportingDocx = ref(false)
+const exportDocx = async () => {
+  if (!currentPage.value || exportingDocx.value) return
+  exportingDocx.value = true
+  try {
+    const { html, inlined, skipped } = await inlineImagesInHtml(buildExportHtml())
+    const blob = await htmlToDocxBlob(html)
+    if (!(blob instanceof Blob)) throw new Error('生成 docx 失败')
+    downloadBlob(blob, safeFilename(currentPage.value.title) + '.docx')
+    const imgHint = inlined ? `，内嵌 ${inlined} 张图片${skipped ? `（${skipped} 张失败已跳过）` : ''}` : ''
+    ElMessage.success(`已导出 Word${imgHint}`)
+  } catch (e: any) {
+    ElMessage.error('导出 Word 失败：' + (e?.message || '未知错误'))
+  } finally {
+    exportingDocx.value = false
+  }
+}
+
+const exportPdf = async () => {
   if (!currentPage.value) return
   const w = window.open('', '_blank')
   if (!w) { ElMessage.warning('请允许弹出窗口以导出 PDF'); return }
-  w.document.write(buildExportHtml())
+  w.document.write('<p style="font-family:sans-serif;padding:24px;color:#666">正在准备打印内容…</p>')
+  const html = buildPrintHtml()
+  // 图片尽力转 base64: 打印窗口与页面同源但无登录上下文, 相对地址/未签名地址会加载失败
+  const inlined = await inlineImagesInHtml(html).catch(() => null)
+  w.document.open()
+  w.document.write(inlined?.html || html)
   w.document.close()
   w.focus()
   window.setTimeout(() => { w.print() }, 400)
@@ -2083,6 +2181,58 @@ const deleteTemplate = async (id: string) => {
   } catch {
     ElMessage.error('删除模板失败')
     void loadTemplates() // 失败不猜状态, 以服务端为准重同步
+  }
+}
+
+// ---------------- 整本笔记本导出(zip) ----------------
+const zipExport = reactive({ running: false, notebook: '', done: 0, total: 0, failed: 0 })
+const zipPercent = computed(() =>
+  zipExport.total ? Math.round((zipExport.done / zipExport.total) * 100) : 0)
+
+const exportNotebookZip = async (nb: Notebook) => {
+  if (zipExport.running) return
+  zipExport.running = true
+  zipExport.notebook = nb.name
+  zipExport.done = 0
+  zipExport.total = 0
+  zipExport.failed = 0
+  try {
+    const res = await http.get('/api/pages/tree', { params: { notebook_id: nb.id } })
+    const pages: ArchiveTreePage[] = res.data.items || []
+    if (!pages.length) { ElMessage.info('该笔记本还没有笔记'); return }
+    zipExport.total = pages.length
+    const paths = buildArchiveEntries(pages)
+    const zip = new JSZip()
+    const errors: string[] = []
+    await mapLimit(pages, 4, async (page) => {
+      const path = paths.get(page.id) || `${sanitizeFileSegment(page.title || '无标题')}.md`
+      try {
+        const detail = (await http.get(`/api/pages/${page.id}`)).data
+        zip.file(path, renderArchivePage({
+          title: detail.title || page.title,
+          content: detail.content,
+          updated_at: detail.updated_at || page.updated_at,
+        }))
+      } catch (e: any) {
+        // 单页失败跳过(不阻断整本导出), 汇总写入 _errors.txt
+        zipExport.failed++
+        const reason = e?.response?.data?.detail || e?.message || '加载失败'
+        errors.push(`${path}\t${e?.response?.status || ''} ${reason}`.trim())
+      } finally {
+        zipExport.done++
+      }
+    })
+    if (errors.length) {
+      zip.file(ARCHIVE_ERRORS_FILE, `导出失败 ${errors.length} 页：\n${errors.join('\n')}\n`)
+    }
+    const blob = await zip.generateAsync({ type: 'blob' })
+    downloadBlob(blob, `${safeFilename(nb.name)}.zip`)
+    if (errors.length) ElMessage.warning(`导出完成：${errors.length} 页失败，详见 ${ARCHIVE_ERRORS_FILE}`)
+    else ElMessage.success(`已导出「${nb.name}」共 ${pages.length} 页`)
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail || '导出失败')
+  } finally {
+    zipExport.running = false
   }
 }
 
@@ -3317,6 +3467,24 @@ html, body, #app { height: 100%; }
 .page-item.tpl .icon-btn { opacity: 0; }
 .page-item.tpl:hover .icon-btn { opacity: 1; }
 
+/* 笔记本 zip 导出进度 */
+.zip-progress {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 3000;
+  min-width: 280px;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.16);
+  padding: 14px 16px;
+}
+.zip-progress-title { font-size: 13px; color: #1e293b; margin-bottom: 8px; }
+.zip-progress-bar { height: 6px; background: #f1f5f9; border-radius: 4px; overflow: hidden; }
+.zip-progress-fill { height: 100%; background: #4f46e5; transition: width 0.2s; }
+.zip-progress-text { margin-top: 6px; font-size: 12px; color: #64748b; text-align: right; }
+
 /* 笔记本拖拽/分组 */
 .side-section.nb-group { padding-top: 10px; color: #59616f; font-weight: 700; }
 .notebook-item.dragging { opacity: 0.5; }
@@ -3437,4 +3605,20 @@ html, body, #app { height: 100%; }
 
 /* 统一过渡 */
 .tb-btn, .icon-btn, .nav-link, .page-item, .notebook-info { transition: background 0.14s, color 0.14s; }
+
+/* 浏览器直接打印编辑页(Ctrl+P): 隐藏侧栏/工具条/面板, 标题不孤行, 表格/代码块不跨页 */
+@media print {
+  .sidebar, .sidebar-resizer, .doc-topbar, .outline-panel, .comments-panel,
+  .editor-toolbar, .editor-footer, .cover-actions, .zip-progress,
+  .icon-picker, .cover-picker, .page-icon-btn, .cover-add, .find-bar,
+  .block-handle, .table-toolbar, .bubble-menu { display: none !important; }
+  .main-content, .doc-scroll { overflow: visible !important; height: auto !important; padding: 0 !important; }
+  .editor-wrapper { max-width: none !important; margin: 0 !important; padding: 0 !important; }
+  .editor-wrapper .ProseMirror { padding: 0 !important; }
+  h1, h2, h3, h4, h5, h6 { break-after: avoid; page-break-after: avoid; }
+  table, pre, blockquote, img { break-inside: avoid; page-break-inside: avoid; }
+  /* 折叠的代码块/表格在打印时全部展开 */
+  .code-block.is-collapsed pre.is-collapsed-pre { max-height: none !important; overflow: visible !important; }
+  table.table-folded tr { display: table-row !important; }
+}
 </style>
