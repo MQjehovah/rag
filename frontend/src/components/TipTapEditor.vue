@@ -380,8 +380,11 @@ import CodeBlockComponent from './CodeBlockComponent.vue'
 import ImageNodeView from './ImageNodeView.vue'
 import ToggleNodeView from './ToggleNodeView.vue'
 import AttachmentNodeView from './AttachmentNodeView.vue'
+import MathNodeView from './MathNodeView.vue'
 import { Attachment, Callout, Toggle } from './editorExt'
+import { MathBlock, MathInline } from './editorMath'
 import { Markdown } from 'tiptap-markdown'
+import 'katex/dist/katex.min.css'
 import * as Y from 'yjs'
 import { WebsocketProvider } from 'y-websocket'
 import Collaboration from '@tiptap/extension-collaboration'
@@ -677,6 +680,8 @@ const SLASH_ITEMS: SlashItem[] = [
   { title: '警告框', desc: '警告/注意提示块', icon: '⚠️', keywords: ['warn', 'warning', '警告', '注意', '框'], action: (e, r) => { e.chain().focus().deleteRange(r).insertContent({ type: 'callout', attrs: { type: 'warn' }, content: [{ type: 'paragraph' }] }).run() } },
   { title: '危险框', desc: '严重风险提示块', icon: '⛔', keywords: ['danger', 'error', '危险', '错误', '框'], action: (e, r) => { e.chain().focus().deleteRange(r).insertContent({ type: 'callout', attrs: { type: 'danger' }, content: [{ type: 'paragraph' }] }).run() } },
   { title: '折叠块', desc: '可展开/收起的内容', icon: '▸', keywords: ['toggle', 'collapse', '折叠', '收起', '展开'], action: (e, r) => { e.chain().focus().deleteRange(r).insertContent({ type: 'toggle', attrs: { open: true, title: '折叠块' }, content: [{ type: 'paragraph' }] }).run() } },
+  { title: '行内公式', desc: 'KaTeX 行内公式 $…$', icon: '∑', keywords: ['math', 'katex', 'latex', '公式', '行内', '数学'], action: (e, r) => { e.chain().focus().deleteRange(r).insertContent({ type: 'mathInline', attrs: { latex: '' } }).run() } },
+  { title: '公式', desc: 'KaTeX 块级公式 $$…$$', icon: 'ƒ', keywords: ['math', 'katex', 'latex', 'formula', '公式', '块级', '数学'], action: (e, r) => { e.chain().focus().deleteRange(r).insertContent({ type: 'mathBlock', attrs: { latex: '' } }).run() } },
   { title: '图片', desc: '上传或插入图片', icon: '▧', keywords: ['image', 'img', '图片', '照片'], action: (e, r) => { e.chain().focus().deleteRange(r).run(); handleImageUpload() } },
   { title: '附件', desc: '上传文件附件卡片', icon: '📎', keywords: ['attachment', 'file', '附件', '文件'], action: (e, r) => { e.chain().focus().deleteRange(r).run(); handleAttachmentUpload() } },
   { title: '图表', desc: 'Mermaid 流程图/时序图', icon: '◈', keywords: ['mermaid', 'chart', 'diagram', '图表', '流程图'], action: (e, r) => { e.chain().focus().deleteRange(r).run(); insertMermaid() } },
@@ -1258,6 +1263,8 @@ const editor = useEditor({
     Callout,
     Toggle.extend({ addNodeView() { return VueNodeViewRenderer(ToggleNodeView) } }),
     Attachment.extend({ addNodeView() { return VueNodeViewRenderer(AttachmentNodeView) } }),
+    MathInline.extend({ addNodeView() { return VueNodeViewRenderer(MathNodeView) } }),
+    MathBlock.extend({ addNodeView() { return VueNodeViewRenderer(MathNodeView) } }),
     ...collabExtensions,
     SlashCommand,
     PageMention,
