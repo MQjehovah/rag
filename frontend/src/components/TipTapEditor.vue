@@ -381,8 +381,11 @@ import ImageNodeView from './ImageNodeView.vue'
 import ToggleNodeView from './ToggleNodeView.vue'
 import AttachmentNodeView from './AttachmentNodeView.vue'
 import MathNodeView from './MathNodeView.vue'
+import FootnoteItemView from './FootnoteItemView.vue'
+import FootnoteBlockView from './FootnoteBlockView.vue'
 import { Attachment, Callout, Toggle } from './editorExt'
 import { MathBlock, MathInline } from './editorMath'
+import { FootnoteItem, FootnoteRef, Footnotes } from './editorFootnotes'
 import { Markdown } from 'tiptap-markdown'
 import 'katex/dist/katex.min.css'
 import * as Y from 'yjs'
@@ -394,6 +397,7 @@ import MarkdownIt from 'markdown-it'
 import http from '../api/http'
 import { findMatchesInDoc, type FindMatch } from '../utils/findReplace'
 import { sanitizePastedHTML } from '../utils/sanitizePaste'
+import { nextFootnoteLabel } from '../utils/markdownFootnotes'
 import type { CollabPeer } from '../utils/collab'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plugin, PluginKey } from 'prosemirror-state'
@@ -682,6 +686,21 @@ const SLASH_ITEMS: SlashItem[] = [
   { title: '折叠块', desc: '可展开/收起的内容', icon: '▸', keywords: ['toggle', 'collapse', '折叠', '收起', '展开'], action: (e, r) => { e.chain().focus().deleteRange(r).insertContent({ type: 'toggle', attrs: { open: true, title: '折叠块' }, content: [{ type: 'paragraph' }] }).run() } },
   { title: '行内公式', desc: 'KaTeX 行内公式 $…$', icon: '∑', keywords: ['math', 'katex', 'latex', '公式', '行内', '数学'], action: (e, r) => { e.chain().focus().deleteRange(r).insertContent({ type: 'mathInline', attrs: { latex: '' } }).run() } },
   { title: '公式', desc: 'KaTeX 块级公式 $$…$$', icon: 'ƒ', keywords: ['math', 'katex', 'latex', 'formula', '公式', '块级', '数学'], action: (e, r) => { e.chain().focus().deleteRange(r).insertContent({ type: 'mathBlock', attrs: { latex: '' } }).run() } },
+  { title: '脚注', desc: '行内脚注引用，编号自动递增', icon: '¹', keywords: ['footnote', '脚注', '引用', '注释', '注解'], action: (e, r) => {
+    const label = nextFootnoteLabel(e.state.doc)
+    e.chain().focus().deleteRange(r).insertContent({ type: 'footnoteRef', attrs: { id: `fn-ref-${label}`, label } }).run()
+  } },
+  { title: '脚注区块', desc: '页面底部脚注条目区', icon: '⁂', keywords: ['footnote', 'notes', '脚注', '条目', '注释', '注解'], action: (e, r) => {
+    let exists = false
+    e.state.doc.descendants((node) => { if (node.type.name === 'footnotes') exists = true })
+    if (exists) {
+      ElMessage.warning('已存在脚注区块，请直接在其中编辑')
+      e.chain().focus().deleteRange(r).run()
+      return
+    }
+    const label = nextFootnoteLabel(e.state.doc)
+    e.chain().focus().deleteRange(r).insertContent({ type: 'footnotes', content: [{ type: 'footnoteItem', attrs: { label }, content: [] }] }).run()
+  } },
   { title: '图片', desc: '上传或插入图片', icon: '▧', keywords: ['image', 'img', '图片', '照片'], action: (e, r) => { e.chain().focus().deleteRange(r).run(); handleImageUpload() } },
   { title: '附件', desc: '上传文件附件卡片', icon: '📎', keywords: ['attachment', 'file', '附件', '文件'], action: (e, r) => { e.chain().focus().deleteRange(r).run(); handleAttachmentUpload() } },
   { title: '图表', desc: 'Mermaid 流程图/时序图', icon: '◈', keywords: ['mermaid', 'chart', 'diagram', '图表', '流程图'], action: (e, r) => { e.chain().focus().deleteRange(r).run(); insertMermaid() } },
@@ -1265,6 +1284,9 @@ const editor = useEditor({
     Attachment.extend({ addNodeView() { return VueNodeViewRenderer(AttachmentNodeView) } }),
     MathInline.extend({ addNodeView() { return VueNodeViewRenderer(MathNodeView) } }),
     MathBlock.extend({ addNodeView() { return VueNodeViewRenderer(MathNodeView) } }),
+    FootnoteRef,
+    Footnotes.extend({ addNodeView() { return VueNodeViewRenderer(FootnoteBlockView) } }),
+    FootnoteItem.extend({ addNodeView() { return VueNodeViewRenderer(FootnoteItemView) } }),
     ...collabExtensions,
     SlashCommand,
     PageMention,
@@ -2229,6 +2251,31 @@ onBeforeUnmount(() => {
 .editor-content :deep(.ProseMirror .callout-success) { border-left-color: #10b981; background: #ecfdf5; }
 .editor-content :deep(.ProseMirror .callout-warn) { border-left-color: #f59e0b; background: #fffbeb; }
 .editor-content :deep(.ProseMirror .callout-danger) { border-left-color: #ef4444; background: #fef2f2; }
+
+/* 脚注引用与锚点高亮 */
+.editor-content :deep(.ProseMirror sup.fn-ref) {
+  cursor: pointer;
+  color: var(--primary);
+  background: var(--primary-weak);
+  border-radius: 4px;
+  padding: 0 3px;
+  font-size: 0.76em;
+  font-weight: 600;
+  user-select: none;
+}
+
+.editor-content :deep(.ProseMirror sup.fn-ref:hover) {
+  background: var(--primary-weak-2);
+}
+
+.editor-content :deep(.ProseMirror .fn-flash) {
+  animation: fn-anchor-flash 1.3s ease;
+}
+
+@keyframes fn-anchor-flash {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0); }
+  25%, 75% { box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.45); }
+}
 
 .editor-content :deep(.ProseMirror img) {
   max-width: 100%;

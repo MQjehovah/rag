@@ -33,7 +33,7 @@ const KEEP_TAGS = new Set([
   'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'br', 'hr',
   'ul', 'ol', 'li', 'blockquote', 'pre', 'code',
   'strong', 'b', 'em', 'i', 'u', 's', 'del', 'strike', 'mark',
-  'a', 'img', 'span',
+  'a', 'img', 'span', 'sup',
   'table', 'thead', 'tbody', 'tfoot', 'tr', 'td', 'th', 'caption', 'colgroup', 'col',
   'div', 'details', 'summary',
 ])
@@ -68,9 +68,10 @@ const KEEP_ATTRS: Record<string, string[]> = {
   a: ['href', 'title'],
   img: ['src', 'alt', 'title', 'width'],
   span: ['data-math-inline', 'data-latex'],
+  sup: ['data-fn', 'data-fn-id'],
   table: [], thead: [], tbody: [], tfoot: [], tr: [], td: ['colspan', 'rowspan'],
   th: ['colspan', 'rowspan'], caption: [], colgroup: [], col: ['span'],
-  div: ['data-callout', 'data-attachment', 'data-url', 'data-name', 'data-size', 'data-mime', 'data-math-block', 'data-latex'],
+  div: ['data-callout', 'data-attachment', 'data-url', 'data-name', 'data-size', 'data-mime', 'data-math-block', 'data-latex', 'data-footnotes', 'data-footnote'],
   details: ['data-toggle', 'open'], summary: [],
 }
 
