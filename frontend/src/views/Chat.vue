@@ -64,6 +64,7 @@
         </div>
           <div v-if="msg.role === 'assistant' && msg.content && !loading" class="message-actions">
             <el-button size="small" text type="primary" @click="handleSaveNote(idx)">保存为笔记</el-button>
+            <el-button size="small" text @click="openSaveToNote(idx)">存到笔记</el-button>
           </div>
         </div>
       </div>
@@ -121,6 +122,55 @@
       <template #footer>
         <el-button @click="saveDialogVisible = false">取消</el-button>
         <el-button v-if="saveForm.should_save" type="primary" :loading="saveLoading" @click="confirmSaveNote">确认保存</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="noteDialogVisible" title="存到笔记" width="540px">
+      <el-form label-width="90px">
+        <el-form-item label="目标">
+          <el-radio-group v-model="noteMode" :disabled="!!noteSavedPageId">
+            <el-radio value="append">追加到现有页面</el-radio>
+            <el-radio value="new">新建页面</el-radio>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item label="笔记本">
+          <el-select v-model="noteNotebookId" clearable placeholder="选择笔记本（可留空）" style="width: 100%">
+            <el-option v-for="nb in noteNotebooks" :key="nb.id" :label="nb.name" :value="nb.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item v-if="noteMode === 'append'" label="页面">
+          <el-select
+            v-model="notePageId"
+            filterable
+            placeholder="选择目标页面"
+            style="width: 100%"
+            :disabled="!noteNotebookId || !!noteSavedPageId"
+          >
+            <el-option v-for="p in notePages" :key="p.id" :label="p.title" :value="p.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item v-else label="标题">
+          <el-input v-model="noteTitle" maxlength="80" show-word-limit placeholder="新页面标题" />
+        </el-form-item>
+        <el-form-item label="内容预览">
+          <div class="note-preview">{{ noteAnswer.length > 300 ? noteAnswer.slice(0, 300) + '…' : noteAnswer }}</div>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <template v-if="noteSavedPageId">
+          <el-button @click="noteDialogVisible = false">关闭</el-button>
+          <el-button type="primary" @click="openSavedNote">打开</el-button>
+        </template>
+        <template v-else>
+          <el-button @click="noteDialogVisible = false">取消</el-button>
+          <el-button
+            type="primary"
+            :loading="noteSaving"
+            @click="noteMode === 'append' ? appendToNotePage() : createNotePage()"
+          >
+            {{ noteMode === 'append' ? '追加到所选页面末尾' : '新建页面' }}
+          </el-button>
+        </template>
       </template>
     </el-dialog>
   </div>
@@ -420,6 +470,102 @@ const confirmSaveNote = async () => {
     saveLoading.value = false
   }
 }
+
+// ---------- 存到笔记: 选择目标页面追加或新建 ----------
+const noteDialogVisible = ref(false)
+const noteSaving = ref(false)
+const noteMode = ref<'append' | 'new'>('append')
+const noteNotebooks = ref<{ id: string; name: string }[]>([])
+const notePages = ref<{ id: string; title: string }[]>([])
+const noteNotebookId = ref('')
+const notePageId = ref('')
+const noteTitle = ref('')
+const noteAnswer = ref('')
+const noteSavedPageId = ref('')
+
+const loadNoteNotebooks = async () => {
+  if (noteNotebooks.value.length) return
+  try {
+    const res = await http.get('/api/notebooks')
+    noteNotebooks.value = (res.data.notebooks || []).map((n: any) => ({ id: n.id, name: n.name }))
+  } catch {
+    ElMessage.error('加载笔记本失败')
+  }
+}
+
+watch(noteNotebookId, async (nbId) => {
+  notePageId.value = ''
+  notePages.value = []
+  if (!nbId) return
+  try {
+    const res = await http.get('/api/pages/tree', { params: { notebook_id: nbId } })
+    notePages.value = (res.data.items || []).map((p: any) => ({ id: p.id, title: p.title || '无标题' }))
+  } catch {
+    ElMessage.error('加载页面列表失败')
+  }
+})
+
+const openSaveToNote = (idx: number) => {
+  const answer = messages.value[idx]?.content || ''
+  const firstUser = messages.value.find(m => m.role === 'user')?.content || ''
+  noteAnswer.value = answer
+  noteTitle.value = firstUser.replace(/\s+/g, ' ').trim().slice(0, 30) || '对话笔记'
+  noteMode.value = 'append'
+  noteNotebookId.value = ''
+  notePageId.value = ''
+  notePages.value = []
+  noteSavedPageId.value = ''
+  noteDialogVisible.value = true
+  void loadNoteNotebooks()
+}
+
+const appendToNotePage = async () => {
+  if (!notePageId.value) {
+    ElMessage.warning('请选择目标页面')
+    return
+  }
+  noteSaving.value = true
+  try {
+    const res = await http.get(`/api/pages/${notePageId.value}`)
+    const old = String(res.data?.content || '')
+    const content = old.trim() ? `${old}\n\n---\n\n${noteAnswer.value}` : noteAnswer.value
+    await http.put(`/api/pages/${notePageId.value}`, { content })
+    noteSavedPageId.value = notePageId.value
+    ElMessage.success('已追加到页面末尾')
+  } catch (e: any) {
+    ElMessage.error('保存失败: ' + (e.response?.data?.detail || e.message))
+  } finally {
+    noteSaving.value = false
+  }
+}
+
+const createNotePage = async () => {
+  const title = noteTitle.value.trim()
+  if (!title) {
+    ElMessage.warning('请输入标题')
+    return
+  }
+  noteSaving.value = true
+  try {
+    const res = await http.post('/api/pages', {
+      title,
+      content: noteAnswer.value,
+      notebook_id: noteNotebookId.value || undefined,
+    })
+    noteSavedPageId.value = res.data?.id || ''
+    ElMessage.success('已新建页面')
+  } catch (e: any) {
+    ElMessage.error('新建失败: ' + (e.response?.data?.detail || e.message))
+  } finally {
+    noteSaving.value = false
+  }
+}
+
+const openSavedNote = () => {
+  if (!noteSavedPageId.value) return
+  noteDialogVisible.value = false
+  router.push({ path: '/notes', query: { page: noteSavedPageId.value } })
+}
 </script>
 
 <style scoped>
@@ -715,6 +861,20 @@ const confirmSaveNote = async () => {
 }
 .message-actions {
   margin-top: 8px;
+}
+.note-preview {
+  width: 100%;
+  max-height: 140px;
+  overflow-y: auto;
+  padding: 8px 10px;
+  background: var(--surface-2, #f2f4f9);
+  border: 1px solid var(--border, #e6e8f0);
+  border-radius: 8px;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--text-2, #59616f);
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 .chat-input-area {
   max-width: 900px;

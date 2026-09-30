@@ -54,6 +54,10 @@
 
       <span class="divider"></span>
 
+      <button class="tb-btn" @click="openFind" :class="{ 'is-active': find.open }" title="查找/替换 (Ctrl+F)"><Search :size="16" /></button>
+
+      <span class="divider"></span>
+
       <button class="tb-btn" @click="editor.chain().focus().undo().run()" :disabled="!editor.can().undo()" title="撤销 (Ctrl+Z)"><Undo2 :size="16" /></button>
       <button class="tb-btn" @click="editor.chain().focus().redo().run()" :disabled="!editor.can().redo()" title="重做 (Ctrl+Shift+Z)"><Redo2 :size="16" /></button>
 
@@ -72,6 +76,33 @@
         </template>
       </el-dropdown>
       <button class="tb-btn" @click="helpOpen = true" title="快捷键"><Keyboard :size="16" /></button>
+    </div>
+
+    <!-- 页内查找/替换 -->
+    <div v-if="find.open" class="find-wrap">
+      <div class="find-bar" @keydown.esc.stop.prevent="closeFind">
+        <input
+          ref="findInputEl"
+          v-model="find.query"
+          class="find-input"
+          placeholder="查找"
+          @input="onFindInput"
+          @keydown.enter.exact.prevent="nextMatch"
+          @keydown.shift.enter.prevent="prevMatch"
+        />
+        <input
+          v-model="find.replacement"
+          class="find-input"
+          placeholder="替换为"
+          @keydown.enter.prevent="replaceCurrent"
+        />
+        <span class="find-count">{{ findCountText }}</span>
+        <button class="find-btn" :disabled="!find.matches.length" title="上一个 (Shift+Enter)" @click="prevMatch"><ChevronUp :size="15" /></button>
+        <button class="find-btn" :disabled="!find.matches.length" title="下一个 (Enter)" @click="nextMatch"><ChevronDown :size="15" /></button>
+        <button class="find-btn" :disabled="!find.query.trim() || !find.matches.length" @click="replaceCurrent">替换</button>
+        <button class="find-btn" :disabled="!find.query.trim() || !find.matches.length" @click="replaceAll">全部替换</button>
+        <button class="find-btn" title="关闭 (Esc)" @click="closeFind"><X :size="15" /></button>
+      </div>
     </div>
 
     <!-- 表格上下文工具条 -->
@@ -155,6 +186,20 @@
         <button @click="setLink" :class="{ 'is-active': editor.isActive('link') }" title="链接"><LinkIcon :size="15" /></button>
         <span class="bubble-sep"></span>
         <button @click="editor.chain().focus().unsetAllMarks().run()" title="清除格式"><Eraser :size="15" /></button>
+        <span class="bubble-sep"></span>
+        <el-dropdown trigger="click" :disabled="aiDialog.loading" @command="runAiAction">
+          <button title="AI 助手"><Sparkles :size="15" /></button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item command="polish">润色</el-dropdown-item>
+              <el-dropdown-item command="fix">纠错</el-dropdown-item>
+              <el-dropdown-item command="summarize">总结</el-dropdown-item>
+              <el-dropdown-item command="expand">扩写</el-dropdown-item>
+              <el-dropdown-item command="translate">翻译（英文）</el-dropdown-item>
+              <el-dropdown-item command="to_table">转为表格</el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
       </div>
     </bubble-menu>
 
@@ -242,6 +287,30 @@
         </div>
       </div>
     </el-dialog>
+
+    <!-- AI 编辑预览 -->
+    <el-dialog v-model="aiDialog.open" :title="aiDialogTitle" width="760px" append-to-body>
+      <div v-loading="aiDialog.loading" class="ai-preview">
+        <div class="ai-col">
+          <div class="ai-col-title">原文</div>
+          <div class="ai-col-body">{{ aiDialog.original || '（无）' }}</div>
+        </div>
+        <div class="ai-col">
+          <div class="ai-col-title">AI 结果</div>
+          <div class="ai-col-body">
+            <template v-if="aiDialog.error"><span class="ai-error">{{ aiDialog.error }}</span></template>
+            <template v-else-if="aiDialog.result">{{ aiDialog.result }}</template>
+            <template v-else-if="aiDialog.loading"><span class="ai-muted">生成中…</span></template>
+            <template v-else><span class="ai-muted">—</span></template>
+          </div>
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="aiDialog.open = false">放弃</el-button>
+        <el-button :disabled="!aiDialog.result" @click="applyAiResult('replace')">替换</el-button>
+        <el-button type="primary" :disabled="!aiDialog.result" @click="applyAiResult('below')">插入到下方</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -292,16 +361,19 @@ import { WebsocketProvider } from 'y-websocket'
 import Collaboration from '@tiptap/extension-collaboration'
 import CollaborationCursor from '@tiptap/extension-collaboration-cursor'
 import mermaid from 'mermaid'
+import MarkdownIt from 'markdown-it'
 import http from '../api/http'
+import { findMatchesInDoc, type FindMatch } from '../utils/findReplace'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plugin, PluginKey } from 'prosemirror-state'
+import { Decoration, DecorationSet } from 'prosemirror-view'
 import type { Editor } from '@tiptap/core'
 import {
   Bold, Italic, Underline as UnderlineIcon, Strikethrough, Highlighter, Code, Link as LinkIcon,
   List, ListOrdered, ListChecks, Quote, SquareCode, AlignLeft, AlignCenter, AlignRight,
   Image as ImageIcon, Table as TableIcon, Workflow, Undo2, Redo2, Plus, Trash2, Copy,
   ArrowUp, ArrowDown, Pilcrow, GripVertical, Heading1, Heading2, Heading3, Eraser,
-  Settings2, Keyboard, FileText, BetweenHorizontalEnd,
+  Settings2, Keyboard, FileText, BetweenHorizontalEnd, Search, ChevronUp, ChevronDown, X, Sparkles,
 } from 'lucide-vue-next'
 
 const uploadAndInsert = (view: any, file: File) => {
@@ -394,6 +466,8 @@ const SLASH_ITEMS: SlashItem[] = [
   { title: '折叠块', desc: '可展开/收起的内容', icon: '▸', keywords: ['toggle', 'collapse', '折叠', '收起', '展开'], action: (e, r) => { e.chain().focus().deleteRange(r).insertContent({ type: 'toggle', attrs: { open: true, title: '折叠块' }, content: [{ type: 'paragraph' }] }).run() } },
   { title: '图片', desc: '上传或插入图片', icon: '▧', keywords: ['image', 'img', '图片', '照片'], action: (e, r) => { e.chain().focus().deleteRange(r).run(); handleImageUpload() } },
   { title: '图表', desc: 'Mermaid 流程图/时序图', icon: '◈', keywords: ['mermaid', 'chart', 'diagram', '图表', '流程图'], action: (e, r) => { e.chain().focus().deleteRange(r).run(); insertMermaid() } },
+  { title: 'AI 续写', desc: '根据光标前文继续写作', icon: '✨', keywords: ['ai', 'continue', '续写', '生成', '写作'], action: (e, r) => { void aiContinue(e, r) } },
+  { title: 'AI 总结本页', desc: '生成整页摘要并插入提示框', icon: '🤖', keywords: ['ai', 'summary', '总结', '摘要'], action: (e, r) => { void aiSummarize(e, r) } },
 ]
 
 function filterSlash(query: string): SlashItem[] {
@@ -600,6 +674,280 @@ const UserMention = Extension.create({
   },
 })
 
+// ---------------- 页内查找/替换 ----------------
+const find = reactive({
+  open: false,
+  query: '',
+  replacement: '',
+  matches: [] as FindMatch[],
+  current: 0,
+})
+
+const findInputEl = ref<HTMLInputElement>()
+
+const findKey = new PluginKey('ragFindReplace')
+
+const findPlugin = new Plugin({
+  key: findKey,
+  props: {
+    decorations(state) {
+      if (!find.open || !find.query.trim()) return null
+      const decos: Decoration[] = []
+      find.matches.forEach((m, i) => {
+        decos.push(Decoration.inline(m.from, m.to, {
+          class: i === find.current ? 'find-hit find-hit-current' : 'find-hit',
+        }))
+      })
+      return DecorationSet.create(state.doc, decos)
+    },
+  },
+})
+
+const findCountText = computed(() => {
+  if (!find.query.trim()) return ''
+  if (!find.matches.length) return '无结果'
+  return `第 ${find.current + 1}/${find.matches.length} 个`
+})
+
+function collectFindMatches(): FindMatch[] {
+  const e = editor.value
+  if (!e) return []
+  return findMatchesInDoc(e.state.doc, find.query)
+}
+
+function redrawFind() {
+  const e = editor.value
+  if (!e) return
+  // 仅带 meta 的事务不会进入 undo 栈
+  e.view.dispatch(e.state.tr.setMeta('ragFind', Date.now()))
+}
+
+function scrollToFindMatch() {
+  const e = editor.value
+  const m = find.matches[find.current]
+  if (!e || !m) return
+  try {
+    const domAt = e.view.domAtPos(m.from)
+    const el = domAt.node.nodeType === 3 ? domAt.node.parentElement : (domAt.node as Element)
+    el?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  } catch { /* ignore */ }
+}
+
+function refreshFind(resetIndex = false) {
+  find.matches = collectFindMatches()
+  if (resetIndex) find.current = 0
+  if (find.matches.length === 0) find.current = 0
+  else if (find.current >= find.matches.length) find.current = find.matches.length - 1
+  redrawFind()
+}
+
+function openFind() {
+  find.open = true
+  if (find.query.trim()) refreshFind()
+  nextTick(() => {
+    findInputEl.value?.focus()
+    findInputEl.value?.select()
+  })
+}
+
+function closeFind() {
+  find.open = false
+  redrawFind()
+}
+
+function onFindInput() {
+  refreshFind(true)
+  scrollToFindMatch()
+}
+
+function nextMatch() {
+  if (!find.matches.length) return
+  find.current = (find.current + 1) % find.matches.length
+  redrawFind()
+  scrollToFindMatch()
+}
+
+function prevMatch() {
+  if (!find.matches.length) return
+  find.current = (find.current - 1 + find.matches.length) % find.matches.length
+  redrawFind()
+  scrollToFindMatch()
+}
+
+function replaceCurrent() {
+  const e = editor.value
+  const m = find.matches[find.current]
+  if (!e || !m) return
+  const chain = e.chain()
+  if (find.replacement) {
+    chain.insertContentAt({ from: m.from, to: m.to }, { type: 'text', text: find.replacement })
+  } else {
+    chain.deleteRange({ from: m.from, to: m.to })
+  }
+  chain.run()
+  refreshFind()
+  scrollToFindMatch()
+}
+
+function replaceAll() {
+  const e = editor.value
+  if (!e || !find.matches.length) return
+  const chain = e.chain()
+  // 从后往前替换, 单条链单事务, undo 一步可回退
+  for (let i = find.matches.length - 1; i >= 0; i--) {
+    const m = find.matches[i]
+    if (find.replacement) {
+      chain.insertContentAt({ from: m.from, to: m.to }, { type: 'text', text: find.replacement })
+    } else {
+      chain.deleteRange({ from: m.from, to: m.to })
+    }
+  }
+  chain.run()
+  ElMessage.success(`已替换 ${find.matches.length} 处`)
+  refreshFind()
+}
+
+// ---------------- AI 编辑 ----------------
+const AI_MD = new MarkdownIt({ html: false, breaks: true, linkify: true })
+
+const AI_LABELS: Record<string, string> = {
+  polish: '润色',
+  fix: '纠错',
+  summarize: '总结',
+  expand: '扩写',
+  translate: '翻译（英文）',
+  to_table: '转为表格',
+  continue: '续写',
+}
+
+const aiDialog = reactive({
+  open: false,
+  loading: false,
+  action: '',
+  original: '',
+  result: '',
+  error: '',
+  from: 0,
+  to: 0,
+})
+
+const aiDialogTitle = computed(() => `AI ${AI_LABELS[aiDialog.action] || '编辑'}`)
+
+let lastAiSelection: { from: number; to: number } | null = null
+
+function renderAiMarkdown(text: string) {
+  return AI_MD.render(text)
+}
+
+function showAiLoading(text: string) {
+  const tip = ElMessage({ message: text, duration: 0, type: 'info' })
+  return () => tip.close()
+}
+
+async function requestAi(payload: Record<string, unknown>) {
+  const res = await http.post('/api/editor/ai', payload, { timeout: 120000 })
+  return String(res.data?.result ?? '').trim()
+}
+
+async function runAiAction(action: string) {
+  const e = editor.value
+  if (!e) return
+  const sel = e.state.selection
+  const range = sel.from !== sel.to ? { from: sel.from, to: sel.to } : lastAiSelection
+  if (!range) {
+    ElMessage.warning('请先选择文本')
+    return
+  }
+  const from = Math.min(range.from, range.to)
+  const to = Math.max(range.from, range.to)
+  const text = e.state.doc.textBetween(from, to, '\n', ' ')
+  if (!text.trim()) {
+    ElMessage.warning('请先选择文本')
+    return
+  }
+  if (text.length > 8000) {
+    ElMessage.warning('选中文本超过 8000 字，请缩小选择范围')
+    return
+  }
+  const ctxFrom = Math.max(0, from - 500)
+  const ctxTo = Math.min(e.state.doc.content.size, to + 500)
+  const before = e.state.doc.textBetween(ctxFrom, from, '\n', ' ')
+  const after = e.state.doc.textBetween(to, ctxTo, '\n', ' ')
+  const context = (before + after).trim()
+
+  aiDialog.open = true
+  aiDialog.loading = true
+  aiDialog.action = action
+  aiDialog.original = text
+  aiDialog.result = ''
+  aiDialog.error = ''
+  aiDialog.from = from
+  aiDialog.to = to
+  try {
+    const payload: Record<string, unknown> = { action, text }
+    if (context) payload.context = context.slice(0, 2000)
+    if (action === 'translate') payload.target_lang = 'en'
+    aiDialog.result = await requestAi(payload)
+    if (!aiDialog.result) aiDialog.error = 'AI 未返回内容'
+  } catch (err: any) {
+    aiDialog.error = err?.response?.data?.detail || err?.message || '请求失败'
+    ElMessage.error('AI 处理失败：' + aiDialog.error)
+  } finally {
+    aiDialog.loading = false
+  }
+}
+
+function applyAiResult(mode: 'replace' | 'below') {
+  const e = editor.value
+  if (!e || !aiDialog.result) return
+  const html = renderAiMarkdown(aiDialog.result)
+  if (mode === 'replace') {
+    e.chain().focus().insertContentAt({ from: aiDialog.from, to: aiDialog.to }, html).run()
+  } else {
+    e.chain().focus().insertContentAt(aiDialog.to, html).run()
+  }
+  aiDialog.open = false
+  ElMessage.success(mode === 'replace' ? '已替换' : '已插入')
+}
+
+async function aiContinue(e: Editor, range: { from: number; to: number }) {
+  const before = e.state.doc.textBetween(0, range.from, '\n', ' ')
+  const context = before.slice(-4000)
+  if (!context.trim()) {
+    ElMessage.warning('光标前没有内容，无法续写')
+    return
+  }
+  e.chain().focus().deleteRange(range).run()
+  const pos = range.from
+  const closeTip = showAiLoading('AI 续写中…')
+  try {
+    const result = await requestAi({ action: 'continue', text: context.slice(-500), context })
+    if (!result) throw new Error('未返回内容')
+    e.chain().focus().insertContentAt(pos, renderAiMarkdown(result)).run()
+  } catch (err: any) {
+    ElMessage.error('AI 续写失败：' + (err?.response?.data?.detail || err?.message || '请求失败'))
+  } finally {
+    closeTip()
+  }
+}
+
+async function aiSummarize(e: Editor, range: { from: number; to: number }) {
+  const plain = e.state.doc.textBetween(0, e.state.doc.content.size, '\n', ' ').slice(0, 8000)
+  e.chain().focus().deleteRange(range).run()
+  const pos = range.from
+  const closeTip = showAiLoading('AI 总结中…')
+  try {
+    const result = await requestAi({ action: 'summarize', text: plain })
+    if (!result) throw new Error('未返回内容')
+    const html = `<div data-callout="info">${renderAiMarkdown(result)}</div>`
+    e.chain().focus().insertContentAt(pos, html).run()
+  } catch (err: any) {
+    ElMessage.error('AI 总结失败：' + (err?.response?.data?.detail || err?.message || '请求失败'))
+  } finally {
+    closeTip()
+  }
+}
+
 const editor = useEditor({
   extensions: [
     StarterKit.configure({ codeBlock: false, history: props.collab ? false : undefined }),
@@ -699,6 +1047,7 @@ const editor = useEditor({
     SlashCommand,
     PageMention,
     UserMention,
+    findPlugin,
     Markdown.configure({ html: true, breaks: true, linkify: true }),
   ],
   content: props.modelValue,
@@ -706,12 +1055,15 @@ const editor = useEditor({
     const markdown = editor.storage.markdown.getMarkdown()
     lastEmitted = markdown
     if (!applyingExternal) emit('update:modelValue', markdown)
+    if (find.open) refreshFind()
     nextTick(() => { scheduleMermaid(); disableSpellcheck() })
   },
   onCreate: () => {
     nextTick(() => { scheduleMermaid(); disableSpellcheck() })
   },
-  onSelectionUpdate: () => {
+  onSelectionUpdate: ({ editor }) => {
+    const { from, to } = editor.state.selection
+    if (from !== to) lastAiSelection = { from, to }
     keepCaretCentered()
   },
   editorProps: {
@@ -719,6 +1071,16 @@ const editor = useEditor({
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault()
         setLink()
+        return true
+      }
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') {
+        event.preventDefault()
+        openFind()
+        return true
+      }
+      if (event.key === 'Escape' && find.open) {
+        event.preventDefault()
+        closeFind()
         return true
       }
       return false
@@ -1665,6 +2027,119 @@ onBeforeUnmount(() => {
   pointer-events: none;
   height: 0;
 }
+
+/* 查找/替换 */
+.find-wrap {
+  position: sticky;
+  top: 46px;
+  z-index: 19;
+  height: 0;
+  display: flex;
+  justify-content: flex-end;
+  pointer-events: none;
+}
+
+.find-bar {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 4px;
+  padding: 5px 8px;
+  background: #fff;
+  border: 1px solid #e6e8f0;
+  border-radius: 10px;
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.14);
+}
+
+.find-input {
+  width: 120px;
+  height: 28px;
+  padding: 4px 9px;
+  border: 1px solid #e5e7eb;
+  border-radius: 7px;
+  font-size: 13px;
+  color: #374151;
+  outline: none;
+}
+
+.find-input:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px var(--primary-weak);
+}
+
+.find-count {
+  min-width: 62px;
+  text-align: center;
+  font-size: 12px;
+  color: #6b7280;
+}
+
+.find-btn {
+  height: 28px;
+  padding: 0 9px;
+  border: 1px solid #e5e7eb;
+  background: #fff;
+  border-radius: 7px;
+  font-size: 12px;
+  color: #374151;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.find-btn:hover:not(:disabled) { background: #f3f4f6; }
+.find-btn:disabled { opacity: 0.4; cursor: default; }
+
+.editor-content :deep(.find-hit) {
+  background: rgba(250, 204, 21, 0.45);
+  border-radius: 2px;
+}
+
+.editor-content :deep(.find-hit-current) {
+  background: rgba(249, 115, 22, 0.6);
+}
+
+/* AI 编辑预览 */
+.ai-preview {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  min-height: 220px;
+}
+
+.ai-col {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border: 1px solid #e6e8f0;
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.ai-col-title {
+  padding: 6px 12px;
+  font-size: 12px;
+  color: #6b7280;
+  background: #f8fafc;
+  border-bottom: 1px solid #e6e8f0;
+}
+
+.ai-col-body {
+  flex: 1;
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 1.7;
+  color: #1f2937;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-y: auto;
+  max-height: 46vh;
+}
+
+.ai-error { color: #dc2626; }
+.ai-muted { color: #9ca3af; }
 </style>
 
 <style>
