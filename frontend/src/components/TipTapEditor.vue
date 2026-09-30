@@ -366,6 +366,8 @@ import mermaid from 'mermaid'
 import MarkdownIt from 'markdown-it'
 import http from '../api/http'
 import { findMatchesInDoc, type FindMatch } from '../utils/findReplace'
+import { sanitizePastedHTML } from '../utils/sanitizePaste'
+import type { CollabPeer } from '../utils/collab'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plugin, PluginKey } from 'prosemirror-state'
 import { Decoration, DecorationSet } from 'prosemirror-view'
@@ -508,6 +510,9 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'update:modelValue', value: string): void
+  (e: 'collab-users', users: CollabPeer[]): void
+  (e: 'collab-status', connected: boolean): void
+  (e: 'collab-unavailable'): void
 }>()
 
 let lastEmitted = props.modelValue
@@ -517,6 +522,10 @@ let applyingExternal = false
 let ydoc: Y.Doc | null = null
 let provider: WebsocketProvider | null = null
 let collabSynced = false
+let collabSeedDone = false
+let collabSyncTimer: number | null = null
+/** 同步完成前收到的外部内容(恢复版本/草稿), 同步后应用 */
+let pendingExternal: string | null = null
 const collabExtensions: any[] = []
 if (props.collab) {
   ydoc = new Y.Doc()
@@ -527,6 +536,90 @@ if (props.collab) {
     CollaborationCursor.configure({ provider, user: props.collab.user }),
   )
 }
+
+function emitCollabUsers() {
+  if (!provider) return
+  const users: CollabPeer[] = []
+  const seen = new Set<string>()
+  provider.awareness.getStates().forEach((state: any) => {
+    const u = state?.user
+    if (!u?.name) return
+    const key = `${u.name}|${u.color}`
+    if (seen.has(key)) return
+    seen.add(key)
+    users.push({ name: u.name, color: u.color })
+  })
+  emit('collab-users', users)
+}
+
+if (provider) {
+  const p = provider
+  const onSynced = () => {
+    if (collabSynced) return
+    collabSynced = true
+    emit('collab-status', true)
+    if (pendingExternal !== null) {
+      const markdown = pendingExternal
+      pendingExternal = null
+      nextTick(() => applyExternalContentNow(markdown))
+    } else {
+      nextTick(() => seedCollabIfEmpty())
+    }
+  }
+  // 仅在与服务器初始同步完成后才允许播种/外部覆盖, 避免"本地插入 + 服务器内容"并发合并导致重复
+  p.on('sync', onSynced)
+  p.on('status', (event: { status: string }) => {
+    emit('collab-status', event.status === 'connected')
+  })
+  p.awareness.on('change', emitCollabUsers)
+  emitCollabUsers()
+  if (p.synced) onSynced()
+  // 探活通过但实际长时间无法同步 → 通知父级回退单人编辑(不破坏本地编辑)
+  collabSyncTimer = window.setTimeout(() => {
+    if (!collabSynced) emit('collab-unavailable')
+  }, 5000)
+}
+
+function seedCollabIfEmpty() {
+  if (!props.collab || !ydoc || !editor.value || !collabSynced || collabSeedDone) return
+  try {
+    if (ydoc.getXmlFragment('default').length > 0) {
+      collabSeedDone = true
+      return
+    }
+    const markdown = props.modelValue
+    if (!markdown) return
+    collabSeedDone = true
+    editor.value.commands.setContent(markdown, false)
+  } catch { /* ignore */ }
+}
+
+/**
+ * 外部内容替换(恢复历史版本 / 恢复离线草稿):
+ * - 单机模式立即应用;
+ * - 协同模式同步前先挂起(避免本地写入与服务器内容并发合并), 同步后写入 Yjs 并广播。
+ */
+function applyExternalContent(markdown: string) {
+  if (props.collab && !collabSynced) {
+    pendingExternal = markdown || ''
+    return
+  }
+  applyExternalContentNow(markdown || '')
+}
+
+function applyExternalContentNow(markdown: string) {
+  const e = editor.value
+  if (!e) return
+  collabSeedDone = true
+  lastEmitted = markdown
+  applyingExternal = true
+  e.commands.setContent(markdown, false)
+  applyingExternal = false
+  mermaidCache.clear()
+  nextTick(() => { scheduleMermaid(); disableSpellcheck() })
+}
+
+defineExpose({ applyExternalContent })
 
 mermaid.initialize({ startOnLoad: false, theme: 'default' })
 
@@ -1148,7 +1241,9 @@ const editor = useEditor({
     findPlugin,
     Markdown.configure({ html: true, breaks: true, linkify: true }),
   ],
-  content: props.modelValue,
+  // 协同模式绝不把 content 交给编辑器初始文档(会在 Yjs 同步前写入本地并和服务器内容合并 → 重复);
+  // 改为同步完成后由 seedCollabIfEmpty 从 Markdown 播种空文档。
+  content: props.collab ? '' : props.modelValue,
   onUpdate: ({ editor }) => {
     const markdown = editor.storage.markdown.getMarkdown()
     lastEmitted = markdown
@@ -1165,6 +1260,7 @@ const editor = useEditor({
     keepCaretCentered()
   },
   editorProps: {
+    transformPastedHTML: (html: string) => sanitizePastedHTML(html),
     handleKeyDown: (_view, event) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault()
@@ -1185,23 +1281,6 @@ const editor = useEditor({
     },
   },
 })
-
-if (provider) {
-  // 仅在初次与服务器同步完成后才允许播种, 避免"本地插入 + 服务器内容"并发合并导致重复
-  provider.on('sync', () => {
-    collabSynced = true
-    nextTick(() => seedCollabIfEmpty())
-  })
-}
-
-function seedCollabIfEmpty() {
-  if (!props.collab || !ydoc || !editor.value) return
-  try {
-    if (ydoc.getXmlFragment('default').length === 0 && props.modelValue) {
-      editor.value.commands.setContent(props.modelValue)
-    }
-  } catch { /* ignore */ }
-}
 
 const headingValue = computed(() => {
   const e = editor.value
@@ -1553,10 +1632,8 @@ async function setLink() {
 
 watch(() => props.modelValue, (newValue) => {
   if (props.collab) {
-    // 协同模式内容由 Yjs 驱动; 仅在"已完成初始同步且文档为空"时用最新 Markdown 播种
-    if (collabSynced && ydoc && newValue && ydoc.getXmlFragment('default').length === 0) {
-      editor.value?.commands.setContent(newValue)
-    }
+    // 协同模式内容由 Yjs 驱动; 仅在"已完成初始同步且从未播种过"时用最新 Markdown 播种
+    if (collabSynced && !collabSeedDone) nextTick(() => seedCollabIfEmpty())
     return
   }
   if (!editor.value || lastEmitted === newValue) return
@@ -1688,6 +1765,11 @@ onBeforeUnmount(() => {
     clearTimeout(mermaidTimer)
     mermaidTimer = null
   }
+  if (collabSyncTimer) {
+    clearTimeout(collabSyncTimer)
+    collabSyncTimer = null
+  }
+  provider?.awareness.off('change', emitCollabUsers)
   editor.value?.destroy()
   provider?.destroy()
   ydoc?.destroy()

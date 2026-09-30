@@ -201,10 +201,27 @@
           <div v-else class="doc-tab doc-tab-empty">{{ currentNotebook?.name || '未选择笔记本' }}</div>
           <div class="topbar-actions">
             <span
-              class="save-dot"
-              :class="saveStatus"
-              :title="saveStatus === 'saved' ? '已保存' : saveStatus === 'saving' ? '保存中…' : '未保存'"
-            ></span>
+              v-if="collabActive"
+              class="collab-peers"
+              :class="{ 'is-offline': !collabConnected }"
+              :title="collabTitle"
+            >
+              <span
+                v-for="p in collabUsers"
+                :key="p.name + p.color"
+                class="collab-avatar"
+                :style="{ background: p.color }"
+              >{{ (p.name || '?').slice(0, 1) }}</span>
+            </span>
+            <span
+              class="save-state"
+              :class="[saveStatus, { clickable: saveStatus === 'error' }]"
+              :title="saveStatus === 'error' ? '点击重试保存' : saveText"
+              @click="saveStatus === 'error' && retrySave()"
+            >
+              <span class="save-dot" :class="saveStatus"></span>
+              <span class="save-text">{{ saveText }}</span>
+            </span>
             <button v-if="currentPage" class="topbar-text-btn" title="分享" @click="openShare">分享</button>
             <button v-if="currentPage" class="icon-btn" :title="isFav ? '取消收藏' : '收藏'" @click="toggleFav">{{ isFav ? '★' : '☆' }}</button>
             <button class="icon-btn" :class="{ 'is-on': commentsOpen }" title="评论" @click="toggleComments">💬<span v-if="comments.length" class="badge">{{ comments.length }}</span></button>
@@ -391,10 +408,14 @@
           </div>
           <div v-loading="pageLoading" class="editor-body">
             <TipTapEditor
+              ref="editorRef"
               :key="(collab ? 'c:' : 's:') + (currentPage?.id || '')"
               v-model="currentPage.content"
               :collab="collab"
               @update:modelValue="scheduleSave"
+              @collab-users="collabUsers = $event"
+              @collab-status="collabConnected = $event"
+              @collab-unavailable="handleCollabUnavailable"
             />
           </div>
           <div class="editor-footer">
@@ -683,9 +704,35 @@
           <template v-if="revisionPreview">
             <div class="history-preview-head">
               <span class="history-preview-title">{{ revisionPreview.title }}</span>
-              <el-button size="small" type="primary" @click="restoreRevision(revisionPreview.id)">恢复此版本</el-button>
+              <div class="history-head-actions">
+                <el-radio-group v-model="historyView" size="small">
+                  <el-radio-button value="diff">对比当前</el-radio-button>
+                  <el-radio-button value="preview">原文</el-radio-button>
+                </el-radio-group>
+                <el-button size="small" type="primary" @click="restoreRevision(revisionPreview.id)">恢复此版本</el-button>
+              </div>
             </div>
-            <pre class="history-content">{{ revisionPreview.content }}</pre>
+            <template v-if="historyView === 'diff'">
+              <div class="history-diff-stat">
+                <span>该版本 → 当前</span>
+                <span class="stat-add">+{{ historyDiffStats.add }}</span>
+                <span class="stat-del">-{{ historyDiffStats.del }}</span>
+                <span class="stat-equal">未变 {{ historyDiffStats.equal }} 行</span>
+              </div>
+              <div class="history-diff-body">
+                <div v-if="!revisionDiff.length" class="muted-hint" style="padding: 10px">内容一致，无差异</div>
+                <div
+                  v-for="(op, i) in revisionDiff"
+                  :key="i"
+                  class="diff-line"
+                  :class="'diff-' + op.type"
+                >
+                  <span class="diff-sign">{{ op.type === 'add' ? '+' : op.type === 'del' ? '-' : ' ' }}</span>
+                  <span class="diff-text">{{ op.text || ' ' }}</span>
+                </div>
+              </div>
+            </template>
+            <pre v-else class="history-content">{{ revisionPreview.content }}</pre>
           </template>
           <div v-else class="muted-hint" style="padding: 14px">选择左侧版本查看内容</div>
         </div>
@@ -707,6 +754,12 @@ import MarkdownIt from 'markdown-it'
 import taskLists from 'markdown-it-task-lists'
 import DOMPurify from 'dompurify'
 import hljs from 'highlight.js'
+import { diffLines, diffStats } from '../utils/diff'
+import { loadDraft, saveDraft, clearDraft, shouldOfferDraft } from '../utils/draft'
+import {
+  isCollabFeatureEnabled, getCachedCollabProbe, setCachedCollabProbe,
+  probeCollabServer, type CollabPeer,
+} from '../utils/collab'
 
 const exportMd = new MarkdownIt({
   html: true,
@@ -725,8 +778,15 @@ const route = useRoute()
 const API_BASE = (import.meta.env.BASE_URL || '/').replace(/\/$/, '')
 
 // ---- 协同编辑(Yjs over WebSocket) ----
+// 默认开启; `VITE_RAG_COLLAB_ENABLED=false` 构建期关闭, `?collab=0` 运行期一键退回单人。
 const auth = useAuthStore()
-const collabEnabled = ref(false)
+const collabFeatureEnabled = isCollabFeatureEnabled({
+  query: window.location.search,
+  envValue: import.meta.env.VITE_RAG_COLLAB_ENABLED,
+})
+const collabServerOk = ref(getCachedCollabProbe() === true)
+const collabUsers = ref<CollabPeer[]>([])
+const collabConnected = ref(false)
 const wsBase = computed(() => {
   const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   return `${proto}//${window.location.host}${API_BASE}/api/collab`
@@ -736,11 +796,48 @@ function colorFor(name: string) {
   for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) % 360
   return `hsl(${h}, 70%, 50%)`
 }
+let collabProbePromise: Promise<boolean> | null = null
+/** WS 探活(结果带缓存): 失败时编辑器以单人模式挂载, 不破坏编辑与保存。 */
+const ensureCollabReady = (): Promise<boolean> => {
+  if (!collabFeatureEnabled) return Promise.resolve(false)
+  const cached = getCachedCollabProbe()
+  if (cached !== null) {
+    collabServerOk.value = cached
+    return Promise.resolve(cached)
+  }
+  if (!collabProbePromise) {
+    collabProbePromise = probeCollabServer(wsBase.value, 1500)
+      .then(ok => {
+        setCachedCollabProbe(ok)
+        collabServerOk.value = ok
+        return ok
+      })
+      .finally(() => { collabProbePromise = null })
+  }
+  return collabProbePromise
+}
 const collab = computed(() => {
-  if (!collabEnabled.value || !currentPage.value) return null
+  if (!collabFeatureEnabled || !collabServerOk.value || !currentPage.value) return null
   const name = auth.user?.name || auth.user?.display_name || auth.user?.username || '匿名'
   return { url: wsBase.value, room: `page-${currentPage.value.id}`, user: { name, color: colorFor(name) } }
 })
+const collabActive = computed(() => !!collab.value)
+const collabTitle = computed(() => {
+  if (!collabActive.value) return ''
+  if (!collabConnected.value) return '协同连接中断，编辑仍会自动保存'
+  const names = collabUsers.value.map(u => u.name).join('、')
+  return names ? `协同编辑中：${names}` : '协同编辑中'
+})
+/** 探活通过但实际同步失败(服务假死/半通) → 回退单人编辑并短时禁止再次进入协同。 */
+const handleCollabUnavailable = () => {
+  if (!collabActive.value) return
+  setCachedCollabProbe(false)
+  collabServerOk.value = false
+  collabUsers.value = []
+  collabConnected.value = false
+  ElMessage.warning('协作服务不可用，已切换为单人编辑（内容仍会自动保存）')
+}
+if (collabFeatureEnabled) void ensureCollabReady()
 
 interface Notebook {
   id: string
@@ -796,7 +893,74 @@ const treePages = ref<PageListItem[]>([])
 const treeCache = new Map<string, PageListItem[]>()
 const currentNotebook = ref<Notebook | null>(null)
 const currentPage = ref<Page | null>(null)
-const saveStatus = ref<'saved' | 'saving' | 'unsaved'>('saved')
+const saveStatus = ref<'saved' | 'saving' | 'unsaved' | 'error'>('saved')
+const lastSavedAt = ref<Date | null>(null)
+let saveRetryTimer: number | null = null
+const saveText = computed(() => {
+  if (saveStatus.value === 'saving') return '保存中…'
+  if (saveStatus.value === 'unsaved') return '未保存'
+  if (saveStatus.value === 'error') return '保存失败(点击重试)'
+  if (!lastSavedAt.value) return '已保存'
+  const t = lastSavedAt.value.toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit' })
+  return `已保存 ${t}`
+})
+const draftUid = () => auth.user?.id || 'anon'
+/** 冷启动时 auth.user 可能尚未就绪, 先补拉一次 /api/auth/me, 保证草稿 key 用真实用户 id。 */
+const ensureDraftUid = async (): Promise<string> => {
+  if (!auth.user && auth.token) {
+    try { await auth.fetchMe() } catch { /* ignore */ }
+  }
+  return draftUid()
+}
+/** 编辑器实例(用于把恢复的历史版本/离线草稿写入编辑器; 协同模式下必须显式写入 Yjs)。 */
+const editorRef = ref<{ applyExternalContent?: (markdown: string) => void } | null>(null)
+const applyContentToEditor = (markdown: string) => {
+  editorRef.value?.applyExternalContent?.(markdown || '')
+}
+
+/** PUT 失败时备份最新内容(按用户隔离), 保存成功后清理。 */
+const backupDraft = (page: Page) => {
+  saveDraft(localStorage, draftUid(), page.id, {
+    content: page.content || '',
+    title: page.title || '',
+    savedAt: Date.now(),
+    baseUpdatedAt: page.updated_at || '',
+  })
+}
+
+/** 打开页面后: 若本地草稿比服务端新, 提示「恢复/丢弃」。 */
+const maybeOfferDraft = async (page: Page) => {
+  const uid = await ensureDraftUid()
+  const draft = loadDraft(localStorage, uid, page.id)
+  if (!draft) return
+  if (draft.content === (page.content || '')) {
+    clearDraft(localStorage, uid, page.id)
+    return
+  }
+  if (!shouldOfferDraft(draft, page.content, page.updated_at)) return
+  const timeText = new Date(draft.savedAt).toLocaleString('zh-CN', { hour12: false })
+  let action = ''
+  try {
+    await ElMessageBox.confirm(
+      `检测到该笔记有未保存草稿（${timeText} 备份，上次自动保存失败），是否恢复？`,
+      '未保存草稿',
+      { confirmButtonText: '恢复草稿', cancelButtonText: '丢弃', type: 'warning', distinguishCancelAndClose: true },
+    )
+    action = 'confirm'
+  } catch (e: any) {
+    action = e === 'cancel' ? 'cancel' : 'close'
+  }
+  if (currentPage.value?.id !== page.id) return
+  if (action === 'confirm') {
+    page.content = draft.content
+    if (draft.title) page.title = draft.title
+    applyContentToEditor(page.content)
+    scheduleSave()
+    ElMessage.success('已恢复草稿，正在保存')
+  } else if (action === 'cancel') {
+    clearDraft(localStorage, uid, page.id)
+  }
+}
 
 const searchQuery = ref('')
 const sidebarCollapsed = ref(localStorage.getItem('rag-sidebar-collapsed') === '1')
@@ -1116,6 +1280,8 @@ const selectPage = async (page: PageListItem) => {
   if (saveStatus.value === 'unsaved' && prev) {
     savePage(prev)
   }
+  // 协同探活: 结果未知时稍等(通常 <100ms), 避免先以单人模式挂载再中途切换
+  if (getCachedCollabProbe() === null) await ensureCollabReady()
 
   // Switch the UI immediately (placeholder) and load content in the
   // background, so clicking a note never blocks on the network or parse.
@@ -1129,6 +1295,7 @@ const selectPage = async (page: PageListItem) => {
     updated_at: page.updated_at,
   }
   pageLoading.value = true
+  resetPerPageState()
   const seq = ++pageLoadSeq
   loadAbort?.abort()
   const controller = new AbortController()
@@ -1137,6 +1304,7 @@ const selectPage = async (page: PageListItem) => {
     const res = await http.get(`/api/pages/${page.id}`, { signal: controller.signal })
     if (seq !== pageLoadSeq) return
     currentPage.value = res.data
+    void maybeOfferDraft(res.data)
   } catch (e: any) {
     if (seq !== pageLoadSeq) return
     ElMessage.error('加载笔记内容失败')
@@ -1149,8 +1317,10 @@ const selectPage = async (page: PageListItem) => {
 }
 
 const openPageById = async (pageId: string) => {
+  if (getCachedCollabProbe() === null) await ensureCollabReady()
   currentPage.value = { id: pageId, notebook_id: null, title: '加载中...', content: '', icon: '', cover: '', updated_at: '' }
   pageLoading.value = true
+  resetPerPageState()
   const seq = ++pageLoadSeq
   loadAbort?.abort()
   const controller = new AbortController()
@@ -1160,6 +1330,7 @@ const openPageById = async (pageId: string) => {
     if (seq !== pageLoadSeq) return
     const page = res.data
     currentPage.value = page
+    void maybeOfferDraft(page)
     if (page.notebook_id) {
       const nb = notebooks.value.find(n => n.id === page.notebook_id)
       if (nb) {
@@ -1176,6 +1347,14 @@ const openPageById = async (pageId: string) => {
       loadAbort = null
     }
   }
+}
+
+/** 切换页面时重置保存状态与在线列表(避免上一页状态残留)。 */
+const resetPerPageState = () => {
+  saveStatus.value = 'saved'
+  lastSavedAt.value = null
+  collabUsers.value = []
+  collabConnected.value = false
 }
 
 const handleCreateNotebook = async () => {
@@ -1273,6 +1452,7 @@ const createPage = async (parentId: string | null = null) => {
     loadAbort = null
     currentPage.value = res.data
     pageLoading.value = false
+    resetPerPageState()
     await loadTree()
     ElMessage.success('创建成功')
   } catch (e) {
@@ -1286,23 +1466,37 @@ const scheduleSave = () => {
   saveTimeout = window.setTimeout(() => savePage(), 1000)
 }
 
-const savePage = async (target?: Page) => {
+/** 手动重试(状态指示点击触发); 仍失败会再次进入自动重试/草稿兜底。 */
+const retrySave = () => {
+  if (currentPage.value) void savePage(currentPage.value)
+}
+
+const savePage = async (target?: Page, isRetry = false) => {
   const page = target || currentPage.value
   if (!page) return
   if (saveTimeout) {
     clearTimeout(saveTimeout)
     saveTimeout = null
   }
-  saveStatus.value = 'saving'
+  if (saveRetryTimer) {
+    clearTimeout(saveRetryTimer)
+    saveRetryTimer = null
+  }
+  if (currentPage.value?.id === page.id) saveStatus.value = 'saving'
   try {
-    await http.put(`/api/pages/${page.id}`, {
+    const res = await http.put(`/api/pages/${page.id}`, {
       title: page.title,
       content: page.content,
       icon: page.icon || '',
       cover: page.cover || ''
     })
+    // 基准时间用于离线草稿的新旧判定(下次保存失败时记录)
+    if (res.data?.updated_at) page.updated_at = res.data.updated_at
+    // 保存成功 → 清理该页离线草稿
+    clearDraft(localStorage, draftUid(), page.id)
     if (currentPage.value?.id === page.id) {
       saveStatus.value = 'saved'
+      lastSavedAt.value = new Date()
     }
     const idx = treePages.value.findIndex(p => p.id === page.id)
     if (idx >= 0) {
@@ -1322,10 +1516,17 @@ const savePage = async (target?: Page) => {
       }
     }
   } catch (e) {
-    ElMessage.error('保存失败')
-    if (currentPage.value?.id === page.id) {
-      saveStatus.value = 'unsaved'
+    // 失败: 先落离线草稿兜底, 再自动重试一次; 仍失败则状态指示可点击手动重试
+    backupDraft(page)
+    if (!isRetry) {
+      saveRetryTimer = window.setTimeout(() => {
+        saveRetryTimer = null
+        void savePage(page, true)
+      }, 2000)
+      return
     }
+    ElMessage.error('保存失败，内容已备份到本地草稿')
+    if (currentPage.value?.id === page.id) saveStatus.value = 'error'
   }
 }
 
@@ -1640,11 +1841,19 @@ const copyShareUrl = async () => {
 const historyOpen = ref(false)
 const revisions = ref<{ id: string; title: string; editor: string; created_at: string; size: number }[]>([])
 const revisionPreview = ref<{ id: string; title: string; content: string; editor: string; created_at: string } | null>(null)
+const historyView = ref<'diff' | 'preview'>('diff')
 const formatTime = (s: string) => (s ? new Date(s).toLocaleString('zh-CN', { hour12: false }) : '')
+/** 行级 diff: 该历史版本 → 当前内容(add 绿色=当前新增, del 红色=该版本有而当前没有)。 */
+const revisionDiff = computed(() => {
+  if (!revisionPreview.value || !currentPage.value) return []
+  return diffLines(revisionPreview.value.content || '', currentPage.value.content || '')
+})
+const historyDiffStats = computed(() => diffStats(revisionDiff.value))
 const openHistory = async () => {
   if (!currentPage.value) return
   historyOpen.value = true
   revisionPreview.value = null
+  historyView.value = 'diff'
   try {
     revisions.value = (await http.get(`/api/pages/${currentPage.value.id}/revisions`)).data.items || []
   } catch { revisions.value = [] }
@@ -1653,6 +1862,7 @@ const previewRevision = async (id: string) => {
   if (!currentPage.value) return
   try {
     revisionPreview.value = (await http.get(`/api/pages/${currentPage.value.id}/revisions/${id}`)).data
+    historyView.value = 'diff'
   } catch { ElMessage.error('加载版本失败') }
 }
 const restoreRevision = async (id: string) => {
@@ -1660,6 +1870,7 @@ const restoreRevision = async (id: string) => {
   try {
     const res = await http.post(`/api/pages/${currentPage.value.id}/revisions/${id}/restore`)
     currentPage.value = res.data
+    applyContentToEditor(res.data?.content || '')
     await loadTree()
     historyOpen.value = false
     ElMessage.success('已恢复该版本')
@@ -2203,8 +2414,7 @@ onMounted(async () => {
   loadFavorites()
   loadTemplates()
   auth.fetchMe().catch(() => {})
-  // 协同编辑暂时停用: 修复"每次打开重复插入内容"的问题, 改为单机编辑(内容以 Markdown 为准)。
-  collabEnabled.value = false
+  // 协同编辑默认开启(见 collab 配置): 探活失败自动回退单人编辑; ?collab=0 可一键退回。
   window.addEventListener('keydown', handleKeydown)
   document.addEventListener('mousedown', onDocMousedown)
   const targetId = route.query.page as string | undefined
@@ -2218,6 +2428,10 @@ onBeforeUnmount(() => {
   if (saveTimeout) {
     clearTimeout(saveTimeout)
     saveTimeout = null
+  }
+  if (saveRetryTimer) {
+    clearTimeout(saveRetryTimer)
+    saveRetryTimer = null
   }
   window.removeEventListener('keydown', handleKeydown)
   document.removeEventListener('mousedown', onDocMousedown)
@@ -3016,8 +3230,30 @@ html, body, #app { height: 100%; }
 .history-time { font-size: 13px; color: #37352f; font-weight: 500; }
 .history-meta { font-size: 11px; color: #9b9a97; margin-top: 2px; }
 .history-preview { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-.history-preview-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
-.history-preview-title { font-weight: 600; color: #37352f; }
+.history-preview-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+.history-preview-title { font-weight: 600; color: #37352f; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.history-head-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+.history-diff-stat { display: flex; align-items: center; gap: 10px; font-size: 12px; color: #64748b; margin-bottom: 8px; }
+.history-diff-stat .stat-add { color: #16a34a; font-weight: 600; }
+.history-diff-stat .stat-del { color: #dc2626; font-weight: 600; }
+.history-diff-stat .stat-equal { color: #94a3b8; }
+.history-diff-body {
+  flex: 1;
+  overflow: auto;
+  border: 1px solid #eceef2;
+  border-radius: 10px;
+  background: #fff;
+  padding: 6px 0;
+  font-family: ui-monospace, SFMono-Regular, Consolas, 'Courier New', monospace;
+  font-size: 12px;
+  line-height: 1.65;
+}
+.diff-line { display: flex; gap: 8px; padding: 0 10px; white-space: pre-wrap; word-break: break-word; }
+.diff-line .diff-sign { flex: 0 0 10px; color: #94a3b8; user-select: none; }
+.diff-line .diff-text { flex: 1; min-width: 0; }
+.diff-add { background: #ecfdf3; color: #166534; }
+.diff-del { background: #fef2f2; color: #991b1b; }
+.diff-equal { color: #475569; }
 .history-content {
   flex: 1;
   overflow: auto;
@@ -3105,18 +3341,47 @@ html, body, #app { height: 100%; }
 .db-cal-item { background: var(--primary-weak); color: var(--primary); border-radius: 5px; padding: 1px 5px; margin-bottom: 2px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ---- 交互细节打磨 ---- */
+.save-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #94a3b8;
+  margin: 0 6px 0 2px;
+  white-space: nowrap;
+}
+.save-state.error { color: #dc2626; }
+.save-state.clickable { cursor: pointer; }
+.save-state.clickable:hover { text-decoration: underline; }
 .save-dot {
   width: 8px;
   height: 8px;
   border-radius: 50%;
   background: #d3d3d0;
-  margin: 0 4px;
   flex: 0 0 auto;
 }
 .save-dot.saved { background: #10b981; }
 .save-dot.saving { background: #f59e0b; animation: dotPulse 1s infinite; }
 .save-dot.unsaved { background: #ef4444; }
+.save-dot.error { background: #ef4444; }
 @keyframes dotPulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+.collab-peers { display: inline-flex; align-items: center; padding-left: 6px; }
+.collab-peers.is-offline { opacity: 0.5; }
+.collab-avatar {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  color: #fff;
+  font-size: 11px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid #fff;
+  margin-left: -7px;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.15);
+}
 
 @keyframes panelIn {
   from { opacity: 0; transform: translateX(8px); }
