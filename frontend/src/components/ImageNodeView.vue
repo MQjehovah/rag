@@ -1,11 +1,13 @@
 <template>
-  <node-view-wrapper as="span" class="img-node" :class="{ selected }">
+  <node-view-wrapper as="span" class="img-node" :class="{ selected }" ref="wrapRef">
     <span class="img-wrap" :style="wrapStyle">
       <img
-        :src="node.attrs.src"
+        :src="displaySrc"
         :alt="node.attrs.alt || ''"
         :title="node.attrs.title || ''"
         draggable="false"
+        loading="lazy"
+        decoding="async"
       />
       <span v-if="selected" class="img-resize" contenteditable="false" @mousedown.stop.prevent="startResize"></span>
       <span v-if="selected && editable" class="img-tools" contenteditable="false">
@@ -22,8 +24,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { NodeViewWrapper, nodeViewProps } from '@tiptap/vue-3'
+import { createLazyObserver, type LazyObserver } from '../utils/lazyRender'
 
 const props = defineProps(nodeViewProps)
 
@@ -31,6 +34,33 @@ const editable = computed(() => props.editor?.isEditable ?? true)
 const previewWidth = ref<number | null>(props.node.attrs.width || null)
 
 const wrapStyle = computed(() => (previewWidth.value ? `width:${previewWidth.value}px` : ''))
+
+// 图片惰性加载: 未进入视口前用 1x1 透明占位, 进入视口(含 300px 预加载边距)才真正请求
+const PLACEHOLDER_SRC = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'
+const visible = ref(false)
+const wrapRef = ref<{ $el?: HTMLElement } | null>(null)
+let observer: LazyObserver | null = null
+
+const displaySrc = computed(() => {
+  const src = String(props.node.attrs.src || '')
+  if (visible.value || src.startsWith('data:')) return src
+  return PLACEHOLDER_SRC
+})
+
+onMounted(() => {
+  const el = wrapRef.value?.$el
+  if (!el) {
+    visible.value = true
+    return
+  }
+  observer = createLazyObserver(() => { visible.value = true }, '300px 0px')
+  observer.observe(el)
+})
+
+onBeforeUnmount(() => {
+  observer?.disconnect()
+  observer = null
+})
 
 function onCaption(e: Event) {
   props.updateAttributes?.({ title: (e.target as HTMLInputElement).value })

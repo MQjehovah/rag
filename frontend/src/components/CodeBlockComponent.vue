@@ -1,5 +1,5 @@
 <template>
-  <node-view-wrapper class="code-block" :class="`language-${node.attrs.language || 'plaintext'}`">
+  <node-view-wrapper class="code-block" :class="[`language-${node.attrs.language || 'plaintext'}`, { 'is-collapsed': collapsed }]">
     <div class="code-head" contenteditable="false">
       <select class="lang-select" @change="handleLanguageChange" :value="node.attrs.language || 'plaintext'">
         <option value="plaintext">Plain Text</option>
@@ -25,16 +25,28 @@
         {{ copied ? '已复制' : '复制' }}
       </button>
     </div>
-    <pre spellcheck="false"><code spellcheck="false"><node-view-content as="code" /></code></pre>
+    <pre spellcheck="false" :class="{ 'is-collapsed-pre': collapsed }"><code spellcheck="false"><node-view-content as="code" /></code></pre>
+    <div v-if="longCode" class="code-fold" contenteditable="false">
+      <button class="fold-btn" type="button" @click="expanded = !expanded">
+        {{ expanded ? '收起' : `展开全部（共 ${lineCount} 行）` }}
+      </button>
+    </div>
   </node-view-wrapper>
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { NodeViewWrapper, NodeViewContent, nodeViewProps } from '@tiptap/vue-3'
 
 const props = defineProps(nodeViewProps)
 const copied = ref(false)
+
+/** 超长代码块默认折叠, 点击展开(仅展示层, 不影响内容与复制)。 */
+const COLLAPSE_LINE_LIMIT = 200
+const expanded = ref(false)
+const lineCount = computed(() => (props.node.textContent || '').split('\n').length)
+const longCode = computed(() => lineCount.value > COLLAPSE_LINE_LIMIT)
+const collapsed = computed(() => longCode.value && !expanded.value)
 
 const handleLanguageChange = (event: Event) => {
   const language = (event.target as HTMLSelectElement).value
@@ -117,5 +129,32 @@ async function copyCode() {
 .code-block code {
   background: transparent;
   padding: 0;
+}
+
+/* 超长代码块折叠(>200 行): 默认截断 + 「展开全部」 */
+.code-block.is-collapsed .is-collapsed-pre {
+  max-height: 320px;
+  overflow: hidden;
+}
+
+.code-fold {
+  border-top: 1px solid #1b1f24;
+  background: #21252b;
+  text-align: center;
+  padding: 4px 0;
+}
+
+.fold-btn {
+  background: transparent;
+  border: none;
+  color: #89b4fa;
+  font-size: 12px;
+  cursor: pointer;
+  padding: 2px 10px;
+}
+
+.fold-btn:hover {
+  color: #a6c8ff;
+  text-decoration: underline;
 }
 </style>

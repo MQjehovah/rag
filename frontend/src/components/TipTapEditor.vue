@@ -412,6 +412,8 @@ import ImageNodeView from './ImageNodeView.vue'
 import ToggleNodeView from './ToggleNodeView.vue'
 import AttachmentNodeView from './AttachmentNodeView.vue'
 import MathNodeView from './MathNodeView.vue'
+import { TableFold } from './editorTableFold'
+import { createLazyObserver, type LazyObserver } from '../utils/lazyRender'
 import FootnoteItemView from './FootnoteItemView.vue'
 import FootnoteBlockView from './FootnoteBlockView.vue'
 import { Attachment, Callout, IndentBlock, Toggle } from './editorExt'
@@ -1513,6 +1515,7 @@ const editor = useEditor({
       },
     }).configure({ inline: true, allowBase64: true }),
     Table.configure({ resizable: true }),
+    TableFold,
     TableRow,
     TableCell,
     TableHeader,
@@ -2205,46 +2208,65 @@ watch(() => props.modelValue, (newValue) => {
 
 let mermaidTimer: number | null = null
 const mermaidCache = new Map<string, string>()
+let mermaidObserver: LazyObserver | null = null
 
 const scheduleMermaid = () => {
   if (mermaidTimer) clearTimeout(mermaidTimer)
   mermaidTimer = window.setTimeout(() => { renderMermaid() }, 300)
 }
 
-const renderMermaid = async () => {
+/** 渲染单个 mermaid 代码块(缓存命中时直接回填 SVG)。 */
+const renderMermaidBlock = async (block: Element) => {
+  const codeBlock = block.querySelector('code')
+  if (!codeBlock) return
+  const codeText = codeBlock.textContent || ''
+  if (!codeText.trim()) return
+  const diagramDiv = block.querySelector('.mermaid-diagram')
+  const cachedSvg = mermaidCache.get(codeText)
+  if (diagramDiv && cachedSvg && diagramDiv.innerHTML === cachedSvg) return
+  try {
+    let svg = cachedSvg
+    if (!svg) {
+      const id = `mermaid-${Math.random().toString(36).substr(2, 9)}`
+      const rendered = await mermaid.render(id, codeText)
+      svg = rendered.svg
+      mermaidCache.set(codeText, svg)
+    }
+    let targetDiv = block.querySelector('.mermaid-diagram')
+    if (!targetDiv) {
+      targetDiv = document.createElement('div')
+      targetDiv.className = 'mermaid-diagram'
+      block.appendChild(targetDiv)
+    }
+    targetDiv.innerHTML = svg
+  } catch (e) {
+    console.error('Mermaid error:', e)
+  }
+}
+
+/**
+ * 扫描 mermaid 代码块并交给 IntersectionObserver: 进入视口才 render,
+ * 长文中的大量图表不再一次性全部渲染(定时器仅做扫描)。
+ */
+const renderMermaid = () => {
   if (mermaidTimer) {
     clearTimeout(mermaidTimer)
     mermaidTimer = null
   }
   const editorEl = document.querySelector('.ProseMirror')
   if (!editorEl) return
+  if (!mermaidObserver) {
+    mermaidObserver = createLazyObserver((el) => { void renderMermaidBlock(el) }, '300px 0px')
+  }
   const mermaidBlocks = editorEl.querySelectorAll('.language-mermaid')
   for (const block of mermaidBlocks) {
     const codeBlock = block.querySelector('code')
-    if (!codeBlock) continue
-    const codeText = codeBlock.textContent || ''
-    if (!codeText.trim()) continue
+    const codeText = codeBlock?.textContent || ''
     const diagramDiv = block.querySelector('.mermaid-diagram')
     const cachedSvg = mermaidCache.get(codeText)
+    // 已渲染且内容未变: 跳过; 否则(重新)进入观察队列, 靠近视口时才渲染
     if (diagramDiv && cachedSvg && diagramDiv.innerHTML === cachedSvg) continue
-    try {
-      let svg = cachedSvg
-      if (!svg) {
-        const id = `mermaid-${Math.random().toString(36).substr(2, 9)}`
-        const rendered = await mermaid.render(id, codeText)
-        svg = rendered.svg
-        mermaidCache.set(codeText, svg)
-      }
-      let targetDiv = diagramDiv
-      if (!targetDiv) {
-        targetDiv = document.createElement('div')
-        targetDiv.className = 'mermaid-diagram'
-        block.appendChild(targetDiv)
-      }
-      targetDiv.innerHTML = svg
-    } catch (e) {
-      console.error('Mermaid error:', e)
-    }
+    mermaidObserver.observe(block)
   }
 }
 
@@ -2322,6 +2344,8 @@ onBeforeUnmount(() => {
     clearTimeout(mermaidTimer)
     mermaidTimer = null
   }
+  mermaidObserver?.disconnect()
+  mermaidObserver = null
   if (collabSyncTimer) {
     clearTimeout(collabSyncTimer)
     collabSyncTimer = null
@@ -2825,6 +2849,31 @@ onBeforeUnmount(() => {
   border-radius: 10px;
   margin-top: 16px;
   text-align: center;
+}
+
+/* 超大表格折叠: 默认只显示表头 + 前 20 行正文, 由装饰加类 */
+.editor-content :deep(.ProseMirror table.table-folded-head tr:nth-child(n+22)) {
+  display: none;
+}
+
+.editor-content :deep(.ProseMirror table.table-folded:not(.table-folded-head) tr:nth-child(n+21)) {
+  display: none;
+}
+
+.editor-content :deep(.ProseMirror .table-fold-toggle) {
+  display: block;
+  margin: 4px 0 12px;
+  padding: 2px 10px;
+  font-size: 12px;
+  color: #2563eb;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.editor-content :deep(.ProseMirror .table-fold-toggle:hover) {
+  background: #dbeafe;
 }
 
 .editor-content :deep(.ProseMirror .language-mermaid) {

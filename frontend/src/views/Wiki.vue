@@ -294,7 +294,8 @@ import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick, reactive, s
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import http from '../api/http'
-import { signImageElement, signRenderedImages } from '../utils/imageSign'
+import { signImageElement } from '../utils/imageSign'
+import { createLazyObserver, observeLazyImages, type LazyObserver } from '../utils/lazyRender'
 import {
   extractHeadingSection, markdownHeadingAnchors, markdownSnippet, splitWikiTarget,
 } from '../utils/wikiAnchors'
@@ -304,6 +305,9 @@ import MarkdownIt from 'markdown-it'
 import taskLists from 'markdown-it-task-lists'
 import DOMPurify from 'dompurify'
 import hljs from 'highlight.js'
+import mermaid from 'mermaid'
+
+mermaid.initialize({ startOnLoad: false, theme: 'default' })
 
 const md = new MarkdownIt({
   html: true,
@@ -747,11 +751,68 @@ const handleImgError = (e: Event) => {
   if (!signImageElement(el)) el.style.display = 'none'
 }
 
-// 正文渲染完成后把图片换成带签名的地址。
-watch(current, () => {
-  nextTick(() => {
-    if (bodyRef.value) signRenderedImages(bodyRef.value)
+// ---- 正文图片/图表惰性渲染: 进入视口(含预加载边距)才请求签名地址 / 渲染 mermaid ----
+let bodyImgObserver: LazyObserver | null = null
+let mermaidObserver: LazyObserver | null = null
+const mermaidCache = new Map<string, string>()
+
+/** 正文渲染完成后: 图片补 loading="lazy" 并延迟签名; mermaid 代码块延迟渲染为图。 */
+const setupLazyBody = () => {
+  const root = bodyRef.value
+  if (!root) return
+  bodyImgObserver?.disconnect()
+  bodyImgObserver = createLazyObserver((el) => {
+    signImageElement(el as HTMLImageElement)
+  }, '280px 0px')
+  observeLazyImages(root, bodyImgObserver)
+  setupLazyMermaid(root)
+}
+
+const renderMermaidBlock = async (block: Element) => {
+  const codeEl = block.querySelector('code')
+  const codeText = codeEl?.textContent || ''
+  if (!codeText.trim()) return
+  try {
+    let svg = mermaidCache.get(codeText)
+    if (!svg) {
+      const id = `mermaid-${Math.random().toString(36).slice(2, 11)}`
+      const rendered = await mermaid.render(id, codeText)
+      svg = rendered.svg
+      mermaidCache.set(codeText, svg)
+    }
+    let target = block.nextElementSibling as HTMLElement | null
+    if (!target || !target.classList.contains('mermaid-diagram')) {
+      target = document.createElement('div')
+      target.className = 'mermaid-diagram'
+      block.parentElement?.insertBefore(target, block.nextSibling)
+    }
+    target.innerHTML = svg
+  } catch (e) {
+    // 语法错误等: 保留原代码块展示, 不破坏阅读
+    console.error('Mermaid error:', e)
+  }
+}
+
+const setupLazyMermaid = (root: HTMLElement) => {
+  const blocks = root.querySelectorAll('pre > code.language-mermaid')
+  if (!blocks.length) return
+  mermaidObserver?.disconnect()
+  mermaidObserver = createLazyObserver((el) => {
+    void renderMermaidBlock(el)
+  }, '300px 0px')
+  blocks.forEach((code) => {
+    const pre = code.parentElement
+    if (!pre) return
+    const codeText = code.textContent || ''
+    const rendered = pre.nextElementSibling as HTMLElement | null
+    if (rendered?.classList.contains('mermaid-diagram') && rendered.innerHTML === mermaidCache.get(codeText)) return
+    mermaidObserver!.observe(pre)
   })
+}
+
+// 正文渲染完成后替换图片为签名地址 / 惰性渲染图表。
+watch(current, () => {
+  nextTick(() => { setupLazyBody() })
 })
 
 const pollStatus = async () => {
@@ -803,6 +864,10 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   stopPolling()
+  bodyImgObserver?.disconnect()
+  bodyImgObserver = null
+  mermaidObserver?.disconnect()
+  mermaidObserver = null
 })
 </script>
 
@@ -994,6 +1059,15 @@ onBeforeUnmount(() => {
 .wiki-body :deep(pre code) {
   background: none;
   padding: 0;
+}
+.wiki-body :deep(.mermaid-diagram) {
+  margin: 10px 0 16px;
+  padding: 16px;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  text-align: center;
+  overflow-x: auto;
 }
 .wiki-body :deep(table) {
   border-collapse: collapse;
