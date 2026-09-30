@@ -3170,25 +3170,29 @@ onBeforeUnmount(() => {
   pointer-events: auto;
   display: flex;
   align-items: center;
-  gap: 5px;
-  margin-top: 4px;
-  padding: 5px 8px;
-  background: #fff;
-  border: 1px solid #e6e8f0;
-  border-radius: 10px;
-  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.14);
+  gap: 6px;
+  margin-top: 6px;
+  padding: 6px 10px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
 }
 
 .find-input {
-  width: 120px;
+  width: 132px;
   height: 28px;
-  padding: 4px 9px;
-  border: 1px solid #e5e7eb;
-  border-radius: 7px;
+  padding: 4px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
   font-size: 13px;
-  color: #374151;
+  color: var(--text);
   outline: none;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
 }
+
+.find-input::placeholder { color: var(--text-3); }
 
 .find-input:focus {
   border-color: var(--primary);
@@ -3196,36 +3200,46 @@ onBeforeUnmount(() => {
 }
 
 .find-count {
-  min-width: 62px;
+  min-width: 64px;
   text-align: center;
   font-size: 12px;
-  color: #6b7280;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
 }
 
 .find-btn {
   height: 28px;
-  padding: 0 9px;
-  border: 1px solid #e5e7eb;
-  background: #fff;
-  border-radius: 7px;
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  border-radius: var(--radius);
   font-size: 12px;
-  color: #374151;
+  color: var(--text-2);
   cursor: pointer;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  transition: background 0.12s ease, color 0.12s ease;
 }
 
-.find-btn:hover:not(:disabled) { background: #f3f4f6; }
-.find-btn:disabled { opacity: 0.4; cursor: default; }
+.find-btn:hover:not(:disabled) { background: var(--surface-hover); color: var(--text); }
+.find-btn:disabled { opacity: 0.45; cursor: default; }
 
 .editor-content :deep(.find-hit) {
-  background: rgba(250, 204, 21, 0.45);
+  background: rgba(250, 204, 21, 0.5);
   border-radius: 2px;
 }
 
+html.dark .editor-content :deep(.find-hit) {
+  background: rgba(250, 204, 21, 0.32);
+}
+
 .editor-content :deep(.find-hit-current) {
-  background: rgba(249, 115, 22, 0.6);
+  background: rgba(249, 115, 22, 0.65);
+}
+
+html.dark .editor-content :deep(.find-hit-current) {
+  background: rgba(249, 115, 22, 0.55);
 }
 
 /* AI 编辑预览 */
@@ -3240,17 +3254,17 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   min-width: 0;
-  border: 1px solid #e6e8f0;
-  border-radius: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
   overflow: hidden;
 }
 
 .ai-col-title {
   padding: 6px 12px;
   font-size: 12px;
-  color: #6b7280;
-  background: #f8fafc;
-  border-bottom: 1px solid #e6e8f0;
+  color: var(--text-3);
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
 }
 
 .ai-col-body {
@@ -3258,15 +3272,15 @@ onBeforeUnmount(() => {
   padding: 10px 12px;
   font-size: 13px;
   line-height: 1.7;
-  color: #1f2937;
+  color: var(--text);
   white-space: pre-wrap;
   word-break: break-word;
   overflow-y: auto;
   max-height: 46vh;
 }
 
-.ai-error { color: #dc2626; }
-.ai-muted { color: #9ca3af; }
+.ai-error { color: var(--danger); }
+.ai-muted { color: var(--text-3); }
 
 /* 触控: 工具条/表格条/查找条点击目标 ≥40px(触摸媒体查询) */
 @media (pointer: coarse) {
