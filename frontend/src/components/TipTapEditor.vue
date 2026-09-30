@@ -376,6 +376,7 @@ import { useEditor, EditorContent, VueNodeViewRenderer, BubbleMenu } from '@tipt
 import { Extension } from '@tiptap/core'
 import Suggestion from '@tiptap/suggestion'
 import StarterKit from '@tiptap/starter-kit'
+import Text from '@tiptap/extension-text'
 import Placeholder from '@tiptap/extension-placeholder'
 import Image from '@tiptap/extension-image'
 import Table from '@tiptap/extension-table'
@@ -436,6 +437,8 @@ import http from '../api/http'
 import { findMatchesInDoc, type FindMatch } from '../utils/findReplace'
 import { sanitizePastedHTML } from '../utils/sanitizePaste'
 import { nextFootnoteLabel } from '../utils/markdownFootnotes'
+import { serializeTextMarkdown } from '../utils/markdownText'
+import { serializeTableMarkdown } from '../utils/markdownTable'
 import type { CollabPeer } from '../utils/collab'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plugin, PluginKey, TextSelection } from 'prosemirror-state'
@@ -1440,7 +1443,13 @@ async function aiSummarize(e: Editor, range: { from: number; to: number }) {
 
 const editor = useEditor({
   extensions: [
-    StarterKit.configure({ codeBlock: false, history: props.collab ? false : undefined }),
+    StarterKit.configure({ codeBlock: false, text: false, history: props.collab ? false : undefined }),
+    // 自定义文本序列化: 保留 [[wiki 链接]] 字面量、行内代码内容原样输出
+    Text.extend({
+      addStorage() {
+        return { markdown: { serialize: serializeTextMarkdown } }
+      },
+    }),
     CodeBlockLowlight
       .extend({ addNodeView() { return VueNodeViewRenderer(CodeBlockComponent) } })
       .configure({ lowlight, defaultLanguage: 'plaintext' }),
@@ -1514,7 +1523,12 @@ const editor = useEditor({
         ]
       },
     }).configure({ inline: true, allowBase64: true }),
-    Table.configure({ resizable: true }),
+    // 自定义表格序列化: 单元格转义 `|`、硬换行转 <br>、多段落/跨行列回退 HTML
+    Table.extend({
+      addStorage() {
+        return { markdown: { serialize: serializeTableMarkdown } }
+      },
+    }).configure({ resizable: true }),
     TableFold,
     TableRow,
     TableCell,

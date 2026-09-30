@@ -107,7 +107,9 @@ export function installMarkdownFootnotes(md: any): void {
   if (!md || md.__ragFootnotesInstalled) return
   md.__ragFootnotesInstalled = true
   md.inline.ruler.before('link', 'footnote_ref', footnoteRefRule)
-  md.block.ruler.before('reference', 'footnote_def', footnoteDefRule)
+  // alt: ['paragraph'] 允许定义行紧跟段落/引用行(无空行)时终止段落,
+  // 否则 `相邻[^a]\n[^a]: 紧随其后` 会被并成一段, 定义丢失且多出一个引用。
+  md.block.ruler.before('reference', 'footnote_def', footnoteDefRule, { alt: ['paragraph'] })
   md.renderer.rules.footnote_ref = (tokens: any[], idx: number) =>
     renderFootnoteRefHtml(String(tokens[idx].meta?.label ?? ''))
   md.renderer.rules.footnote_block_open = () => '<div data-footnotes>\n'
