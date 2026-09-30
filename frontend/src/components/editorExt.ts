@@ -1,7 +1,15 @@
 import { Node, mergeAttributes } from '@tiptap/core'
 
+import { formatBytes } from '../utils/attachment'
+
 export const CALLOUT_TYPES = ['info', 'tip', 'success', 'warn', 'danger'] as const
 export type CalloutType = typeof CALLOUT_TYPES[number]
+
+const escapeHtmlAttr = (text: string): string =>
+  text.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+
+const escapeHtmlText = (text: string): string =>
+  text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
 /**
  * 提示框(callout)块。序列化走 tiptap-markdown 的 HTML 回退
@@ -73,5 +81,96 @@ export const Toggle = Node.create({
       ['summary', {}, node.attrs.title || '折叠块'],
       ['div', { class: 'toggle-content' }, 0],
     ]
+  },
+})
+
+/**
+ * 非图片附件卡片(块级原子节点)。序列化为 HTML 兜底
+ * `<div data-attachment data-url data-name data-size data-mime><a>…</a></div>`,
+ * 在编辑器(html:true)与 Wiki(html:true + DOMPurify)中均可解析/渲染;
+ * 编辑器内由 AttachmentNodeView 渲染成卡片。
+ */
+export const Attachment = Node.create({
+  name: 'attachment',
+  group: 'block',
+  atom: true,
+  draggable: true,
+  selectable: true,
+
+  addAttributes() {
+    return {
+      url: {
+        default: '',
+        parseHTML: (el: HTMLElement) => el.getAttribute('data-url') || '',
+        renderHTML: (attrs: Record<string, any>) => (attrs.url ? { 'data-url': attrs.url } : {}),
+      },
+      name: {
+        default: '',
+        parseHTML: (el: HTMLElement) => el.getAttribute('data-name') || '',
+        renderHTML: (attrs: Record<string, any>) => ({ 'data-name': attrs.name || '' }),
+      },
+      size: {
+        default: 0,
+        parseHTML: (el: HTMLElement) => parseInt(el.getAttribute('data-size') || '0', 10) || 0,
+        renderHTML: (attrs: Record<string, any>) => ({ 'data-size': String(attrs.size || 0) }),
+      },
+      mime: {
+        default: '',
+        parseHTML: (el: HTMLElement) => el.getAttribute('data-mime') || '',
+        renderHTML: (attrs: Record<string, any>) => ({ 'data-mime': attrs.mime || '' }),
+      },
+      // 仅编辑器运行时使用的临时属性(上传中占位),不参与序列化
+      uploading: {
+        default: false,
+        parseHTML: () => false,
+        renderHTML: () => ({}),
+      },
+      uploadId: {
+        default: '',
+        parseHTML: () => '',
+        renderHTML: () => ({}),
+      },
+    }
+  },
+
+  parseHTML() {
+    return [{ tag: 'div[data-attachment]' }]
+  },
+
+  renderHTML({ node, HTMLAttributes }) {
+    const { url, name, size } = node.attrs
+    const label = escapeHtmlText(name || url || '附件')
+    const sizeText = size ? ` · ${formatBytes(Number(size))}` : ''
+    return [
+      'div',
+      mergeAttributes(HTMLAttributes, { 'data-attachment': '' }),
+      ['a', { href: url }, `📎 ${label}`],
+      sizeText,
+    ]
+  },
+
+  addStorage() {
+    return {
+      markdown: {
+        // HTML 兜底:Markdown 里保留完整 data-* 属性,重开页面时 parseHTML 还原成卡片;
+        // 纯文本查看/导出时退化为可读链接。
+        serialize(state: any, node: any) {
+          const url = String(node.attrs.url || '')
+          const name = String(node.attrs.name || '')
+          const size = Number(node.attrs.size) || 0
+          const mime = String(node.attrs.mime || '')
+          const attrText = [
+            'data-attachment=""',
+            `data-url="${escapeHtmlAttr(url)}"`,
+            `data-name="${escapeHtmlAttr(name)}"`,
+            `data-size="${size}"`,
+            `data-mime="${escapeHtmlAttr(mime)}"`,
+          ].join(' ')
+          const sizeText = size ? ` · ${formatBytes(size)}` : ''
+          state.write(`<div ${attrText}><a href="${escapeHtmlAttr(url)}">📎 ${escapeHtmlText(name || url || '附件')}</a>${sizeText}</div>`)
+          state.closeBlock(node)
+        },
+      },
+    }
   },
 })

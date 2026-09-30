@@ -36,6 +36,7 @@
       <span class="divider"></span>
 
       <button class="tb-btn" @click="handleImageUpload" title="插入图片"><ImageIcon :size="16" /></button>
+      <button class="tb-btn" @click="handleAttachmentUpload" title="插入附件"><Paperclip :size="16" /></button>
       <button class="tb-btn" @click="editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()" title="插入表格"><TableIcon :size="16" /></button>
       <button class="tb-btn" @click="insertMermaid" title="插入图表"><Workflow :size="16" /></button>
 
@@ -354,7 +355,8 @@ import markdown from 'highlight.js/lib/languages/markdown'
 import CodeBlockComponent from './CodeBlockComponent.vue'
 import ImageNodeView from './ImageNodeView.vue'
 import ToggleNodeView from './ToggleNodeView.vue'
-import { Callout, Toggle } from './editorExt'
+import AttachmentNodeView from './AttachmentNodeView.vue'
+import { Attachment, Callout, Toggle } from './editorExt'
 import { Markdown } from 'tiptap-markdown'
 import * as Y from 'yjs'
 import { WebsocketProvider } from 'y-websocket'
@@ -373,7 +375,7 @@ import {
   List, ListOrdered, ListChecks, Quote, SquareCode, AlignLeft, AlignCenter, AlignRight,
   Image as ImageIcon, Table as TableIcon, Workflow, Undo2, Redo2, Plus, Trash2, Copy,
   ArrowUp, ArrowDown, Pilcrow, GripVertical, Heading1, Heading2, Heading3, Eraser,
-  Settings2, Keyboard, FileText, BetweenHorizontalEnd, Search, ChevronUp, ChevronDown, X, Sparkles,
+  Settings2, Keyboard, FileText, BetweenHorizontalEnd, Search, ChevronUp, ChevronDown, X, Sparkles, Paperclip,
 } from 'lucide-vue-next'
 
 const uploadAndInsert = (view: any, file: File) => {
@@ -387,6 +389,99 @@ const uploadAndInsert = (view: any, file: File) => {
     ElMessage.error('图片上传失败')
   })
 }
+
+// ---------------- 非图片附件上传 ----------------
+const ATTACHMENT_UPLOAD_TIMEOUT = 300000
+
+function findAttachmentPos(uploadId: string): number {
+  const e = editor.value
+  if (!e) return -1
+  let pos = -1
+  e.state.doc.descendants((node, p) => {
+    if (pos === -1 && node.type.name === 'attachment' && node.attrs.uploadId === uploadId) {
+      pos = p
+      return false
+    }
+    return true
+  })
+  return pos
+}
+
+function updateAttachmentByUploadId(uploadId: string, attrs: Record<string, unknown>) {
+  const e = editor.value
+  const pos = findAttachmentPos(uploadId)
+  if (!e || pos < 0) return
+  const node = e.state.doc.nodeAt(pos)
+  if (!node) return
+  e.view.dispatch(e.state.tr.setNodeMarkup(pos, undefined, { ...node.attrs, ...attrs }))
+}
+
+function removeAttachmentByUploadId(uploadId: string) {
+  const e = editor.value
+  const pos = findAttachmentPos(uploadId)
+  if (!e || pos < 0) return
+  const node = e.state.doc.nodeAt(pos)
+  if (!node) return
+  e.view.dispatch(e.state.tr.delete(pos, pos + node.nodeSize))
+}
+
+async function insertAttachmentFile(file: File) {
+  const e = editor.value
+  if (!e) return
+  const uploadId = Math.random().toString(36).slice(2, 12)
+  e.chain().focus().insertContent({
+    type: 'attachment',
+    attrs: { url: '', name: file.name, size: file.size, mime: file.type || '', uploading: true, uploadId },
+  }).run()
+  const formData = new FormData()
+  formData.append('file', file)
+  try {
+    const res = await http.post('/api/upload/attachment', formData, { timeout: ATTACHMENT_UPLOAD_TIMEOUT })
+    const data = res.data || {}
+    updateAttachmentByUploadId(uploadId, {
+      url: data.url || '',
+      name: data.name || file.name,
+      size: Number(data.size) || file.size,
+      mime: data.mime || file.type || '',
+      uploading: false,
+    })
+    ElMessage.success('附件已上传')
+  } catch (err: any) {
+    removeAttachmentByUploadId(uploadId)
+    const detail = err?.response?.data?.detail
+    ElMessage.error('附件上传失败' + (typeof detail === 'string' && detail ? `：${detail}` : ''))
+  }
+}
+
+// 粘贴/拖拽非图片文件 → 附件卡片;图片交给 imagePasteDrop 既有流程
+const attachmentPasteDrop = new Plugin({
+  key: new PluginKey('attachmentPasteDrop'),
+  props: {
+    handlePaste(_view, event) {
+      const items = event.clipboardData?.items
+      if (!items) return false
+      const files: File[] = []
+      for (const item of items) {
+        if (item.kind !== 'file') continue
+        const f = item.getAsFile()
+        if (f && !f.type.startsWith('image/')) files.push(f)
+      }
+      if (!files.length) return false
+      event.preventDefault()
+      files.forEach(f => void insertAttachmentFile(f))
+      return true
+    },
+    handleDrop(_view, event) {
+      const files = event.dataTransfer?.files
+      if (!files?.length) return false
+      const others = Array.from(files).filter(f => !f.type.startsWith('image/'))
+      if (!others.length) return false
+      event.preventDefault()
+      others.forEach(f => void insertAttachmentFile(f))
+      return true
+    },
+  },
+})
 
 const lowlight = createLowlight()
 lowlight.register('javascript', javascript)
@@ -465,6 +560,7 @@ const SLASH_ITEMS: SlashItem[] = [
   { title: '危险框', desc: '严重风险提示块', icon: '⛔', keywords: ['danger', 'error', '危险', '错误', '框'], action: (e, r) => { e.chain().focus().deleteRange(r).insertContent({ type: 'callout', attrs: { type: 'danger' }, content: [{ type: 'paragraph' }] }).run() } },
   { title: '折叠块', desc: '可展开/收起的内容', icon: '▸', keywords: ['toggle', 'collapse', '折叠', '收起', '展开'], action: (e, r) => { e.chain().focus().deleteRange(r).insertContent({ type: 'toggle', attrs: { open: true, title: '折叠块' }, content: [{ type: 'paragraph' }] }).run() } },
   { title: '图片', desc: '上传或插入图片', icon: '▧', keywords: ['image', 'img', '图片', '照片'], action: (e, r) => { e.chain().focus().deleteRange(r).run(); handleImageUpload() } },
+  { title: '附件', desc: '上传文件附件卡片', icon: '📎', keywords: ['attachment', 'file', '附件', '文件'], action: (e, r) => { e.chain().focus().deleteRange(r).run(); handleAttachmentUpload() } },
   { title: '图表', desc: 'Mermaid 流程图/时序图', icon: '◈', keywords: ['mermaid', 'chart', 'diagram', '图表', '流程图'], action: (e, r) => { e.chain().focus().deleteRange(r).run(); insertMermaid() } },
   { title: 'AI 续写', desc: '根据光标前文继续写作', icon: '✨', keywords: ['ai', 'continue', '续写', '生成', '写作'], action: (e, r) => { void aiContinue(e, r) } },
   { title: 'AI 总结本页', desc: '生成整页摘要并插入提示框', icon: '🤖', keywords: ['ai', 'summary', '总结', '摘要'], action: (e, r) => { void aiSummarize(e, r) } },
@@ -1043,10 +1139,12 @@ const editor = useEditor({
     CharacterCount,
     Callout,
     Toggle.extend({ addNodeView() { return VueNodeViewRenderer(ToggleNodeView) } }),
+    Attachment.extend({ addNodeView() { return VueNodeViewRenderer(AttachmentNodeView) } }),
     ...collabExtensions,
     SlashCommand,
     PageMention,
     UserMention,
+    attachmentPasteDrop,
     findPlugin,
     Markdown.configure({ html: true, breaks: true, linkify: true }),
   ],
@@ -1547,6 +1645,18 @@ function handleImageUpload() {
     } catch {
       ElMessage.error('图片上传失败')
     }
+  }
+  input.click()
+}
+
+function handleAttachmentUpload() {
+  const input = document.createElement('input')
+  input.type = 'file'
+  input.multiple = true
+  input.onchange = (e: Event) => {
+    const files = (e.target as HTMLInputElement).files
+    if (!files?.length) return
+    Array.from(files).forEach(file => void insertAttachmentFile(file))
   }
   input.click()
 }
