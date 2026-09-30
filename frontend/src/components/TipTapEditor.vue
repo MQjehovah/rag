@@ -62,6 +62,21 @@
       <button class="tb-btn" @click="editor.chain().focus().undo().run()" :disabled="!editor.can().undo()" title="撤销 (Ctrl+Z)"><Undo2 :size="16" /></button>
       <button class="tb-btn" @click="editor.chain().focus().redo().run()" :disabled="!editor.can().redo()" title="重做 (Ctrl+Shift+Z)"><Redo2 :size="16" /></button>
 
+      <span class="divider"></span>
+
+      <el-dropdown trigger="click" popper-class="editor-ai-dropdown" :disabled="aiDialog.loading" @command="runWholeDocAi">
+        <button class="tb-btn" title="AI 整篇处理"><WandSparkles :size="16" /></button>
+        <template #dropdown>
+          <el-dropdown-menu>
+            <el-dropdown-item command="polish">全文润色</el-dropdown-item>
+            <el-dropdown-item command="fix">全文纠错</el-dropdown-item>
+            <el-dropdown-item command="summarize">生成摘要</el-dropdown-item>
+            <el-dropdown-item command="outline">生成大纲</el-dropdown-item>
+            <el-dropdown-item command="restructure">结构重排</el-dropdown-item>
+          </el-dropdown-menu>
+        </template>
+      </el-dropdown>
+
       <span class="tb-spacer"></span>
 
       <el-dropdown trigger="click" @command="applyPref">
@@ -348,16 +363,16 @@
       </div>
     </el-dialog>
 
-    <!-- AI 编辑预览 -->
-    <el-dialog v-model="aiDialog.open" :title="aiDialogTitle" width="760px" append-to-body>
-      <div v-loading="aiDialog.loading" class="ai-preview">
-        <div class="ai-col">
+    <!-- AI 编辑预览(选区: 左原文右结果; 整篇: 单栏整宽) -->
+    <el-dialog v-model="aiDialog.open" :title="aiDialogTitle" :width="aiDialog.mode === 'whole' ? '860px' : '760px'" append-to-body @close="onAiDialogClose">
+      <div v-loading="aiDialog.loading && !aiDialog.result" class="ai-preview" :class="{ 'ai-preview-single': aiDialog.mode === 'whole' }">
+        <div v-if="aiDialog.mode !== 'whole'" class="ai-col">
           <div class="ai-col-title">原文</div>
           <div class="ai-col-body">{{ aiDialog.original || '（无）' }}</div>
         </div>
         <div class="ai-col">
-          <div class="ai-col-title">AI 结果</div>
-          <div class="ai-col-body">
+          <div class="ai-col-title">{{ aiDialog.mode === 'whole' ? 'AI 结果（整篇）' : 'AI 结果' }}</div>
+          <div ref="aiResultEl" class="ai-col-body">
             <template v-if="aiDialog.error"><span class="ai-error">{{ aiDialog.error }}</span></template>
             <template v-else-if="aiDialog.result">{{ aiDialog.result }}</template>
             <template v-else-if="aiDialog.loading"><span class="ai-muted">生成中…</span></template>
@@ -366,9 +381,18 @@
         </div>
       </div>
       <template #footer>
-        <el-button @click="aiDialog.open = false">放弃</el-button>
-        <el-button :disabled="!aiDialog.result" @click="applyAiResult('replace')">替换</el-button>
-        <el-button type="primary" :disabled="!aiDialog.result" @click="applyAiResult('below')">插入到下方</el-button>
+        <el-button v-if="aiDialog.loading" @click="cancelAi">取消</el-button>
+        <template v-else>
+          <el-button @click="aiDialog.open = false">放弃</el-button>
+          <template v-if="aiDialog.mode === 'selection'">
+            <el-button :disabled="!aiDialog.result" @click="applyAiResult('replace')">替换</el-button>
+            <el-button type="primary" :disabled="!aiDialog.result" @click="applyAiResult('below')">插入到下方</el-button>
+          </template>
+          <template v-else>
+            <el-button :disabled="!aiDialog.result" @click="insertWholeAtCursor">插入到光标</el-button>
+            <el-button type="primary" :disabled="!aiDialog.result" @click="replaceWholeDoc">替换全文</el-button>
+          </template>
+        </template>
       </template>
     </el-dialog>
   </div>
@@ -457,7 +481,7 @@ import {
   Image as ImageIcon, Table as TableIcon, Workflow, Undo2, Redo2, Plus, Trash2, Copy,
   ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Pilcrow, GripVertical, Heading1, Heading2, Heading3, Eraser,
   Settings2, Keyboard, FileText, BetweenHorizontalEnd, Search, ChevronUp, ChevronDown, X, Sparkles, Paperclip,
-  Combine, Split, IndentIncrease, IndentDecrease,
+  Combine, Split, IndentIncrease, IndentDecrease, WandSparkles,
 } from 'lucide-vue-next'
 
 const uploadAndInsert = (view: any, file: File) => {
@@ -1618,6 +1642,7 @@ function replaceAll() {
 }
 
 // ---------------- AI 编辑 ----------------
+const API_BASE = (import.meta.env.BASE_URL || '/').replace(/\/$/, '')
 const AI_MD = new MarkdownIt({ html: false, breaks: true, linkify: true })
 
 const AI_LABELS: Record<string, string> = {
@@ -1628,11 +1653,23 @@ const AI_LABELS: Record<string, string> = {
   translate: '翻译（英文）',
   to_table: '转为表格',
   continue: '续写',
+  outline: '大纲',
+  restructure: '结构重排',
+}
+
+/** 整篇操作菜单: action → 文案 */
+const WHOLE_AI_LABELS: Record<string, string> = {
+  polish: '全文润色',
+  fix: '全文纠错',
+  summarize: '生成摘要',
+  outline: '生成大纲',
+  restructure: '结构重排',
 }
 
 const aiDialog = reactive({
   open: false,
   loading: false,
+  mode: 'selection' as 'selection' | 'whole',
   action: '',
   original: '',
   result: '',
@@ -1641,7 +1678,15 @@ const aiDialog = reactive({
   to: 0,
 })
 
-const aiDialogTitle = computed(() => `AI ${AI_LABELS[aiDialog.action] || '编辑'}`)
+const aiDialogTitle = computed(() => {
+  const label = aiDialog.mode === 'whole'
+    ? (WHOLE_AI_LABELS[aiDialog.action] || '整篇处理')
+    : (AI_LABELS[aiDialog.action] || '编辑')
+  return `AI ${label}${aiDialog.mode === 'whole' ? '（整篇）' : ''}`
+})
+
+const aiResultEl = ref<HTMLElement | null>(null)
+let aiAbort: AbortController | null = null
 
 let lastAiSelection: { from: number; to: number } | null = null
 
@@ -1657,6 +1702,120 @@ function showAiLoading(text: string) {
 async function requestAi(payload: Record<string, unknown>) {
   const res = await http.post('/api/editor/ai', payload, { timeout: 120000 })
   return String(res.data?.result ?? '').trim()
+}
+
+function aiErrorDetail(err: any): string {
+  return err?.response?.data?.detail || err?.message || '请求失败'
+}
+
+function isAbortError(err: any): boolean {
+  return err?.name === 'AbortError'
+}
+
+/** SSE 流式请求: 逐 delta 回调, 返回完整文本; 失败抛错由调用方回退非流式。 */
+async function streamAiRequest(payload: Record<string, unknown>, onDelta: (delta: string) => void): Promise<string> {
+  aiAbort?.abort()
+  const ctrl = new AbortController()
+  aiAbort = ctrl
+  const token = localStorage.getItem('rag_token')
+  try {
+    const resp = await fetch(`${API_BASE}/api/editor/ai/stream`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify(payload),
+      signal: ctrl.signal,
+    })
+    if (!resp.ok) {
+      let detail = `HTTP ${resp.status}`
+      try {
+        const errBody = await resp.json()
+        if (errBody?.detail) detail = String(errBody.detail)
+      } catch { /* ignore */ }
+      throw new Error(detail)
+    }
+    if (!resp.body) throw new Error('浏览器不支持流式读取')
+    const reader = resp.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    let full = ''
+    let streamError = ''
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() || ''
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue
+        const dataStr = line.slice(6).trim()
+        if (!dataStr || dataStr === '[DONE]') continue
+        let data: any
+        try { data = JSON.parse(dataStr) } catch { continue }
+        if (data.type === 'delta' && data.content) {
+          full += String(data.content)
+          onDelta(String(data.content))
+        } else if (data.type === 'error') {
+          streamError = String(data.content || '流式请求失败')
+        }
+      }
+    }
+    if (streamError) throw new Error(streamError)
+    return full
+  } finally {
+    if (aiAbort === ctrl) aiAbort = null
+  }
+}
+
+/** 流式执行, 失败或未产出内容时回退非流式 /api/editor/ai。 */
+async function runAiStream(payload: Record<string, unknown>) {
+  aiDialog.loading = true
+  aiDialog.result = ''
+  aiDialog.error = ''
+  let aborted = false
+  try {
+    const streamed = await streamAiRequest(payload, (delta) => { aiDialog.result += delta })
+    if (!streamed.trim()) {
+      aiDialog.result = await requestAi(payload)
+    }
+  } catch (err: any) {
+    if (isAbortError(err)) {
+      aborted = true
+      return
+    }
+    aiDialog.result = ''
+    try {
+      aiDialog.result = await requestAi(payload)
+    } catch (fallbackErr: any) {
+      aiDialog.error = aiErrorDetail(fallbackErr)
+    }
+  } finally {
+    aiDialog.loading = false
+    if (!aborted && !aiDialog.result && !aiDialog.error) aiDialog.error = 'AI 未返回内容'
+  }
+}
+
+// 流式增量渲染时结果栏跟随滚动
+watch(() => aiDialog.result, async () => {
+  await nextTick()
+  const el = aiResultEl.value
+  if (el) el.scrollTop = el.scrollHeight
+})
+
+/** 取消正在进行的流式请求并关闭弹窗。 */
+function cancelAi() {
+  aiAbort?.abort()
+  aiAbort = null
+  aiDialog.loading = false
+  aiDialog.open = false
+}
+
+/** 弹窗被关闭(含右上角 X)时中断在途请求。 */
+function onAiDialogClose() {
+  aiAbort?.abort()
+  aiAbort = null
 }
 
 async function runAiAction(action: string) {
@@ -1686,25 +1845,36 @@ async function runAiAction(action: string) {
   const context = (before + after).trim()
 
   aiDialog.open = true
-  aiDialog.loading = true
+  aiDialog.mode = 'selection'
   aiDialog.action = action
   aiDialog.original = text
-  aiDialog.result = ''
-  aiDialog.error = ''
   aiDialog.from = from
   aiDialog.to = to
-  try {
-    const payload: Record<string, unknown> = { action, text }
-    if (context) payload.context = context.slice(0, 2000)
-    if (action === 'translate') payload.target_lang = 'en'
-    aiDialog.result = await requestAi(payload)
-    if (!aiDialog.result) aiDialog.error = 'AI 未返回内容'
-  } catch (err: any) {
-    aiDialog.error = err?.response?.data?.detail || err?.message || '请求失败'
-    ElMessage.error('AI 处理失败：' + aiDialog.error)
-  } finally {
-    aiDialog.loading = false
+  const payload: Record<string, unknown> = { action, text }
+  if (context) payload.context = context.slice(0, 2000)
+  if (action === 'translate') payload.target_lang = 'en'
+  await runAiStream(payload)
+  if (aiDialog.error) ElMessage.error('AI 处理失败：' + aiDialog.error)
+}
+
+/** 整篇操作: 取整页纯文本(≤8000 截断)后走流式预览。 */
+async function runWholeDocAi(action: string) {
+  const e = editor.value
+  if (!e) return
+  const plain = e.state.doc.textBetween(0, e.state.doc.content.size, '\n', ' ').trim()
+  if (!plain) {
+    ElMessage.warning('整篇内容为空，无法处理')
+    return
   }
+  const text = plain.slice(0, 8000)
+  aiDialog.open = true
+  aiDialog.mode = 'whole'
+  aiDialog.action = action
+  aiDialog.original = text
+  aiDialog.from = 0
+  aiDialog.to = e.state.doc.content.size
+  await runAiStream({ action, text })
+  if (aiDialog.error) ElMessage.error('AI 处理失败：' + aiDialog.error)
 }
 
 function applyAiResult(mode: 'replace' | 'below') {
@@ -1718,6 +1888,37 @@ function applyAiResult(mode: 'replace' | 'below') {
   }
   aiDialog.open = false
   ElMessage.success(mode === 'replace' ? '已替换' : '已插入')
+}
+
+/** 整篇结果替换全文: 确认后单事务 setContent, 一次 Undo 可回退。 */
+async function replaceWholeDoc() {
+  const e = editor.value
+  if (!e || !aiDialog.result) return
+  try {
+    await ElMessageBox.confirm('将用 AI 结果替换整篇内容，替换后可按 Ctrl+Z 一次撤销。', '替换全文', {
+      confirmButtonText: '替换',
+      cancelButtonText: '取消',
+      type: 'warning',
+    })
+  } catch {
+    return
+  }
+  if (props.collab && !collabSynced) {
+    applyExternalContent(aiDialog.result)
+  } else {
+    e.chain().focus().setContent(aiDialog.result, true).run()
+  }
+  aiDialog.open = false
+  ElMessage.success('已替换全文（Ctrl+Z 可撤销）')
+}
+
+/** 整篇结果插入到当前光标处(摘要/大纲等)。 */
+function insertWholeAtCursor() {
+  const e = editor.value
+  if (!e || !aiDialog.result) return
+  e.chain().focus().insertContent(renderAiMarkdown(aiDialog.result)).run()
+  aiDialog.open = false
+  ElMessage.success('已插入到光标处')
 }
 
 async function aiContinue(e: Editor, range: { from: number; to: number }) {
@@ -3482,6 +3683,11 @@ html.dark .editor-content :deep(.find-hit-current) {
   grid-template-columns: 1fr 1fr;
   gap: 12px;
   min-height: 220px;
+}
+
+/* 整篇操作: 单栏整宽 */
+.ai-preview-single {
+  grid-template-columns: 1fr;
 }
 
 .ai-col {
