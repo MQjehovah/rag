@@ -31,15 +31,39 @@
           </div>
         </template>
 
-        <template v-if="templates.length">
+        <template v-if="myTemplates.length">
           <div class="side-section">
-            <span class="side-section-label">模板</span>
+            <span class="side-section-label">我的模板</span>
           </div>
           <div class="tpl-list">
-            <div v-for="t in templates" :key="t.id" class="page-item tpl" @click="newFromTemplate(t)">
+            <div v-for="t in myTemplates" :key="t.id" class="page-item tpl" @click="newFromTemplate(t)">
               <span class="tpl-icon">📄</span>
               <span class="page-title">{{ t.name }}</span>
+              <button
+                class="icon-btn"
+                :title="t.visibility === 'public' ? '取消共享（他人不可见）' : '共享给所有用户（只读）'"
+                @click.stop="toggleTemplateVisibility(t)"
+              >{{ t.visibility === 'public' ? '🌐' : '🔒' }}</button>
               <button class="icon-btn" title="删除模板" @click.stop="deleteTemplate(t.id)">✕</button>
+            </div>
+          </div>
+        </template>
+
+        <template v-if="sharedTemplates.length">
+          <div class="side-section">
+            <span class="side-section-label">共享模板</span>
+          </div>
+          <div class="tpl-list">
+            <div
+              v-for="t in sharedTemplates"
+              :key="t.id"
+              class="page-item tpl"
+              :title="`来自 ${t.owner || '他人'} 的共享模板（从模板新建）`"
+              @click="newFromTemplate(t)"
+            >
+              <span class="tpl-icon">🌐</span>
+              <span class="page-title">{{ t.name }}</span>
+              <span class="tpl-owner">{{ t.owner || '共享' }}</span>
             </div>
           </div>
         </template>
@@ -742,6 +766,22 @@
       </div>
     </el-dialog>
 
+    <!-- 从模板新建: 变量填充 -->
+    <el-dialog v-model="tplVarOpen" :title="`从模板新建：${tplVarTemplate?.name || ''}`" width="520px">
+      <p class="muted-hint" style="margin-bottom: 10px">
+        模板内容含 {{ TPL_VAR_EXAMPLE }} 占位符，填写后将生成新笔记；留空则保留原占位符。
+      </p>
+      <el-form label-width="140px" label-position="left">
+        <el-form-item v-for="v in tplVarList" :key="v" :label="v">
+          <el-input v-model="tplVarValues[v]" :placeholder="tplVarPlaceholder(v)" @keyup.enter="confirmTemplateVars" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="tplVarOpen = false">取消</el-button>
+        <el-button type="primary" @click="confirmTemplateVars">生成笔记</el-button>
+      </template>
+    </el-dialog>
+
     <!-- 笔记本 zip 导出进度 -->
     <div v-if="zipExport.running" class="zip-progress">
       <div class="zip-progress-box">
@@ -770,6 +810,7 @@ import DOMPurify from 'dompurify'
 import hljs from 'highlight.js'
 import { diffLines, diffStats } from '../utils/diff'
 import { loadDraft, saveDraft, clearDraft, shouldOfferDraft } from '../utils/draft'
+import { extractTemplateVariables, renderTemplateContent } from '../utils/templateVars'
 import {
   ARCHIVE_ERRORS_FILE, buildArchiveEntries, mapLimit, renderArchivePage, sanitizeFileSegment,
   type ArchiveTreePage,
@@ -2128,8 +2169,20 @@ const startCoverDrag = (ev: MouseEvent) => {
   document.addEventListener('mouseup', onUp)
 }
 
-// ---------------- 模板库 ----------------
-const templates = ref<{ id: string; name: string; content: string; updated_at?: string }[]>([])
+// ---------------- 模板库(我的 / 跨用户共享 + 变量占位) ----------------
+interface TemplateItem {
+  id: string
+  name: string
+  content: string
+  visibility?: string
+  owner?: string
+  owner_id?: string
+  is_mine?: boolean
+  updated_at?: string
+}
+const templates = ref<TemplateItem[]>([])
+const myTemplates = computed(() => templates.value.filter(t => t.is_mine !== false))
+const sharedTemplates = computed(() => templates.value.filter(t => t.is_mine === false))
 
 const loadTemplates = async () => {
   try {
@@ -2138,6 +2191,11 @@ const loadTemplates = async () => {
   } catch {
     // 加载失败保持空列表, 不阻断编辑
   }
+}
+
+const templateVarHint = (content: string) => {
+  const vars = extractTemplateVariables(content || '')
+  return vars.length ? `，识别到变量：${vars.join('、')}` : ''
 }
 
 const saveAsTemplate = async () => {
@@ -2150,30 +2208,77 @@ const saveAsTemplate = async () => {
   name = name.trim()
   if (!name) { ElMessage.warning('模板名称不能为空'); return }
   const content = currentPage.value.content || ''
-  const existing = templates.value.find(t => t.name === name)
+  const existing = myTemplates.value.find(t => t.name === name)
   try {
     if (existing) {
       const res = await http.put(`/api/me/templates/${existing.id}`, { name, content })
       const idx = templates.value.findIndex(t => t.id === existing.id)
       if (idx >= 0) templates.value[idx] = res.data
-      ElMessage.success('已更新模板')
+      ElMessage.success('已更新模板' + templateVarHint(content))
     } else {
       const res = await http.post('/api/me/templates', { name, content })
       templates.value = [res.data, ...templates.value]
-      ElMessage.success('已保存为模板')
+      ElMessage.success('已保存为模板' + templateVarHint(content))
     }
   } catch (e: any) {
     ElMessage.error(e.response?.data?.detail || '保存模板失败')
   }
 }
-const newFromTemplate = async (t: { name: string; content: string }) => {
+
+const toggleTemplateVisibility = async (t: TemplateItem) => {
+  const next = t.visibility === 'public' ? 'private' : 'public'
+  try {
+    const res = await http.put(`/api/me/templates/${t.id}`, {
+      name: t.name, content: t.content, visibility: next,
+    })
+    const idx = templates.value.findIndex(x => x.id === t.id)
+    if (idx >= 0) templates.value[idx] = { ...templates.value[idx], ...res.data }
+    ElMessage.success(next === 'public' ? '已共享给所有用户（只读）' : '已取消共享')
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail || '操作失败')
+  }
+}
+
+// 从模板新建: 有 {{变量}} 时先弹窗收集, 填充后生成新页
+const TPL_VAR_EXAMPLE = '{{变量名}}'
+const tplVarPlaceholder = (name: string) => `{{${name}}}`
+const tplVarOpen = ref(false)
+const tplVarTemplate = ref<TemplateItem | null>(null)
+const tplVarList = ref<string[]>([])
+const tplVarValues = ref<Record<string, string>>({})
+
+const createPageFromTemplate = async (t: TemplateItem, content: string) => {
   if (!currentNotebook.value) { ElMessage.warning('请先选择笔记本'); return }
   try {
-    const res = await http.post('/api/pages', { title: t.name, content: t.content, notebook_id: currentNotebook.value.id })
+    const res = await http.post('/api/pages', {
+      title: t.name, content, notebook_id: currentNotebook.value.id,
+    })
     currentPage.value = res.data
     await loadTree()
   } catch { ElMessage.error('创建失败') }
 }
+
+const newFromTemplate = async (t: TemplateItem) => {
+  if (!currentNotebook.value) { ElMessage.warning('请先选择笔记本'); return }
+  const vars = extractTemplateVariables(t.content || '')
+  if (vars.length) {
+    tplVarTemplate.value = t
+    tplVarList.value = vars
+    tplVarValues.value = Object.fromEntries(vars.map(v => [v, '']))
+    tplVarOpen.value = true
+    return
+  }
+  await createPageFromTemplate(t, t.content || '')
+}
+
+const confirmTemplateVars = async () => {
+  const t = tplVarTemplate.value
+  if (!t) return
+  const content = renderTemplateContent(t.content || '', tplVarValues.value)
+  tplVarOpen.value = false
+  await createPageFromTemplate(t, content)
+}
+
 const deleteTemplate = async (id: string) => {
   templates.value = templates.value.filter(t => t.id !== id)
   try {
@@ -3466,6 +3571,15 @@ html, body, #app { height: 100%; }
 .tpl-icon { margin-right: 7px; font-size: 13px; }
 .page-item.tpl .icon-btn { opacity: 0; }
 .page-item.tpl:hover .icon-btn { opacity: 1; }
+.tpl-owner {
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 8px;
+  background: #f1f5f9;
+  color: #64748b;
+  font-size: 11px;
+  flex: none;
+}
 
 /* 笔记本 zip 导出进度 */
 .zip-progress {
