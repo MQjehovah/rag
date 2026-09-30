@@ -1048,6 +1048,30 @@ function lockFieldsFor(baseUpdatedAt: string | null | undefined, collab: boolean
   return { base_updated_at: baseUpdatedAt }
 }
 
+/**
+ * F2-1 非内容写(移动/切视图/分享)会 bump 服务端 updated_at 但不改内容:
+ * 成功后刷新本页乐观锁基准, 否则下一笔自动保存携带旧 base 误报 409。
+ * 响应带 updated_at 时直接用; 否则重新 GET 当前页同步 updatedAtBases 与本地 currentPage.updated_at
+ * (只同步时间戳, 不覆盖本地内容)。
+ */
+const refreshUpdatedAtBase = async (pageId: string, updatedAtFromResponse?: string | null) => {
+  const direct = String(updatedAtFromResponse || '').trim()
+  if (direct) {
+    updatedAtBases.set(pageId, direct)
+    if (currentPage.value?.id === pageId) currentPage.value.updated_at = direct
+    return
+  }
+  try {
+    const res = await http.get(`/api/pages/${pageId}`)
+    const ts = String(res.data?.updated_at || '').trim()
+    if (!ts) return
+    updatedAtBases.set(pageId, ts)
+    if (currentPage.value?.id === pageId) currentPage.value.updated_at = ts
+  } catch {
+    /* 拉取失败保持旧基准: 409 时走既有冲突决策流程 */
+  }
+}
+
 /** 保存失败分类纯函数: 409 = 乐观锁冲突(需弹窗决策), 其余 = 普通失败(重试/草稿)。 */
 function classifySaveFailure(status: number | undefined): 'conflict' | 'error' {
   return status === 409 ? 'conflict' : 'error'
@@ -1403,6 +1427,8 @@ const onPageDrop = async (page: PageListItem, ev: DragEvent) => {
   try {
     await http.post(`/api/pages/${dragId}/move`, { parent_id: parentId, position })
     await loadTree()
+    // F2-1: move 会 bump 被移动页及同组兄弟页的 updated_at(含当前页), 刷新基准防误 409
+    if (currentPage.value) await refreshUpdatedAtBase(currentPage.value.id)
   } catch (e: any) {
     ElMessage.error(e?.response?.data?.detail || '移动失败')
   }
@@ -2128,6 +2154,8 @@ const createShare = async () => {
     const res = await http.post(`/api/pages/${currentPage.value.id}/share`)
     currentPage.value.share_token = res.data.token
     shareUrl.value = `${window.location.origin}${API_BASE}/share/${res.data.token}`
+    // F2-1: share_token 的 onupdate 会 bump updated_at, 刷新基准防下一笔自动保存误 409
+    await refreshUpdatedAtBase(currentPage.value.id, res.data.updated_at)
   } catch { ElMessage.error('创建分享失败') }
 }
 const cancelShare = async () => {
@@ -2137,6 +2165,8 @@ const cancelShare = async () => {
     currentPage.value.share_token = null
     shareUrl.value = ''
     ElMessage.success('已取消分享')
+    // F2-1: 同上(取消分享也 bump updated_at)
+    await refreshUpdatedAtBase(currentPage.value.id)
   } catch { ElMessage.error('取消失败') }
 }
 const copyShareUrl = async () => {
@@ -2762,6 +2792,8 @@ const setViewType = async (vt: string) => {
   try {
     await http.put(`/api/pages/${currentPage.value.id}/view`, { view_type: vt })
     currentPage.value.view_type = vt
+    // F2-1: 切视图 bump updated_at 但不改内容, 刷新基准防下一笔自动保存误 409
+    await refreshUpdatedAtBase(currentPage.value.id)
   } catch { ElMessage.error('切换视图失败') }
 }
 const addRow = async () => { await createPage(currentPage.value?.id ?? null) }
