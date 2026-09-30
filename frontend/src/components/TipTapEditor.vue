@@ -1,5 +1,5 @@
 <template>
-  <div class="tiptap-editor" :class="prefClasses" @mousemove="onEditorMouseMove" @mouseleave="onEditorMouseLeave">
+  <div class="tiptap-editor" :class="prefClasses" @mousemove="onEditorMouseMove" @mouseleave="onEditorMouseLeave" @contextmenu="onTableContextMenu">
     <!-- 工具栏 -->
     <div class="editor-toolbar" v-if="editor">
       <select class="tb-select" :value="headingValue" @change="setHeading" title="段落样式">
@@ -109,18 +109,42 @@
     <!-- 表格上下文工具条 -->
     <div class="table-bar" v-if="editor && isInTable">
       <span class="table-label"><TableIcon :size="14" /> 表格</span>
-      <button class="tb-btn sm" @click="editor.chain().focus().addRowBefore().run()">上方行</button>
-      <button class="tb-btn sm" @click="editor.chain().focus().addRowAfter().run()">下方行</button>
-      <button class="tb-btn sm" @click="editor.chain().focus().addColumnBefore().run()">左侧列</button>
-      <button class="tb-btn sm" @click="editor.chain().focus().addColumnAfter().run()">右侧列</button>
+      <button class="tb-btn sm" @click="tableCommand('addRowBefore')">上方行</button>
+      <button class="tb-btn sm" @click="tableCommand('addRowAfter')">下方行</button>
+      <button class="tb-btn sm" @click="tableCommand('addColumnBefore')">左侧列</button>
+      <button class="tb-btn sm" @click="tableCommand('addColumnAfter')">右侧列</button>
       <span class="divider"></span>
-      <button class="tb-btn sm" @click="editor.chain().focus().toggleHeaderRow().run()">表头行</button>
-      <button class="tb-btn sm" @click="editor.chain().focus().mergeCells().run()">合并</button>
-      <button class="tb-btn sm" @click="editor.chain().focus().splitCell().run()">拆分</button>
-      <button class="tb-btn sm danger" @click="editor.chain().focus().deleteRow().run()">删行</button>
-      <button class="tb-btn sm danger" @click="editor.chain().focus().deleteColumn().run()">删列</button>
-      <button class="tb-btn sm danger" @click="editor.chain().focus().deleteTable().run()">删表</button>
+      <button class="tb-btn sm" @click="tableCommand('toggleHeaderRow')">表头行</button>
+      <button class="tb-btn sm" @click="tableCommand('mergeCells')">合并</button>
+      <button class="tb-btn sm" @click="tableCommand('splitCell')">拆分</button>
+      <button class="tb-btn sm danger" @click="tableCommand('deleteRow')">删行</button>
+      <button class="tb-btn sm danger" @click="tableCommand('deleteColumn')">删列</button>
+      <button class="tb-btn sm danger" @click="tableCommand('deleteTable')">删表</button>
     </div>
+
+    <!-- 表格右键菜单 -->
+    <Teleport to="body">
+      <div
+        v-if="tableMenu.open"
+        class="table-ctx"
+        :style="{ top: tableMenu.y + 'px', left: tableMenu.x + 'px' }"
+        @mousedown.prevent
+      >
+        <div class="ctx-title">表格</div>
+        <button class="ctx-item" @click="ctxTable('addRowBefore')"><ArrowUp :size="14" /> 上方插入行</button>
+        <button class="ctx-item" @click="ctxTable('addRowAfter')"><ArrowDown :size="14" /> 下方插入行</button>
+        <button class="ctx-item" @click="ctxTable('addColumnBefore')"><ArrowLeft :size="14" /> 左侧插入列</button>
+        <button class="ctx-item" @click="ctxTable('addColumnAfter')"><ArrowRight :size="14" /> 右侧插入列</button>
+        <div class="ctx-sep"></div>
+        <button class="ctx-item" @click="ctxTable('toggleHeaderRow')"><TableIcon :size="14" /> 切换表头行</button>
+        <button class="ctx-item" @click="ctxTable('mergeCells')"><Combine :size="14" /> 合并单元格</button>
+        <button class="ctx-item" @click="ctxTable('splitCell')"><Split :size="14" /> 拆分单元格</button>
+        <div class="ctx-sep"></div>
+        <button class="ctx-item danger" @click="ctxTable('deleteRow')"><Trash2 :size="14" /> 删除本行</button>
+        <button class="ctx-item danger" @click="ctxTable('deleteColumn')"><Trash2 :size="14" /> 删除本列</button>
+        <button class="ctx-item danger" @click="ctxTable('deleteTable')"><Trash2 :size="14" /> 删除表格</button>
+      </div>
+    </Teleport>
 
     <editor-content :editor="editor" class="editor-content" />
 
@@ -376,8 +400,9 @@ import {
   Bold, Italic, Underline as UnderlineIcon, Strikethrough, Highlighter, Code, Link as LinkIcon,
   List, ListOrdered, ListChecks, Quote, SquareCode, AlignLeft, AlignCenter, AlignRight,
   Image as ImageIcon, Table as TableIcon, Workflow, Undo2, Redo2, Plus, Trash2, Copy,
-  ArrowUp, ArrowDown, Pilcrow, GripVertical, Heading1, Heading2, Heading3, Eraser,
+  ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Pilcrow, GripVertical, Heading1, Heading2, Heading3, Eraser,
   Settings2, Keyboard, FileText, BetweenHorizontalEnd, Search, ChevronUp, ChevronDown, X, Sparkles, Paperclip,
+  Combine, Split,
 } from 'lucide-vue-next'
 
 const uploadAndInsert = (view: any, file: File) => {
@@ -1294,6 +1319,50 @@ const headingValue = computed(() => {
 const charCount = computed(() => editor.value?.storage.characterCount.characters() ?? 0)
 const isInTable = computed(() => editor.value?.isActive('table') ?? false)
 
+// ---------------- 表格操作(工具条 + 右键菜单) ----------------
+const tableMenu = reactive({ open: false, x: 0, y: 0 })
+
+/**
+ * 安全执行表格命令: 空表格/无表格选区/合并拆分不适用等边界下 can() 为 false,
+ * 直接跳过而不是抛错, 保证编辑器不中断。
+ */
+function tableCommand(name: string) {
+  const e = editor.value
+  if (!e) return
+  try {
+    const can: any = e.can().chain().focus()
+    if (typeof can[name] !== 'function') return
+    if (!can[name]().run()) return
+    const chain: any = e.chain().focus()
+    chain[name]().run()
+  } catch { /* 边界情况静默忽略 */ }
+}
+
+function onTableContextMenu(ev: MouseEvent) {
+  const e = editor.value
+  if (!e) return
+  const target = ev.target as HTMLElement | null
+  const cell = target?.closest('td, th') as HTMLElement | null
+  if (!cell || !e.view.dom.contains(cell)) return
+  ev.preventDefault()
+  try {
+    const pos = e.view.posAtDOM(cell, 0)
+    e.chain().focus().setTextSelection(Math.min(pos, e.state.doc.content.size)).run()
+  } catch { /* ignore */ }
+  tableMenu.open = true
+  tableMenu.x = Math.max(8, Math.min(ev.clientX, window.innerWidth - 196))
+  tableMenu.y = Math.max(8, Math.min(ev.clientY, window.innerHeight - 360))
+}
+
+function closeTableMenu() {
+  tableMenu.open = false
+}
+
+function ctxTable(name: string) {
+  tableMenu.open = false
+  tableCommand(name)
+}
+
 function setHeading(ev: Event) {
   const value = (ev.target as HTMLSelectElement).value
   const e = editor.value
@@ -1756,11 +1825,15 @@ function insertMermaid() {
 onMounted(() => {
   document.addEventListener('dragover', onDocDragOver)
   document.addEventListener('drop', onDocDrop)
+  document.addEventListener('click', closeTableMenu)
+  document.addEventListener('scroll', closeTableMenu, true)
 })
 
 onBeforeUnmount(() => {
   document.removeEventListener('dragover', onDocDragOver)
   document.removeEventListener('drop', onDocDrop)
+  document.removeEventListener('click', closeTableMenu)
+  document.removeEventListener('scroll', closeTableMenu, true)
   if (mermaidTimer) {
     clearTimeout(mermaidTimer)
     mermaidTimer = null
@@ -2164,6 +2237,14 @@ onBeforeUnmount(() => {
   overflow: hidden;
 }
 
+.editor-content :deep(.ProseMirror .tableWrapper) {
+  overflow-x: auto;
+}
+
+.editor-content :deep(.ProseMirror.resize-cursor) {
+  cursor: col-resize;
+}
+
 .editor-content :deep(.ProseMirror th),
 .editor-content :deep(.ProseMirror td) {
   border: 1px solid #e5e7eb;
@@ -2171,6 +2252,7 @@ onBeforeUnmount(() => {
   min-width: 60px;
   vertical-align: top;
   position: relative;
+  height: auto;
 }
 
 .editor-content :deep(.ProseMirror th) {
@@ -2479,6 +2561,44 @@ onBeforeUnmount(() => {
 .block-menu .bm-item.danger { color: #dc2626; }
 .block-menu .bm-item.danger:hover { background: #fef2f2; }
 .block-menu .bm-sep { height: 1px; background: #f0f1f4; margin: 4px 0; }
+
+/* 表格右键菜单 */
+.table-ctx {
+  position: fixed;
+  z-index: 9999;
+  width: 188px;
+  background: #fff;
+  border: 1px solid #eceef2;
+  border-radius: 10px;
+  box-shadow: 0 14px 36px rgba(15, 23, 42, 0.16);
+  padding: 5px;
+}
+
+.table-ctx .ctx-title {
+  font-size: 11px;
+  color: #9ca3af;
+  padding: 5px 10px 2px;
+}
+
+.table-ctx .ctx-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  border: none;
+  background: transparent;
+  border-radius: 7px;
+  cursor: pointer;
+  color: #374151;
+  font-size: 13px;
+  text-align: left;
+}
+
+.table-ctx .ctx-item:hover { background: #f3f4f6; }
+.table-ctx .ctx-item.danger { color: #dc2626; }
+.table-ctx .ctx-item.danger:hover { background: #fef2f2; }
+.table-ctx .ctx-sep { height: 1px; background: #f0f1f4; margin: 4px 0; }
 
 /* Yjs 协同光标 */
 .collaboration-cursor__caret {
