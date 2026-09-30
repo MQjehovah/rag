@@ -88,6 +88,7 @@
             <el-dropdown-item command="font-lg">字号 大</el-dropdown-item>
             <el-dropdown-item command="focus" divided>专注宽度：{{ prefs.focus ? '开' : '关' }}</el-dropdown-item>
             <el-dropdown-item command="typewriter">打字机模式：{{ prefs.typewriter ? '开' : '关' }}</el-dropdown-item>
+            <el-dropdown-item command="ai-complete">AI 行内补全：{{ prefs.aiComplete ? '开' : '关' }}</el-dropdown-item>
           </el-dropdown-menu>
         </template>
       </el-dropdown>
@@ -471,6 +472,11 @@ import { serializeTextMarkdown } from '../utils/markdownText'
 import { serializeTableMarkdown } from '../utils/markdownTable'
 import type { CollabPeer, CollabMetaSnapshot } from '../utils/collab'
 import { decideSeed, isPersistenceEnabled, isPersistedBaseStale, readSeedClaim } from '../utils/collab'
+import {
+  canAcceptSuggestion, canTriggerCompletion, clipAfter, clipBefore, completionRanges,
+  inFailCooldown, isCurrentSeq, COMPLETE_DEBOUNCE_MS,
+  type CompletionSuggestion,
+} from '../utils/aiComplete'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plugin, PluginKey, TextSelection } from 'prosemirror-state'
 import { Decoration, DecorationSet } from 'prosemirror-view'
@@ -1959,6 +1965,152 @@ async function aiSummarize(e: Editor, range: { from: number; to: number }) {
   }
 }
 
+// ---------------- AI 行内补全 ghost ----------------
+// 建议以 WidgetDecoration 半透明显示在光标处: 纯本地装饰, 不写入文档、不广播 Yjs(协同安全)。
+const GHOST_PLUGIN_KEY = new PluginKey<CompletionSuggestion | null>('aiGhost')
+
+const aiGhostPlugin = new Plugin<CompletionSuggestion | null>({
+  key: GHOST_PLUGIN_KEY,
+  state: {
+    init: () => null,
+    apply(tr, value) {
+      const meta = tr.getMeta(GHOST_PLUGIN_KEY)
+      if (meta === 'clear') return null
+      if (meta) return meta as CompletionSuggestion
+      if (tr.docChanged) return null
+      return value
+    },
+  },
+  props: {
+    decorations(state) {
+      const suggestion = GHOST_PLUGIN_KEY.getState(state)
+      if (!suggestion?.text) return null
+      const pos = Math.max(0, Math.min(suggestion.pos, state.doc.content.size))
+      const dom = document.createElement('span')
+      dom.className = 'ai-ghost'
+      dom.textContent = suggestion.text
+      dom.setAttribute('aria-hidden', 'true')
+      return DecorationSet.create(state.doc, [Decoration.widget(pos, dom, { side: 1 })])
+    },
+  },
+})
+
+let ghostTimer: number | null = null
+/** 请求序号: 每次输入/移动光标/新请求递增, 旧响应一律丢弃(防竞态) */
+let ghostSeq = 0
+/** 最近一次失败(同一位置 30s 内静默不重试) */
+let ghostFail: { pos: number; at: number } | null = null
+
+function readGhostSuggestion(): CompletionSuggestion | null {
+  const e = editor.value
+  if (!e) return null
+  return GHOST_PLUGIN_KEY.getState(e.state) ?? null
+}
+
+function clearGhost() {
+  const e = editor.value
+  if (!e || !readGhostSuggestion()) return
+  e.view.dispatch(e.state.tr.setMeta(GHOST_PLUGIN_KEY, 'clear'))
+}
+
+function showGhost(suggestion: CompletionSuggestion) {
+  const e = editor.value
+  if (!e) return
+  e.view.dispatch(e.state.tr.setMeta(GHOST_PLUGIN_KEY, suggestion))
+}
+
+function cancelGhostTimer() {
+  if (ghostTimer !== null) {
+    clearTimeout(ghostTimer)
+    ghostTimer = null
+  }
+}
+
+/** 静态条件: 开关开、聚焦、空选区、非代码块/表格内。 */
+function completionGateOpen(): boolean {
+  const e = editor.value
+  if (!e) return false
+  const { empty, $from } = e.state.selection
+  let inCodeBlock = false
+  let inTable = false
+  for (let depth = $from.depth; depth > 0; depth--) {
+    const name = $from.node(depth).type.name
+    if (name === 'codeBlock') inCodeBlock = true
+    if (name === 'table' || name === 'tableRow' || name === 'tableCell' || name === 'tableHeader') inTable = true
+  }
+  return canTriggerCompletion({
+    enabled: prefs.aiComplete,
+    focused: e.isFocused,
+    emptySelection: empty,
+    inCodeBlock,
+    inTable,
+  })
+}
+
+/** 输入/光标变化后作废在途请求与旧建议, 重新计时; 停止 1.2s 才真正请求。 */
+function scheduleGhostCompletion() {
+  cancelGhostTimer()
+  if (!prefs.aiComplete) return
+  ghostTimer = window.setTimeout(() => {
+    ghostTimer = null
+    void requestGhostCompletion()
+  }, COMPLETE_DEBOUNCE_MS)
+}
+
+/** 请求行内补全: 失败静默(同一位置 30s 冷却), 过期响应丢弃, 补全期间不阻塞编辑。 */
+async function requestGhostCompletion() {
+  const e = editor.value
+  if (!e || !completionGateOpen()) return
+  const pos = e.state.selection.head
+  if (inFailCooldown(ghostFail, pos, Date.now())) return
+  const { beforeFrom, afterTo } = completionRanges(e.state.doc.content.size, pos)
+  const textBefore = clipBefore(e.state.doc.textBetween(beforeFrom, pos, '\n', ' '))
+  if (!textBefore.trim()) return
+  const textAfter = clipAfter(e.state.doc.textBetween(pos, afterTo, '\n', ' '))
+  const seq = ++ghostSeq
+  try {
+    const res = await http.post(
+      '/api/editor/ai/complete',
+      { text_before: textBefore, text_after: textAfter },
+      { timeout: 60000 },
+    )
+    if (!isCurrentSeq(seq, ghostSeq)) return
+    const suggestion = String(res.data?.suggestion ?? '').trim()
+    if (!suggestion) return
+    const cur = editor.value
+    if (!cur) return
+    if (!canAcceptSuggestion({ pos, text: suggestion }, cur.state.selection.head, cur.state.selection.empty)) return
+    showGhost({ pos, text: suggestion })
+  } catch {
+    ghostFail = { pos, at: Date.now() }
+  }
+}
+
+/** Tab 采纳: 以单事务插入建议文本(纯文本), 光标落到插入内容之后。 */
+function acceptGhostSuggestion() {
+  const e = editor.value
+  const suggestion = readGhostSuggestion()
+  if (!e || !suggestion) return
+  const { head, empty } = e.state.selection
+  if (!canAcceptSuggestion(suggestion, head, empty)) {
+    clearGhost()
+    return
+  }
+  ghostSeq++
+  ghostFail = null
+  clearGhost()
+  e.view.dispatch(e.state.tr.insertText(suggestion.text, suggestion.pos))
+  e.view.focus()
+}
+
+/** 输入/移动光标/失焦时清掉旧建议并重新等待。 */
+function noteGhostActivity() {
+  ghostSeq++
+  cancelGhostTimer()
+  clearGhost()
+  scheduleGhostCompletion()
+}
+
 const editor = useEditor({
   extensions: [
     StarterKit.configure({ codeBlock: false, text: false, history: props.collab ? false : undefined }),
@@ -2078,6 +2230,7 @@ const editor = useEditor({
     PageMention,
     UserMention,
     attachmentPasteDrop,
+    aiGhostPlugin,
     findPlugin,
     headingAnchorPlugin,
     wikiLinkPlugin,
@@ -2094,16 +2247,23 @@ const editor = useEditor({
     // 同步完成后的正常编辑照常 emit。
     if (!applyingExternal && !(props.collab && !collabSynced)) emit('update:modelValue', markdown)
     if (find.open) refreshFind()
+    noteGhostActivity()
     nextTick(() => { scheduleMermaid(); disableSpellcheck() })
   },
   onCreate: () => {
     nextTick(() => { scheduleMermaid(); disableSpellcheck() })
+  },
+  onBlur: () => {
+    ghostSeq++
+    cancelGhostTimer()
+    clearGhost()
   },
   onSelectionUpdate: ({ editor }) => {
     const { from, to } = editor.state.selection
     if (from !== to) lastAiSelection = { from, to }
     syncMultiSelection()
     keepCaretCentered()
+    noteGhostActivity()
   },
   editorProps: {
     transformPastedHTML: (html: string) => sanitizePastedHTML(html),
@@ -2128,10 +2288,24 @@ const editor = useEditor({
       if (event.key === 'Tab' && !event.altKey && !event.ctrlKey && !event.metaKey) {
         const e = editor.value
         if (!e) return false
+        // ghost 建议可见且光标仍在建议处: Tab 采纳
+        const suggestion = readGhostSuggestion()
+        if (!event.shiftKey && suggestion && e.state.selection.empty && e.state.selection.head === suggestion.pos) {
+          event.preventDefault()
+          acceptGhostSuggestion()
+          return true
+        }
         // 列表用原生 sink/lift, 代码块/表格保留各自的 Tab 行为
         if (e.isActive('codeBlock') || e.isActive('table') || e.isActive('listItem') || e.isActive('taskItem')) return false
         event.preventDefault()
         applyIndentToBlocks(selectedTopBlocks(), event.shiftKey ? -1 : 1)
+        return true
+      }
+      if (event.key === 'Escape' && readGhostSuggestion()) {
+        event.preventDefault()
+        ghostSeq++
+        cancelGhostTimer()
+        clearGhost()
         return true
       }
       if (event.key === 'Escape' && multi.active) {
@@ -2744,15 +2918,15 @@ function onHandlePointerUp(ev: PointerEvent) {
 }
 
 // ---------------- 视图偏好 ----------------
-interface Prefs { font: 'sm' | 'md' | 'lg'; focus: boolean; typewriter: boolean }
+interface Prefs { font: 'sm' | 'md' | 'lg'; focus: boolean; typewriter: boolean; aiComplete: boolean }
 const prefs = reactive<Prefs>(loadPrefs())
 
 function loadPrefs(): Prefs {
   try {
     const raw = localStorage.getItem('rag-editor-prefs')
-    if (raw) return { font: 'md', focus: false, typewriter: false, ...JSON.parse(raw) }
+    if (raw) return { font: 'md', focus: false, typewriter: false, aiComplete: false, ...JSON.parse(raw) }
   } catch { /* ignore */ }
-  return { font: 'md', focus: false, typewriter: false }
+  return { font: 'md', focus: false, typewriter: false, aiComplete: false }
 }
 
 function savePrefs() {
@@ -2771,6 +2945,16 @@ function applyPref(cmd: string) {
   else if (cmd === 'font-lg') prefs.font = 'lg'
   else if (cmd === 'focus') prefs.focus = !prefs.focus
   else if (cmd === 'typewriter') prefs.typewriter = !prefs.typewriter
+  else if (cmd === 'ai-complete') {
+    prefs.aiComplete = !prefs.aiComplete
+    if (prefs.aiComplete) {
+      scheduleGhostCompletion()
+    } else {
+      ghostSeq++
+      cancelGhostTimer()
+      clearGhost()
+    }
+  }
   savePrefs()
 }
 
@@ -3659,6 +3843,21 @@ onBeforeUnmount(() => {
 
 .find-btn:hover:not(:disabled) { background: var(--surface-hover); color: var(--text); }
 .find-btn:disabled { opacity: 0.45; cursor: default; }
+
+/* AI 行内补全 ghost: 半透明建议(本体为 ProseMirror 本地装饰, 不写入文档) */
+.editor-content :deep(.ai-ghost) {
+  color: #9ca3af;
+  opacity: 0.55;
+  font-style: italic;
+  pointer-events: none;
+  user-select: none;
+  white-space: pre-wrap;
+}
+
+html.dark .editor-content :deep(.ai-ghost) {
+  color: #6b7280;
+  opacity: 0.65;
+}
 
 .editor-content :deep(.find-hit) {
   background: rgba(250, 204, 21, 0.5);
