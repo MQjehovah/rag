@@ -49,6 +49,31 @@ export function decideSeed(
   return 'seed'
 }
 
+/**
+ * 是否启用 y-indexeddb 离线持久化(纯函数, 保守):
+ * 协同打开且拿到页面 updated_at(陈旧检测的基准)才启用; 缺失时禁用。
+ */
+export function isPersistenceEnabled(
+  collabEnabled: boolean,
+  pageUpdatedAt: string | null | undefined,
+): boolean {
+  return collabEnabled && String(pageUpdatedAt ?? '').trim() !== ''
+}
+
+/**
+ * 持久化恢复的基准与当前页面 updated_at 是否不一致(纯函数):
+ * 任一缺失 → false(无法判定, 不清库); 不一致 → true(服务端页面已变更, 清库重播)。
+ */
+export function isPersistedBaseStale(
+  persistedBaseUpdatedAt: string | null | undefined,
+  currentPageUpdatedAt: string | null | undefined,
+): boolean {
+  const base = String(persistedBaseUpdatedAt ?? '').trim()
+  const current = String(currentPageUpdatedAt ?? '').trim()
+  if (!base || !current) return false
+  return base !== current
+}
+
 /** 探活结果缓存: 成功缓存整个会话(页面内 4s 无同步还有兜底), 失败缓存 30s 后允许重试。 */
 const PROBE_FAIL_TTL = 30_000
 let probeCache: { ok: boolean; at: number } | null = null

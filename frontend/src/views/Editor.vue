@@ -438,6 +438,7 @@
               :key="(collab ? 'c:' : 's:') + (currentPage?.id || '')"
               v-model="currentPage.content"
               :collab="collab"
+              :page-updated-at="currentPage?.updated_at"
               @update:modelValue="scheduleSave"
               @collab-users="collabUsers = $event"
               @collab-status="collabConnected = $event"

@@ -434,6 +434,7 @@ import { Markdown } from 'tiptap-markdown'
 import 'katex/dist/katex.min.css'
 import * as Y from 'yjs'
 import { WebsocketProvider } from 'y-websocket'
+import { IndexeddbPersistence, clearDocument } from 'y-indexeddb'
 import Collaboration from '@tiptap/extension-collaboration'
 import CollaborationCursor from '@tiptap/extension-collaboration-cursor'
 import mermaid from 'mermaid'
@@ -445,7 +446,7 @@ import { nextFootnoteLabel } from '../utils/markdownFootnotes'
 import { serializeTextMarkdown } from '../utils/markdownText'
 import { serializeTableMarkdown } from '../utils/markdownTable'
 import type { CollabPeer, CollabMetaSnapshot } from '../utils/collab'
-import { decideSeed, readSeedClaim } from '../utils/collab'
+import { decideSeed, isPersistenceEnabled, isPersistedBaseStale, readSeedClaim } from '../utils/collab'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plugin, PluginKey, TextSelection } from 'prosemirror-state'
 import { Decoration, DecorationSet } from 'prosemirror-view'
@@ -584,6 +585,8 @@ lowlight.register('markdown', markdown)
 
 const props = defineProps<{
   modelValue: string
+  /** 页面服务端 updated_at: 协同离线持久化(y-indexeddb)的陈旧检测基准; 缺失时禁用持久化 */
+  pageUpdatedAt?: string
   collab?: { url: string; room: string; user: { name: string; color: string } } | null
 }>()
 
@@ -601,6 +604,8 @@ let applyingExternal = false
 // 协同(Yjs): 每个页面一个房间; 未启用时为普通单机编辑
 let ydoc: Y.Doc | null = null
 let provider: WebsocketProvider | null = null
+/** y-indexeddb 离线持久化(拿到 pageUpdatedAt 才启用); 卸载/陈旧清库时销毁 */
+let persistence: IndexeddbPersistence | null = null
 let collabSynced = false
 let collabSeedDone = false
 let collabSyncTimer: number | null = null
@@ -610,6 +615,8 @@ let collabReadyStarted = false
 /** 认领时间与"已过一轮 seed 判定"标记(并发认领的收敛窗口) */
 let collabClaimAt = 0
 let collabSeedConfirmed = false
+/** 持久化陈旧基准检查已完成(之后 pageUpdatedAt 的变化才是本端保存产生的) */
+let collabBaseCheckDone = false
 /** 同步完成前收到的外部内容(恢复版本/草稿), 同步后应用 */
 let pendingExternal: string | null = null
 const collabExtensions: any[] = []
@@ -727,13 +734,61 @@ function writeSeedClaim(): void {
   collabClaimAt = Date.now()
 }
 
-/** 页面内容就绪(内容非空, 或空页宽限已过)后返回, 避免用占位空内容播种。 */
-async function waitPageContentReady(): Promise<void> {
+/** 页面数据就绪(内容非空, 或空页宽限已过)后返回当时的 updated_at。 */
+async function waitPageDataReady(): Promise<string> {
   const start = Date.now()
   while (!String(props.modelValue || '').trim() && Date.now() - start < PAGE_CONTENT_GRACE_MS) {
     if (collabAborted()) break
     await sleepCollab(150)
   }
+  return String(props.pageUpdatedAt ?? '').trim()
+}
+
+/** 恢复本地持久化(y-indexeddb, roomName 与 provider 一致 page-<id>)。 */
+async function ensurePersistence(): Promise<void> {
+  if (!props.collab || !ydoc || persistence) return
+  persistence = new IndexeddbPersistence(props.collab.room, ydoc)
+  // IndexedDB 不可用(隐私模式/被拒)时 whenSynced 可能永不落定: 超时降级为无持久化, 不阻塞播种
+  try {
+    await Promise.race([persistence.whenSynced, sleepCollab(2000)])
+  } catch { /* ignore */ }
+}
+
+function wipeLocalCollabState(): void {
+  if (!ydoc) return
+  const doc = ydoc
+  doc.transact(() => {
+    const frag = doc.getXmlFragment('default')
+    if (frag.length > 0) frag.delete(0, frag.length)
+    doc.getMap('meta').clear()
+  })
+}
+
+/** 清空本 room 的 IndexedDB 记录与本地 Y 状态, 重建持久化实例继续记录重播后的内容。 */
+async function discardPersistedState(): Promise<void> {
+  const room = props.collab?.room
+  const old = persistence
+  persistence = null
+  if (old) { try { await old.destroy() } catch { /* ignore */ } }
+  wipeLocalCollabState()
+  if (!room || !ydoc) return
+  // clearData() 不等待 deleteDB 完成; 用导出的 clearDocument 确保删库(其它标签页持库时可能阻塞, 超时兜底)
+  try {
+    await Promise.race([clearDocument(room), sleepCollab(3000)])
+  } catch { /* ignore */ }
+  persistence = new IndexeddbPersistence(room, ydoc)
+  try {
+    await Promise.race([persistence.whenSynced, sleepCollab(2000)])
+  } catch { /* ignore */ }
+  // 删库被阻塞导致旧记录重放时, 再次清空内存状态(正常路径为空操作)
+  wipeLocalCollabState()
+}
+
+/** 陈旧清库重播: 持久化恢复的 baseUpdatedAt 与服务端 updated_at 不一致 → 清库。返回是否执行。 */
+async function discardStalePersistedState(pageUpdatedAt: string): Promise<boolean> {
+  if (!isPersistedBaseStale(metaSnapshot().baseUpdatedAt, pageUpdatedAt)) return false
+  await discardPersistedState()
+  return true
 }
 
 async function applyPendingExternalIfAny(): Promise<void> {
@@ -744,22 +799,41 @@ async function applyPendingExternalIfAny(): Promise<void> {
   applyExternalContentNow(markdown)
 }
 
-/** 文档已有内容: 不播种(清空也不重播), 缺失时补写 seedDone。 */
-function markSeedSettled(): void {
+/** 文档已有内容: 不播种; 缺失基准(旧房间/他端播种)时补写当前基准, 供后续陈旧检测。 */
+function finishWithoutSeed(pageUpdatedAt: string): void {
   collabSeedDone = true
   const meta = collabMeta()
-  if (!meta || !ydoc || metaSnapshot().seedDone) return
+  const snapshot = metaSnapshot()
+  if (!meta || !ydoc || (snapshot.seedDone && (snapshot.baseUpdatedAt || !pageUpdatedAt))) return
   const doc = ydoc
-  doc.transact(() => { meta.set('seedDone', true) })
+  doc.transact(() => {
+    meta.set('seedDone', true)
+    if (pageUpdatedAt && !snapshot.baseUpdatedAt) meta.set('baseUpdatedAt', pageUpdatedAt)
+  })
 }
 
-/** 播种总流程(协同在线后执行一次): 等内容就绪 → 外部内容 → 认领/播种/等待。 */
+/**
+ * 播种总流程(协同在线后执行一次):
+ * 页面数据 → y-indexeddb 恢复 → 陈旧检测(不一致则清库) → 外部内容 → 认领/播种/等待。
+ */
 async function runCollabReadyFlow(): Promise<void> {
-  await waitPageContentReady()
+  const pageUpdatedAt = await waitPageDataReady()
   if (collabAborted()) return
+  if (isPersistenceEnabled(true, pageUpdatedAt)) {
+    await ensurePersistence()
+    if (collabAborted()) return
+    await discardStalePersistedState(pageUpdatedAt)
+    if (collabAborted()) return
+  }
+  collabBaseCheckDone = true
   await applyPendingExternalIfAny()
   if (collabAborted() || collabSeedDone) return
-  if (!collabFragmentEmpty()) { markSeedSettled(); return }
+  if (!collabFragmentEmpty()) { finishWithoutSeed(pageUpdatedAt); return }
+  if (pageUpdatedAt && metaSnapshot().baseUpdatedAt === pageUpdatedAt) {
+    // 持久化恢复的基准与服务端一致 → 本地 Y 状态有效(含离线编辑), 直接同步回房间, 不重播
+    collabSeedDone = true
+    return
+  }
   if (!String(props.modelValue || '').trim()) {
     // 内容仍为空(加载占位/空页): 不认领; 内容到达后由 modelValue watch 重新触发
     collabReadyStarted = false
@@ -771,7 +845,7 @@ async function runCollabReadyFlow(): Promise<void> {
 function ensureCollabReadyFlow(): void {
   if (collabReadyStarted || collabSeedDone || !collabSynced || collabAborted()) return
   collabReadyStarted = true
-  void runCollabReadyFlow()
+  void runCollabReadyFlow().catch(() => { /* ignore */ })
 }
 
 function beginSeedClaim(): void {
@@ -810,7 +884,11 @@ function performSeed(): void {
   const meta = collabMeta()
   if (meta) {
     const doc = ydoc
-    doc.transact(() => { meta.set('seedDone', true) })
+    const base = String(props.pageUpdatedAt ?? '').trim()
+    doc.transact(() => {
+      meta.set('seedDone', true)
+      if (base) meta.set('baseUpdatedAt', base)
+    })
   }
   mermaidCache.clear()
   nextTick(() => { scheduleMermaid(); disableSpellcheck() })
@@ -2590,6 +2668,21 @@ watch(() => props.modelValue, (newValue) => {
   }
 })
 
+/**
+ * 本端保存成功后 updated_at 变化 → 同步 meta.baseUpdatedAt: 基准跟随最新服务端版本,
+ * 避免下次打开把"自己刚保存的版本"误判为陈旧而清库重播。初始加载阶段的 prop 变化不写。
+ */
+watch(() => props.pageUpdatedAt, (v) => {
+  if (!props.collab || !ydoc || !persistence || !collabBaseCheckDone) return
+  const base = String(v || '').trim()
+  if (!base) return
+  const meta = collabMeta()
+  if (!meta || meta.get('seedDone') !== true) return
+  if (meta.get('baseUpdatedAt') === base) return
+  const doc = ydoc
+  doc.transact(() => { meta.set('baseUpdatedAt', base) })
+})
+
 let mermaidTimer: number | null = null
 const mermaidCache = new Map<string, string>()
 let mermaidObserver: LazyObserver | null = null
@@ -2744,6 +2837,10 @@ onBeforeUnmount(() => {
     collabSyncTimer = null
   }
   clearCollabTimers()
+  if (persistence) {
+    void persistence.destroy()
+    persistence = null
+  }
   provider?.awareness.off('change', emitCollabUsers)
   editor.value?.destroy()
   provider?.destroy()
