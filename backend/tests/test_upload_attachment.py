@@ -126,3 +126,73 @@ def test_upload_attachment_sanitizes_filename(api_client, as_user, local_attachm
     # 只落在附件目录内,没有逃逸到上级目录
     assert (local_attachments / date_dir / stored).is_file()
     assert not (local_attachments.parent / "x.txt").exists()
+
+
+def _attachment_files(root) -> list:
+    return sorted(p for p in root.rglob("*") if p.is_file())
+
+
+def test_upload_attachment_same_content_dedupes(api_client, as_user, local_attachments):
+    """同内容两次上传(文件名不同)→ 同一 URL,且不重复落盘。"""
+    as_user([])
+    content = b"identical-payload"
+    first = _upload(api_client, filename="v1.pdf", content=content)
+    second = _upload(api_client, filename="v2-复本.pdf", content=content)
+    assert first.status_code == second.status_code == 200
+    assert first.json()["url"] == second.json()["url"]
+    # 第二次仍返回本次上传的原名(展示名),但 URL 指向同一份文件
+    assert second.json()["name"] == "v2-复本.pdf"
+
+    files = _attachment_files(local_attachments)
+    assert len(files) == 1
+    # 文件名前缀为内容 sha256 前 12 位
+    assert len(files[0].name.split("-", 1)[0]) == 12
+    assert files[0].read_bytes() == content
+
+    # 去重后的 URL 仍可通过签名正常取回
+    path = _local_url_path(second.json()["url"])
+    signed = sign_image_url(path)
+    base, _, query = signed.partition("?")
+    got = api_client.get(quote(base) + "?" + query)
+    assert got.status_code == 200
+    assert got.content == content
+
+
+def test_upload_attachment_same_name_different_content(api_client, as_user, local_attachments):
+    """同名不同内容 → 两个不同 URL,目录里两个文件。"""
+    as_user([])
+    first = _upload(api_client, filename="报告.pdf", content=b"content-one")
+    second = _upload(api_client, filename="报告.pdf", content=b"content-two")
+    assert first.status_code == second.status_code == 200
+    assert first.json()["url"] != second.json()["url"]
+    assert len(_attachment_files(local_attachments)) == 2
+
+
+def test_upload_attachment_dedupes_after_filename_sanitize(api_client, as_user, local_attachments):
+    """原名含穿越路径时,净化后仍按内容去重且不逃逸目录。"""
+    as_user([])
+    content = b"traversal-dedupe"
+    first = _upload(api_client, filename="../../evil.txt", content=content, content_type="text/plain")
+    second = _upload(api_client, filename="..\\..\\evil.txt", content=content, content_type="text/plain")
+    assert first.json()["url"] == second.json()["url"]
+    files = _attachment_files(local_attachments)
+    assert len(files) == 1
+    assert files[0].name.endswith("-evil.txt")
+    assert not (local_attachments.parent / "evil.txt").exists()
+
+
+def test_find_existing_attachment_rejects_bad_prefix(tmp_path):
+    """hash 前缀查找只认严格 12 位小写十六进制,`../../`/通配符等不误判。"""
+    from app.api.upload import _find_existing_attachment
+
+    date_path = tmp_path / "attachments"
+    date_path.mkdir(parents=True)
+    hit = date_path / "deadbeef0000-x.txt"
+    hit.write_text("x")
+    (tmp_path / "outside.txt").write_text("outside")
+
+    assert _find_existing_attachment(date_path, "deadbeef0000") == hit
+    for evil in ("../../", "..", "*", "deadbeef0000/../..", "deadbeef00", "ABCDEF012345", "", None):
+        assert _find_existing_attachment(date_path, evil) is None
+    # 目录不存在时同样返回 None(不抛错)
+    assert _find_existing_attachment(tmp_path / "nope", "deadbeef0000") is None

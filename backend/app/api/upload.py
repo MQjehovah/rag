@@ -208,9 +208,37 @@ async def _read_limited(file: UploadFile, max_bytes: int) -> bytes:
     return b"".join(chunks)
 
 
+def _attachment_digest_prefix(content: bytes) -> str:
+    """内容 sha256 的前 12 位(小写十六进制),作为秒传去重与文件名的前缀。"""
+    return hashlib.sha256(content).hexdigest()[:12]
+
+
+def _find_existing_attachment(date_path: Path, digest12: str) -> Path | None:
+    """在日期目录内按 `<digest12>-*` 查找同内容的已存附件;没有返回 None。
+
+    只接受严格 12 位小写十六进制前缀,其余输入(含 `../`、`*` 等伪前缀)
+    一律拒绝:glob 模式由调用方拼接,校验保证它不会被文件名注入成目录穿越。
+    """
+    if not re.fullmatch(r"[0-9a-f]{12}", digest12 or ""):
+        return None
+    for candidate in sorted(date_path.glob(f"{digest12}-*")):
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _minio_attachment_url(object_name: str) -> str:
+    scheme = "https" if settings.minio_secure else "http"
+    return f"{scheme}://{settings.minio_endpoint}/{settings.minio_bucket}/{object_name}"
+
+
 @router.post("/attachment")
 async def upload_attachment(file: UploadFile = File(...), current_user=Depends(get_current_user)):
-    """上传非图片附件(≤50MB)。存储与访问复用图片同一套机制(MinIO 优先,本地签名兜底)。"""
+    """上传非图片附件(≤50MB)。存储与访问复用图片同一套机制(MinIO 优先,本地签名兜底)。
+
+    秒传去重:写入前先按内容 sha256 前缀在目标目录查找,命中则直接复用已有 URL,
+    不再落盘;文件名统一为 `<sha256前12>-<净化原名>`。
+    """
     original_name = _sanitize_attachment_name(file.filename)
     ext = Path(original_name).suffix.lower()
     if ext in _BLOCKED_ATTACHMENT_EXTENSIONS:
@@ -220,13 +248,26 @@ async def upload_attachment(file: UploadFile = File(...), current_user=Depends(g
     file_content = await _read_limited(file, MAX_ATTACHMENT_BYTES)
 
     date_dir = datetime.now().strftime("%Y%m%d")
-    stored_name = f"{uuid.uuid4().hex[:12]}-{original_name}"
+    digest12 = _attachment_digest_prefix(file_content)
+    stored_name = f"{digest12}-{original_name}"
 
     if MINIO_AVAILABLE:
         try:
             client = get_minio_client()
-            object_name = f"attachments/{date_dir}/{stored_name}"
+            prefix = f"attachments/{date_dir}/{digest12}-"
+            existing = [
+                obj.object_name
+                for obj in client.list_objects(settings.minio_bucket, prefix=prefix, recursive=True)
+            ]
+            if existing:
+                return {
+                    "url": _minio_attachment_url(existing[0]),
+                    "name": original_name,
+                    "size": len(file_content),
+                    "mime": content_type,
+                }
 
+            object_name = f"attachments/{date_dir}/{stored_name}"
             client.put_object(
                 settings.minio_bucket,
                 object_name,
@@ -234,14 +275,21 @@ async def upload_attachment(file: UploadFile = File(...), current_user=Depends(g
                 length=len(file_content),
                 content_type=content_type
             )
-
-            scheme = "https" if settings.minio_secure else "http"
-            url = f"{scheme}://{settings.minio_endpoint}/{settings.minio_bucket}/{object_name}"
-            return {"url": url, "name": original_name, "size": len(file_content), "mime": content_type}
+            return {
+                "url": _minio_attachment_url(object_name),
+                "name": original_name,
+                "size": len(file_content),
+                "mime": content_type,
+            }
         except Exception:
             pass
 
     date_path = ATTACHMENT_DIR / date_dir
+    existing = _find_existing_attachment(date_path, digest12)
+    if existing is not None:
+        url = f"{settings.public_base_path}/api/upload/attachments/{date_dir}/{existing.name}"
+        return {"url": url, "name": original_name, "size": len(file_content), "mime": content_type}
+
     date_path.mkdir(parents=True, exist_ok=True)
 
     file_path = date_path / stored_name
