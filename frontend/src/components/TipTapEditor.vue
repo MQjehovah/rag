@@ -583,7 +583,9 @@ import {
 } from '../utils/tableMove'
 import { CELL_BG_PALETTE, cellColorsEqual } from '../utils/tableCellColor'
 import type { CollabPeer, CollabMetaSnapshot } from '../utils/collab'
-import { collabEditGate, decideSeed, isPersistenceEnabled, isPersistedBaseStale, readSeedClaim } from '../utils/collab'
+import {
+  collabEditGate, decideSeed, isPersistenceEnabled, isPersistedBaseStale, readSeedClaim, shouldAdvanceBase,
+} from '../utils/collab'
 import {
   canAcceptSuggestion, canTriggerCompletion, clipAfter, clipBefore, completionRanges,
   inFailCooldown, isCurrentSeq, COMPLETE_DEBOUNCE_MS,
@@ -948,11 +950,43 @@ async function discardPersistedState(): Promise<void> {
   wipeLocalCollabState()
 }
 
+/** F1-3: awareness 在线端数(含本端); provider 缺失按单人处理。 */
+function collabPeerCount(): number {
+  try {
+    return provider ? provider.awareness.getStates().size : 1
+  } catch {
+    return 1
+  }
+}
+
+/** F1-3: 仅清本地 IndexedDB 记录(不清 Y.Doc, 不广播), 重建持久化后由 provider 从房间重同步。 */
+async function clearLocalPersistenceOnly(): Promise<void> {
+  const room = props.collab?.room
+  const old = persistence
+  persistence = null
+  if (old) { try { await old.destroy() } catch { /* ignore */ } }
+  if (!room || !ydoc) return
+  try {
+    await Promise.race([clearDocument(room), sleepCollab(3000)])
+  } catch { /* ignore */ }
+  persistence = new IndexeddbPersistence(room, ydoc)
+  try {
+    await Promise.race([persistence.whenSynced, sleepCollab(2000)])
+  } catch { /* ignore */ }
+}
+
 /**
  * 陈旧清库重播: 持久化恢复的 baseUpdatedAt 与服务端 updated_at 不一致 → 清库。返回是否执行。
+ * F1-3: 有其他活跃端(>1)时不做破坏性清库(wipeLocalCollabState 会经 provider 广播删除, 误伤在线端);
+ * 此时仅清本地 IndexedDB 记录, 让 provider 从房间重同步——房间为空时随后走正常播种(重播)。
  */
 async function discardStalePersistedState(pageUpdatedAt: string): Promise<boolean> {
   if (!isPersistedBaseStale(metaSnapshot().baseUpdatedAt, pageUpdatedAt)) return false
+  if (collabPeerCount() > 1) {
+    console.warn('[collab] 基准不一致但存在其他在线端, 跳过破坏性清库, 仅清理本地持久化')
+    await clearLocalPersistenceOnly()
+    return false
+  }
   await discardPersistedState()
   return true
 }
@@ -974,7 +1008,9 @@ function finishWithoutSeed(pageUpdatedAt: string): void {
   const doc = ydoc
   doc.transact(() => {
     meta.set('seedDone', true)
-    if (pageUpdatedAt && !snapshot.baseUpdatedAt) meta.set('baseUpdatedAt', pageUpdatedAt)
+    if (pageUpdatedAt && shouldAdvanceBase(snapshot.baseUpdatedAt, pageUpdatedAt)) {
+      meta.set('baseUpdatedAt', pageUpdatedAt)
+    }
   })
 }
 
@@ -1083,9 +1119,10 @@ function performSeed(): boolean {
   if (meta) {
     const doc = ydoc
     const base = String(props.pageUpdatedAt ?? '').trim()
+    const snapshot = metaSnapshot()
     doc.transact(() => {
       meta.set('seedDone', true)
-      if (base) meta.set('baseUpdatedAt', base)
+      if (base && shouldAdvanceBase(snapshot.baseUpdatedAt, base)) meta.set('baseUpdatedAt', base)
     })
   }
   mermaidCache.clear()
@@ -3566,6 +3603,7 @@ watch(() => props.pageUpdatedAt, (v, old) => {
 /**
  * 本端保存成功后 updated_at 变化 → 同步 meta.baseUpdatedAt: 基准跟随最新服务端版本,
  * 避免下次打开把"自己刚保存的版本"误判为陈旧而清库重播。初始加载阶段的 prop 变化不写。
+ * F1-3: 写入取 max 语义(仅当新 base 更晚才写), 减少并发端较旧 base 覆盖导致的回退。
  */
 watch(() => props.pageUpdatedAt, (v) => {
   if (!props.collab || !ydoc || !persistence || !collabBaseCheckDone) return
@@ -3573,7 +3611,7 @@ watch(() => props.pageUpdatedAt, (v) => {
   if (!base) return
   const meta = collabMeta()
   if (!meta || meta.get('seedDone') !== true) return
-  if (meta.get('baseUpdatedAt') === base) return
+  if (!shouldAdvanceBase(meta.get('baseUpdatedAt'), base)) return
   const doc = ydoc
   doc.transact(() => { meta.set('baseUpdatedAt', base) })
 })

@@ -75,6 +75,26 @@ export function isPersistedBaseStale(
 }
 
 /**
+ * baseUpdatedAt 单调写入判定(纯函数, F1-3): 仅当新基准晚于已存基准才写。
+ * Y.Map 并发写按 clientID 定胜负, 较旧的 base 回退会让下次打开误判陈旧;
+ * 时间比较取 max 语义缓解(不可解析时保守: 有旧基准则不覆盖脏值)。
+ */
+export function shouldAdvanceBase(
+  existing: string | null | undefined,
+  next: string | null | undefined,
+): boolean {
+  const cur = String(existing ?? '').trim()
+  const nxt = String(next ?? '').trim()
+  if (!nxt || nxt === cur) return false
+  if (!cur) return true
+  const nextMs = Date.parse(nxt)
+  if (!Number.isFinite(nextMs)) return false
+  const curMs = Date.parse(cur)
+  if (!Number.isFinite(curMs)) return true
+  return nextMs > curMs
+}
+
+/**
  * 协同播种编辑闸门(纯函数, F1-1): 播种完成(seedDone)前禁止编辑与 emit。
  * 未播种期用户输入若被 emit, 会触发协作不带 base 的自动保存, 把"只含新输入"的
  * Markdown 整页覆盖服务端; 回退单人(非协同)与播种完成均放行。
