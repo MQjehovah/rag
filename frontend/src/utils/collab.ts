@@ -74,6 +74,19 @@ export function isPersistedBaseStale(
   return base !== current
 }
 
+/**
+ * 协同播种编辑闸门(纯函数, F1-1): 播种完成(seedDone)前禁止编辑与 emit。
+ * 未播种期用户输入若被 emit, 会触发协作不带 base 的自动保存, 把"只含新输入"的
+ * Markdown 整页覆盖服务端; 回退单人(非协同)与播种完成均放行。
+ */
+export function collabEditGate(
+  collab: boolean,
+  seedDone: boolean,
+): { editable: boolean; emitUpdate: boolean } {
+  if (!collab) return { editable: true, emitUpdate: true }
+  return { editable: seedDone, emitUpdate: seedDone }
+}
+
 /** 探活结果缓存: 成功缓存整个会话(页面内 4s 无同步还有兜底), 失败缓存 30s 后允许重试。 */
 const PROBE_FAIL_TTL = 30_000
 let probeCache: { ok: boolean; at: number } | null = null

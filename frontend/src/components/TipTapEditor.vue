@@ -583,7 +583,7 @@ import {
 } from '../utils/tableMove'
 import { CELL_BG_PALETTE, cellColorsEqual } from '../utils/tableCellColor'
 import type { CollabPeer, CollabMetaSnapshot } from '../utils/collab'
-import { decideSeed, isPersistenceEnabled, isPersistedBaseStale, readSeedClaim } from '../utils/collab'
+import { collabEditGate, decideSeed, isPersistenceEnabled, isPersistedBaseStale, readSeedClaim } from '../utils/collab'
 import {
   canAcceptSuggestion, canTriggerCompletion, clipAfter, clipBefore, completionRanges,
   inFailCooldown, isCurrentSeq, COMPLETE_DEBOUNCE_MS,
@@ -752,6 +752,8 @@ let provider: WebsocketProvider | null = null
 let persistence: IndexeddbPersistence | null = null
 let collabSynced = false
 let collabSeedDone = false
+/** F1-2: 等待播种超时后的接管只尝试一次(防重入) */
+let collabTakeoverTried = false
 let collabSyncTimer: number | null = null
 let collabDisposed = false
 /** 播种总流程只跑一次; 页面内容未就绪而中止时复位, 由 modelValue 变化重新触发 */
@@ -831,6 +833,24 @@ const PAGE_CONTENT_GRACE_MS = 600
 
 function collabAborted(): boolean {
   return collabDisposed || !props.collab || !ydoc
+}
+
+/**
+ * F1-1 编辑闸门: 协同模式下播种/采用房间完成(collabSeedDone)前禁止编辑。
+ * 播种链路(onSynced→认领→播种)期间用户输入会与播种并发, 若触发自动保存
+ * 会把"只含新输入"的 Markdown 整页覆盖服务端; 回退单人时组件重挂载自然放行。
+ */
+function applyCollabEditGate(): void {
+  const e = editor.value
+  if (!e) return
+  const gate = collabEditGate(!!props.collab, collabSeedDone)
+  if (e.isEditable !== gate.editable) e.setEditable(gate.editable)
+}
+
+/** 播种完成/采用房间/外部内容写入后放行编辑(并允许向外 emit)。 */
+function markCollabSeedDone(): void {
+  collabSeedDone = true
+  nextTick(() => applyCollabEditGate())
 }
 
 function collabTimeout(fn: () => void, ms: number): number {
@@ -928,7 +948,9 @@ async function discardPersistedState(): Promise<void> {
   wipeLocalCollabState()
 }
 
-/** 陈旧清库重播: 持久化恢复的 baseUpdatedAt 与服务端 updated_at 不一致 → 清库。返回是否执行。 */
+/**
+ * 陈旧清库重播: 持久化恢复的 baseUpdatedAt 与服务端 updated_at 不一致 → 清库。返回是否执行。
+ */
 async function discardStalePersistedState(pageUpdatedAt: string): Promise<boolean> {
   if (!isPersistedBaseStale(metaSnapshot().baseUpdatedAt, pageUpdatedAt)) return false
   await discardPersistedState()
@@ -945,7 +967,7 @@ async function applyPendingExternalIfAny(): Promise<void> {
 
 /** 文档已有内容: 不播种; 缺失基准(旧房间/他端播种)时补写当前基准, 供后续陈旧检测。 */
 function finishWithoutSeed(pageUpdatedAt: string): void {
-  collabSeedDone = true
+  markCollabSeedDone()
   const meta = collabMeta()
   const snapshot = metaSnapshot()
   if (!meta || !ydoc || (snapshot.seedDone && (snapshot.baseUpdatedAt || !pageUpdatedAt))) return
@@ -975,21 +997,27 @@ async function runCollabReadyFlow(): Promise<void> {
   if (!collabFragmentEmpty()) { finishWithoutSeed(pageUpdatedAt); return }
   if (pageUpdatedAt && metaSnapshot().baseUpdatedAt === pageUpdatedAt) {
     // 持久化恢复的基准与服务端一致 → 本地 Y 状态有效(含离线编辑), 直接同步回房间, 不重播
-    collabSeedDone = true
+    markCollabSeedDone()
     return
   }
-  if (!String(props.modelValue || '').trim()) {
-    // 内容仍为空(加载占位/空页): 不认领; 内容到达后由 modelValue watch 重新触发
+  if (!String(props.modelValue || '').trim() && !pageUpdatedAt) {
+    // 内容与页面基准都为空(加载占位): 不认领; modelValue/pageUpdatedAt 到达后由 watch 重新触发
     collabReadyStarted = false
     return
   }
+  // 内容为空但页面数据已就绪 = 真实空页(或已确认无房间内容): 单点认领后播种空文档
   beginSeedClaim()
 }
 
 function ensureCollabReadyFlow(): void {
   if (collabReadyStarted || collabSeedDone || !collabSynced || collabAborted()) return
   collabReadyStarted = true
-  void runCollabReadyFlow().catch(() => { /* ignore */ })
+  void runCollabReadyFlow().catch(() => {
+    // F1-1: 播种流程异常且未回退会让编辑闸门永久关闭, 明确回退单人编辑恢复可编辑
+    if (collabAborted()) return
+    console.warn('[collab] 播种流程异常, 回退单人编辑')
+    emit('collab-unavailable')
+  })
 }
 
 function beginSeedClaim(): void {
@@ -1003,7 +1031,7 @@ function beginSeedClaim(): void {
 function recheckSeedDecision(): void {
   if (collabAborted() || collabSeedDone || !ydoc) return
   const decision = decideSeed(metaSnapshot(), ydoc.clientID, collabFragmentEmpty())
-  if (decision === 'skip') { collabSeedDone = true; return }
+  if (decision === 'skip') { markCollabSeedDone(); return }
   if (decision === 'seed') {
     if (!collabSeedConfirmed) {
       collabSeedConfirmed = true
@@ -1013,18 +1041,44 @@ function recheckSeedDecision(): void {
     performSeed()
     return
   }
-  if (Date.now() - collabClaimAt >= SEED_WAIT_DEADLINE_MS) return
+  if (Date.now() - collabClaimAt >= SEED_WAIT_DEADLINE_MS) { attemptSeedTakeover(); return }
   collabTimeout(() => recheckSeedDecision(), SEED_POLL_MS)
 }
 
-function performSeed(): void {
-  if (collabAborted() || collabSeedDone || !ydoc || !editor.value) return
-  if (!collabFragmentEmpty()) { collabSeedDone = true; return }
-  if (metaSnapshot().seedClaim?.by !== ydoc.clientID) return
+/**
+ * F1-2 播种接管: 认领者崩溃/超时后谁都播不了 → 本端重写 seedClaim, 一个同步回合后
+ * 若 fragment 仍空且认领为本端则播种; 接管写失败/认领仍非本端 → 回退单人编辑。
+ * 一次性防重入(避免定时器链路里重复接管)。
+ */
+function attemptSeedTakeover(): void {
+  if (collabAborted() || collabSeedDone || collabTakeoverTried || !ydoc) return
+  collabTakeoverTried = true
+  console.warn('[collab] 等待播种超时, 本端接管播种', { room: props.collab?.room })
+  writeSeedClaim()
+  collabSeedConfirmed = false
+  collabTimeout(() => {
+    if (collabAborted() || collabSeedDone || !ydoc) return
+    if (!collabFragmentEmpty()) { finishWithoutSeed(String(props.pageUpdatedAt ?? '').trim()); return }
+    if (metaSnapshot().seedClaim?.by !== ydoc.clientID) {
+      console.warn('[collab] 播种接管失败: 认领仍非本端, 回退单人编辑')
+      emit('collab-unavailable')
+      return
+    }
+    if (!performSeed()) {
+      console.warn('[collab] 播种接管失败: 无法写入 Yjs, 回退单人编辑')
+      emit('collab-unavailable')
+    }
+  }, CLAIM_SYNC_ROUND_MS)
+}
+
+/** 播种(空文档也可播: 真实空页以空文档为准, 写 seedDone 后放行编辑)。 */
+function performSeed(): boolean {
+  if (collabAborted() || collabSeedDone || !ydoc || !editor.value) return false
+  if (!collabFragmentEmpty()) { markCollabSeedDone(); return false }
+  if (metaSnapshot().seedClaim?.by !== ydoc.clientID) return false
   const markdown = props.modelValue || ''
-  if (!markdown) return
-  collabSeedDone = true
-  editor.value.commands.setContent(markdown, false)
+  markCollabSeedDone()
+  if (markdown) editor.value.commands.setContent(markdown, false)
   const meta = collabMeta()
   if (meta) {
     const doc = ydoc
@@ -1036,6 +1090,7 @@ function performSeed(): void {
   }
   mermaidCache.clear()
   nextTick(() => { scheduleMermaid(); disableAutocorrect() })
+  return true
 }
 
 /**
@@ -1054,7 +1109,7 @@ function applyExternalContent(markdown: string) {
 function applyExternalContentNow(markdown: string) {
   const e = editor.value
   if (!e) return
-  collabSeedDone = true
+  markCollabSeedDone()
   lastEmitted = markdown
   applyingExternal = true
   e.commands.setContent(markdown, false)
@@ -2615,13 +2670,19 @@ const editor = useEditor({
   // 协同模式绝不把 content 交给编辑器初始文档(会在 Yjs 同步前写入本地并和服务器内容合并 → 重复);
   // 改为同步完成后由 runCollabReadyFlow(认领单点播种)从 Markdown 播种空文档。
   content: props.collab ? '' : props.modelValue,
+  // F1-1: 协同模式播种完成前禁编辑(编辑闸门 applyCollabEditGate 在播种/采用/回退时放行)
+  editable: !props.collab,
   onUpdate: ({ editor }) => {
     const markdown = editor.storage.markdown.getMarkdown()
     lastEmitted = markdown
     // F2: y-websocket 会先应用服务器 sync 更新再置 collabSynced, 首帧事务落在这个窗口;
     // 此时仅更新 lastEmitted, 不向外 emit, 避免触发自动保存用同步中的内容覆盖服务器。
-    // 同步完成后的正常编辑照常 emit。
-    if (!applyingExternal && !(props.collab && !collabSynced)) emit('update:modelValue', markdown)
+    // F1-1: 协同播种完成前同样不 emit(未播种期输入若触发自动保存会整页覆盖)。
+    // 同步/播种完成后的正常编辑照常 emit。
+    const gate = collabEditGate(!!props.collab, collabSeedDone)
+    if (!applyingExternal && gate.emitUpdate && (!props.collab || collabSynced)) {
+      emit('update:modelValue', markdown)
+    }
     if (find.open) refreshFind()
     noteGhostActivity()
     nextTick(() => { scheduleMermaid(); disableAutocorrect() })
@@ -2632,7 +2693,7 @@ const editor = useEditor({
       pendingFindQuery = null
       nextTick(() => findQuery(q))
     }
-    nextTick(() => { scheduleMermaid(); disableAutocorrect() })
+    nextTick(() => { applyCollabEditGate(); scheduleMermaid(); disableAutocorrect() })
   },
   onBlur: () => {
     ghostSeq++
@@ -3493,6 +3554,13 @@ watch(() => props.modelValue, (newValue) => {
   } else {
     window.setTimeout(apply, 0)
   }
+})
+
+// 空页: 内容不变但页面数据(updated_at)到达时也要触发播种(否则一直停在"未播种"不可编辑)
+watch(() => props.pageUpdatedAt, (v, old) => {
+  if (!props.collab || collabSeedDone || !collabSynced || collabAborted()) return
+  if (String(v || '').trim() === String(old || '').trim()) return
+  nextTick(() => ensureCollabReadyFlow())
 })
 
 /**
