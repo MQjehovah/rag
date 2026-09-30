@@ -1,5 +1,5 @@
 <template>
-  <div class="tiptap-editor" :class="prefClasses" @mousemove="onEditorMouseMove" @mouseleave="onEditorMouseLeave" @mouseover="onEditorMouseOver" @mousedown="onEditorMouseDown" @contextmenu="onTableContextMenu">
+  <div class="tiptap-editor" :class="prefClasses" @mousemove="onEditorMouseMove" @mouseleave="onEditorMouseLeave" @mouseover="onEditorMouseOver" @mousedown="onEditorMouseDown" @contextmenu="onTableContextMenu" @touchstart="onEditorTouchStart" @touchmove="onEditorTouchMove" @touchend="onEditorTouchEnd" @touchcancel="onEditorTouchEnd">
     <!-- 工具栏 -->
     <div class="editor-toolbar" v-if="editor">
       <select class="tb-select" :value="headingValue" @change="setHeading" title="段落样式">
@@ -157,7 +157,7 @@
     <div
       v-if="editor && handle.visible"
       class="block-handle"
-      :style="{ top: handle.y + 'px', left: (handle.x - 56) + 'px' }"
+      :style="handleStyle"
       @mouseenter="handle.visible = true"
     >
       <button class="handle-btn add" title="在下方插入块" @click.stop="insertParagraphAfter">
@@ -171,13 +171,17 @@
         @mousedown="onHandleMouseDown"
         @dragstart="onHandleDragStart"
         @dragend="onHandleDragEnd"
+        @pointerdown="onHandlePointerDown"
+        @pointermove="onHandlePointerMove"
+        @pointerup="onHandlePointerUp"
+        @pointercancel="onHandlePointerUp"
       >
         <GripVertical :size="16" />
       </button>
       <div
         v-if="blockMenu.open"
         class="block-menu"
-        :style="{ top: (handle.y + 26) + 'px', left: (handle.x - 30) + 'px' }"
+        :style="{ top: blockMenu.y + 'px', left: blockMenu.x + 'px' }"
         @mouseleave="blockMenu.open = false"
       >
         <template v-if="multi.active">
@@ -214,7 +218,7 @@
 
     <!-- 选中文本浮动工具条 -->
     <bubble-menu v-if="editor" :editor="editor" :should-show="shouldShowBubble" :tippy-options="{ duration: 100, maxWidth: 'none' }">
-      <div class="bubble-bar">
+      <div class="bubble-bar" @mousedown.prevent>
         <button @click="editor.chain().focus().toggleBold().run()" :class="{ 'is-active': editor.isActive('bold') }" title="加粗"><Bold :size="15" /></button>
         <button @click="editor.chain().focus().toggleItalic().run()" :class="{ 'is-active': editor.isActive('italic') }" title="斜体"><Italic :size="15" /></button>
         <button @click="editor.chain().focus().toggleUnderline().run()" :class="{ 'is-active': editor.isActive('underline') }" title="下划线"><UnderlineIcon :size="15" /></button>
@@ -225,7 +229,7 @@
         <span class="bubble-sep"></span>
         <button @click="editor.chain().focus().unsetAllMarks().run()" title="清除格式"><Eraser :size="15" /></button>
         <span class="bubble-sep"></span>
-        <el-dropdown trigger="click" :disabled="aiDialog.loading" @command="runAiAction">
+        <el-dropdown trigger="click" popper-class="editor-ai-dropdown" :disabled="aiDialog.loading" @command="runAiAction">
           <button title="AI 助手"><Sparkles :size="15" /></button>
           <template #dropdown>
             <el-dropdown-menu>
@@ -706,8 +710,57 @@ interface SlashItem {
   action: (editor: Editor, range: { from: number; to: number }) => void
 }
 
-const slash = reactive({ open: false, items: [] as SlashItem[], index: 0, x: 0, y: 0 })
+const slash = reactive({ open: false, items: [] as SlashItem[], index: 0, x: 0, y: 0, anchorLeft: 0, anchorTop: 0, anchorBottom: 0 })
 let slashCommand: ((item: SlashItem) => void) | null = null
+
+// ---------------- 浮动菜单定位(触控/窄屏自适应) ----------------
+/** 菜单条目的估算高度(用于上下翻转与高度截断; 实际高度仍由 CSS max-height 限制)。 */
+const MENU_ITEM_EST = 48
+const MENU_MAX_H = 340
+/** 菜单基础宽度(与 CSS `width: min(260px, calc(100vw - 16px))` 保持一致)。 */
+const MENU_WIDTH = 260
+
+function viewportSize() {
+  const vv = (window as any).visualViewport
+  return { w: window.innerWidth || 1024, h: vv?.height ?? window.innerHeight ?? 768 }
+}
+
+/**
+ * 以光标/块位置为锚点计算菜单坐标:
+ * - 右/下越界时回收到视口内(下方放不下优先翻到锚点上方);
+ * - visualViewport(软键盘)高度变化时重新调用即可跟随。
+ */
+function clampMenuPosition(anchorLeft: number, anchorTop: number, anchorBottom: number, estimatedHeight: number, offsetLeft = 0) {
+  const { w, h } = viewportSize()
+  // 与 CSS `.slash-menu { width: min(260px, calc(100vw - 16px)) }` 保持一致
+  const width = Math.min(MENU_WIDTH, Math.max(0, w - 16))
+  const estH = Math.min(estimatedHeight, MENU_MAX_H, Math.max(120, h - 16))
+  let x = anchorLeft + offsetLeft
+  let y = anchorBottom + 6
+  x = Math.max(8, Math.min(x, w - width - 8))
+  if (y + estH > h - 8) {
+    const above = anchorTop - estH - 6
+    y = above >= 8 ? above : Math.max(8, h - estH - 8)
+  }
+  return { x, y }
+}
+
+function estimateMenuHeight(count: number) {
+  return Math.min(count * MENU_ITEM_EST + 30, MENU_MAX_H)
+}
+
+function positionSlashMenu() {
+  if (!slash.open || !slash.anchorBottom) return
+  const { x, y } = clampMenuPosition(slash.anchorLeft, slash.anchorTop, slash.anchorBottom, estimateMenuHeight(slash.items.length))
+  slash.x = x
+  slash.y = y
+}
+
+function onViewportResize() {
+  positionSlashMenu()
+  positionMentionMenu()
+  positionUserMentionMenu()
+}
 
 const SLASH_ITEMS: SlashItem[] = [
   { title: '正文', desc: '普通文本段落', icon: '¶', keywords: ['text', 'paragraph', '正文', '文本'], action: (e, r) => { e.chain().focus().deleteRange(r).setParagraph().run() } },
@@ -786,7 +839,8 @@ const SlashCommand = Extension.create({
             slash.open = p.items.length > 0
             slashCommand = (item: SlashItem) => p.command(item)
             const rect = p.clientRect?.()
-            if (rect) { slash.x = rect.left; slash.y = rect.bottom + 6 }
+            if (rect) { slash.anchorLeft = rect.left; slash.anchorTop = rect.top; slash.anchorBottom = rect.bottom }
+            positionSlashMenu()
           },
           onUpdate: (p: any) => {
             slash.items = p.items
@@ -794,7 +848,8 @@ const SlashCommand = Extension.create({
             slash.open = p.items.length > 0
             slashCommand = (item: SlashItem) => p.command(item)
             const rect = p.clientRect?.()
-            if (rect) { slash.x = rect.left; slash.y = rect.bottom + 6 }
+            if (rect) { slash.anchorLeft = rect.left; slash.anchorTop = rect.top; slash.anchorBottom = rect.bottom }
+            positionSlashMenu()
           },
           onKeyDown: (p: any) => {
             if (!slash.open || !slash.items.length) return false
@@ -828,8 +883,18 @@ const mention = reactive({
   index: 0,
   x: 0,
   y: 0,
+  anchorLeft: 0,
+  anchorTop: 0,
+  anchorBottom: 0,
   mode: 'page' as 'page' | 'heading',
 })
+
+function positionMentionMenu() {
+  if (!mention.open || !mention.anchorBottom) return
+  const { x, y } = clampMenuPosition(mention.anchorLeft, mention.anchorTop, mention.anchorBottom, estimateMenuHeight(mention.items.length))
+  mention.x = x
+  mention.y = y
+}
 let mentionCommand: ((item: MentionItem) => void) | null = null
 let mentionPages: { id: string; title: string }[] = []
 let mentionLoaded = false
@@ -949,7 +1014,8 @@ const PageMention = Extension.create({
             mention.open = mention.items.length > 0
             mentionCommand = (it: any) => p.command(it)
             const rect = p.clientRect?.()
-            if (rect) { mention.x = rect.left; mention.y = rect.bottom + 6 }
+            if (rect) { mention.anchorLeft = rect.left; mention.anchorTop = rect.top; mention.anchorBottom = rect.bottom }
+            positionMentionMenu()
           },
           onUpdate: (p: any) => {
             mention.items = p.items || []
@@ -958,7 +1024,8 @@ const PageMention = Extension.create({
             mention.open = mention.items.length > 0
             mentionCommand = (it: any) => p.command(it)
             const rect = p.clientRect?.()
-            if (rect) { mention.x = rect.left; mention.y = rect.bottom + 6 }
+            if (rect) { mention.anchorLeft = rect.left; mention.anchorTop = rect.top; mention.anchorBottom = rect.bottom }
+            positionMentionMenu()
           },
           onKeyDown: (p: any) => {
             if (!mention.open || !mention.items.length) return false
@@ -1097,10 +1164,17 @@ async function openWikiLink(el: HTMLElement) {
 }
 
 // ---------------- @ 用户提及 ----------------
-const userMention = reactive({ open: false, items: [] as { id: string; name: string }[], index: 0, x: 0, y: 0 })
+const userMention = reactive({ open: false, items: [] as { id: string; name: string }[], index: 0, x: 0, y: 0, anchorLeft: 0, anchorTop: 0, anchorBottom: 0 })
 let userMentionCommand: ((item: { id: string; name: string }) => void) | null = null
 let userList: { id: string; name: string }[] = []
 let userLoaded = false
+
+function positionUserMentionMenu() {
+  if (!userMention.open || !userMention.anchorBottom) return
+  const { x, y } = clampMenuPosition(userMention.anchorLeft, userMention.anchorTop, userMention.anchorBottom, estimateMenuHeight(userMention.items.length))
+  userMention.x = x
+  userMention.y = y
+}
 
 async function ensureUsers() {
   if (userLoaded) return
@@ -1142,7 +1216,8 @@ const UserMention = Extension.create({
             userMention.open = userMention.items.length > 0
             userMentionCommand = (it: any) => p.command(it)
             const rect = p.clientRect?.()
-            if (rect) { userMention.x = rect.left; userMention.y = rect.bottom + 6 }
+            if (rect) { userMention.anchorLeft = rect.left; userMention.anchorTop = rect.top; userMention.anchorBottom = rect.bottom }
+            positionUserMentionMenu()
           },
           onUpdate: (p: any) => {
             userMention.items = p.items || []
@@ -1150,7 +1225,8 @@ const UserMention = Extension.create({
             userMention.open = userMention.items.length > 0
             userMentionCommand = (it: any) => p.command(it)
             const rect = p.clientRect?.()
-            if (rect) { userMention.x = rect.left; userMention.y = rect.bottom + 6 }
+            if (rect) { userMention.anchorLeft = rect.left; userMention.anchorTop = rect.top; userMention.anchorBottom = rect.bottom }
+            positionUserMentionMenu()
           },
           onKeyDown: (p: any) => {
             if (!userMention.open || !userMention.items.length) return false
@@ -1702,12 +1778,28 @@ function insertBlock(title: string) {
 
 // ---------------- 块操作手柄 ----------------
 const handle = reactive({ visible: false, x: 0, y: 0, pos: 0 })
-const blockMenu = reactive({ open: false })
+const blockMenu = reactive({ open: false, x: 0, y: 0 })
 /** 多块选区(Shift+点手柄 / Shift+拖拽手柄): 块菜单切换为批量操作 */
 const multi = reactive({ active: false, count: 0 })
 const rangeDrag = reactive({ active: false, anchorIndex: -1, lastIndex: -1 })
 
+/** 触屏(coarse pointer)下手柄按钮放大到 40px, 左侧偏移量随之增加 */
+const coarsePointer = typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+  ? window.matchMedia('(pointer: coarse)').matches
+  : false
+const HANDLE_OFFSET = coarsePointer ? 86 : 58
+
+const handleStyle = computed(() => ({
+  top: handle.y + 'px',
+  left: Math.max(4, handle.x - HANDLE_OFFSET) + 'px',
+}))
+
 let leaveTimer: number | null = null
+/** 长按(触屏)打开块菜单的计时器 */
+let longPressTimer: number | null = null
+let longPressPoint = { x: 0, y: 0 }
+/** 触屏拖拽结束后抑制一次手柄 click(避免拖完又弹菜单) */
+let suppressHandleClickUntil = 0
 
 function onEditorMouseMove(ev: MouseEvent) {
   const target = ev.target as HTMLElement
@@ -1724,8 +1816,16 @@ function onEditorMouseMove(ev: MouseEvent) {
     blockMenu.open = false
     return
   }
+  activateBlockHandle(el)
+}
+
+/** 将手柄定位到指定顶层块(触屏点击/长按也会走到这里)。 */
+function activateBlockHandle(el: HTMLElement) {
+  const e = editor.value
+  if (!e) return
   const rect = el.getBoundingClientRect()
-  handle.x = rect.left
+  // 窄屏下内容距左边缘过近: 手柄整体回收进视口(左起 4px)
+  handle.x = Math.max(HANDLE_OFFSET + 4, rect.left)
   handle.y = rect.top
   try {
     handle.pos = e.view.posAtDOM(el, 0)
@@ -1745,8 +1845,59 @@ function onEditorMouseLeave() {
   }, 200)
 }
 
+/** 打开块菜单并做视口内回收(下/右越界)。 */
+function openBlockMenu() {
+  const { w, h } = viewportSize()
+  const width = 200
+  const estH = Math.min(480, Math.max(160, h * 0.6))
+  blockMenu.x = Math.max(8, Math.min(handle.x - 30, w - width - 8))
+  blockMenu.y = Math.max(8, Math.min(handle.y + 26, h - estH - 8))
+  blockMenu.open = true
+}
+
 function toggleBlockMenu() {
-  blockMenu.open = !blockMenu.open
+  if (Date.now() < suppressHandleClickUntil) return
+  if (blockMenu.open) { blockMenu.open = false; return }
+  openBlockMenu()
+}
+
+function cancelLongPress() {
+  if (longPressTimer) {
+    clearTimeout(longPressTimer)
+    longPressTimer = null
+  }
+}
+
+/** 触屏长按(500ms)块 → 显示手柄并打开块菜单; 轻点则由兼容鼠标事件显示手柄。 */
+function onEditorTouchStart(ev: TouchEvent) {
+  cancelLongPress()
+  const target = ev.target as HTMLElement | null
+  if (!target || target.closest('.block-handle') || target.closest('.block-menu')) return
+  if (blockMenu.open) blockMenu.open = false
+  const el = target.closest('.ProseMirror > *') as HTMLElement | null
+  const e = editor.value
+  if (!e || !el || !el.parentElement?.classList.contains('ProseMirror')) return
+  const touch = ev.touches[0]
+  if (!touch) return
+  longPressPoint = { x: touch.clientX, y: touch.clientY }
+  longPressTimer = window.setTimeout(() => {
+    longPressTimer = null
+    activateBlockHandle(el)
+    if (handle.visible) openBlockMenu()
+  }, 500)
+}
+
+function onEditorTouchMove(ev: TouchEvent) {
+  if (!longPressTimer) return
+  const touch = ev.touches[0]
+  if (!touch) return
+  if (Math.abs(touch.clientX - longPressPoint.x) > 8 || Math.abs(touch.clientY - longPressPoint.y) > 8) {
+    cancelLongPress()
+  }
+}
+
+function onEditorTouchEnd() {
+  cancelLongPress()
 }
 
 interface BlockRange { pos: number; end: number; index: number; node: any }
@@ -2046,21 +2197,27 @@ function onHandleDragEnd() {
 }
 
 function onDocDragOver(ev: DragEvent) {
+  if (!drag.active || !editor.value) return
+  ev.preventDefault()
+  if (ev.dataTransfer) ev.dataTransfer.dropEffect = 'move'
+  updateDragTargetFromPoint(ev.clientX, ev.clientY)
+}
+
+/** 依据指针位置计算落点(HTML5 拖拽与触屏指针拖拽共用)。 */
+function updateDragTargetFromPoint(_clientX: number, clientY: number) {
   const e = editor.value
   if (!drag.active || !e) return
   const pm = e.view.dom as HTMLElement
   const pmRect = pm.getBoundingClientRect()
-  if (ev.clientY < pmRect.top - 4 || ev.clientY > pmRect.bottom + 4) {
+  if (clientY < pmRect.top - 4 || clientY > pmRect.bottom + 4) {
     drag.toIndex = -1
     return
   }
-  ev.preventDefault()
-  if (ev.dataTransfer) ev.dataTransfer.dropEffect = 'move'
   const children = Array.from(pm.children) as HTMLElement[]
   let idx = children.length
   for (let i = 0; i < children.length; i++) {
     const r = children[i].getBoundingClientRect()
-    if (ev.clientY < r.top + r.height / 2) { idx = i; break }
+    if (clientY < r.top + r.height / 2) { idx = i; break }
   }
   drag.toIndex = idx
   drag.indicatorX = pmRect.left
@@ -2072,13 +2229,13 @@ function onDocDragOver(ev: DragEvent) {
   }
 }
 
-function onDocDrop(ev: DragEvent) {
+/** 结束拖拽并落位(HTML5 drop 与触屏 pointerup 共用)。 */
+function finishDragDrop() {
   const e = editor.value
-  if (!drag.active || !e || drag.toIndex < 0 || !dragNode) {
+  if (!e || !drag.active || drag.toIndex < 0 || !dragNode) {
     onHandleDragEnd()
     return
   }
-  ev.preventDefault()
   const from = drag.fromIndex
   const to = drag.toIndex
   drag.active = false
@@ -2092,6 +2249,53 @@ function onDocDrop(ev: DragEvent) {
   tr.insert(insertPos, dragNode)
   e.view.dispatch(tr)
   drag.toIndex = -1
+}
+
+function onDocDrop(ev: DragEvent) {
+  if (!drag.active) return
+  ev.preventDefault()
+  finishDragDrop()
+}
+
+// ---------------- 触屏拖拽排序(HTML5 DnD 在移动端不可用, 用 Pointer Events 兜底) ----------------
+let touchDrag: { pointerId: number; startY: number; dragging: boolean; target: HTMLElement } | null = null
+
+function onHandlePointerDown(ev: PointerEvent) {
+  if (ev.pointerType !== 'touch') return
+  const target = ev.currentTarget as HTMLElement
+  touchDrag = { pointerId: ev.pointerId, startY: ev.clientY, dragging: false, target }
+  try { target.setPointerCapture(ev.pointerId) } catch { /* ignore */ }
+}
+
+function onHandlePointerMove(ev: PointerEvent) {
+  if (!touchDrag || ev.pointerId !== touchDrag.pointerId) return
+  if (!touchDrag.dragging) {
+    // 10px 阈值: 轻点仍走 click 弹菜单, 纵向移动才进入拖拽
+    if (Math.abs(ev.clientY - touchDrag.startY) < 10) return
+    const e = editor.value
+    const r = topRange(handle.pos)
+    if (!e || !r) return
+    touchDrag.dragging = true
+    drag.active = true
+    drag.fromIndex = r.index
+    dragNode = r.node
+    dragStart = r.pos
+    dragEnd = r.end
+    drag.toIndex = -1
+  }
+  ev.preventDefault()
+  updateDragTargetFromPoint(ev.clientX, ev.clientY)
+}
+
+function onHandlePointerUp(ev: PointerEvent) {
+  if (!touchDrag || ev.pointerId !== touchDrag.pointerId) return
+  const current = touchDrag
+  touchDrag = null
+  try { current.target.releasePointerCapture(ev.pointerId) } catch { /* ignore */ }
+  if (!current.dragging) return
+  ev.preventDefault()
+  suppressHandleClickUntil = Date.now() + 400
+  finishDragDrop()
 }
 
 // ---------------- 视图偏好 ----------------
@@ -2345,6 +2549,10 @@ onMounted(() => {
   document.addEventListener('scroll', closeTableMenu, true)
   document.addEventListener('mousemove', onDocMouseMove)
   document.addEventListener('mouseup', onDocMouseUp)
+  // 软键盘/旋转导致视口变化时, 重新回收 slash/提及菜单位置
+  window.addEventListener('resize', onViewportResize)
+  window.visualViewport?.addEventListener('resize', onViewportResize)
+  window.visualViewport?.addEventListener('scroll', onViewportResize)
 })
 
 onBeforeUnmount(() => {
@@ -2354,6 +2562,10 @@ onBeforeUnmount(() => {
   document.removeEventListener('scroll', closeTableMenu, true)
   document.removeEventListener('mousemove', onDocMouseMove)
   document.removeEventListener('mouseup', onDocMouseUp)
+  window.removeEventListener('resize', onViewportResize)
+  window.visualViewport?.removeEventListener('resize', onViewportResize)
+  window.visualViewport?.removeEventListener('scroll', onViewportResize)
+  cancelLongPress()
   if (mermaidTimer) {
     clearTimeout(mermaidTimer)
     mermaidTimer = null
@@ -3018,6 +3230,22 @@ onBeforeUnmount(() => {
 
 .ai-error { color: #dc2626; }
 .ai-muted { color: #9ca3af; }
+
+/* 触控: 工具条/表格条/查找条点击目标 ≥40px(触摸媒体查询) */
+@media (pointer: coarse) {
+  .tb-btn { min-width: 40px; height: 40px; }
+  .tb-btn.sm { min-height: 36px; padding: 6px 10px; }
+  .tb-select { height: 40px; }
+  .find-btn { min-height: 36px; }
+  .find-input { height: 36px; }
+}
+
+/* 窄屏: 查找条不溢出 */
+@media (max-width: 768px) {
+  .editor-toolbar { gap: 4px; }
+  .find-bar { flex-wrap: wrap; max-width: calc(100vw - 24px); }
+  .find-input { width: 96px; }
+}
 </style>
 
 <style>
@@ -3052,7 +3280,7 @@ onBeforeUnmount(() => {
 .slash-menu {
   position: fixed;
   z-index: 9999;
-  width: 260px;
+  width: min(260px, calc(100vw - 16px));
   max-height: 340px;
   overflow-y: auto;
   background: #fff;
@@ -3060,6 +3288,7 @@ onBeforeUnmount(() => {
   border-radius: 12px;
   box-shadow: 0 16px 40px rgba(15, 23, 42, 0.18);
   padding: 6px;
+  -webkit-overflow-scrolling: touch;
 }
 
 .slash-header {
@@ -3157,11 +3386,15 @@ onBeforeUnmount(() => {
   position: fixed;
   z-index: 40;
   min-width: 168px;
+  max-width: calc(100vw - 16px);
+  max-height: min(60vh, 480px);
+  overflow-y: auto;
   background: #fff;
   border: 1px solid #eceef2;
   border-radius: 10px;
   box-shadow: 0 14px 36px rgba(15, 23, 42, 0.16);
   padding: 5px;
+  -webkit-overflow-scrolling: touch;
 }
 
 .block-menu .bm-title {
@@ -3195,6 +3428,9 @@ onBeforeUnmount(() => {
   position: fixed;
   z-index: 9999;
   width: 188px;
+  max-width: calc(100vw - 16px);
+  max-height: min(70vh, 480px);
+  overflow-y: auto;
   background: #fff;
   border: 1px solid #eceef2;
   border-radius: 10px;
@@ -3252,5 +3488,27 @@ onBeforeUnmount(() => {
   border-radius: 4px 4px 4px 0;
   white-space: nowrap;
   user-select: none;
+}
+
+/* ---------- 触控/窄屏: 浮动菜单可达性(菜单挂 body, 需全局样式) ---------- */
+@media (max-width: 768px) {
+  .slash-menu {
+    max-height: min(340px, 50vh);
+  }
+  .bubble-bar {
+    flex-wrap: wrap;
+    justify-content: center;
+    max-width: calc(100vw - 12px);
+  }
+}
+
+@media (pointer: coarse) {
+  .slash-menu { max-height: min(340px, 45vh); }
+  .slash-item { min-height: 44px; padding: 9px 10px; }
+  .bubble-bar button { min-width: 40px; min-height: 40px; }
+  .block-handle .handle-btn { width: 40px; height: 40px; touch-action: none; }
+  .block-menu .bm-item { min-height: 42px; }
+  .table-ctx .ctx-item { min-height: 42px; }
+  .editor-ai-dropdown .el-dropdown-menu__item { min-height: 40px; display: flex; align-items: center; }
 }
 </style>
