@@ -236,3 +236,72 @@ export async function fetchAttachmentBlob(src: string, timeoutMs = 30000): Promi
     return null
   }
 }
+
+/** 只接受简单 CSS 颜色值(#hex/rgb()/hsl()/命名色), 渐变/url() 等无法进 docx 的值降级舍弃。 */
+const simpleCssColor = (value: string): string => {
+  const color = String(value || '').trim()
+  if (!color || /url\(|gradient/i.test(color)) return ''
+  return /^(#|rgb|hsl|[a-z])[#a-z0-9(),.%\s-]*$/i.test(color) ? color : ''
+}
+
+/** 从原始 inline style 串里取声明值(不经过 DOM 归一化, 尽量保留作者写的 #hex)。 */
+const rawStyleValue = (style: string, prop: string): string => {
+  const re = new RegExp(`(?:^|;)\\s*${prop}\\s*:\\s*([^;]+)`, 'i')
+  return (re.exec(style)?.[1] || '').trim()
+}
+
+/**
+ * docx 导出前处理(html-docx-js 走 altChunk/MHT, Word 对 <style> 里的表格样式支持有限):
+ * - 表格补 `border/cellspacing/cellpadding` 与内联 `border-collapse`;
+ * - 单元格已有的背景色(style 的 background-color/background 或 bgcolor 属性)补齐另一种写法;
+ * - th 无背景时补默认浅灰底与加粗(与 HTML 预览观感一致);
+ * - 单元格无边框时补内联边框; colspan/rowspan 原样保留(Word 支持, 库只做 MHT 包装);
+ * 解析异常/DOMParser 不可用时原样返回, 降级不影响导出。
+ */
+export function enhanceHtmlForDocx(html: string): string {
+  let doc: Document
+  try {
+    doc = new DOMParser().parseFromString(html, 'text/html')
+  } catch {
+    return html
+  }
+  const appendStyle = (el: Element, extra: string) => {
+    const current = (el.getAttribute('style') || '').trim().replace(/;+$/, '')
+    el.setAttribute('style', current ? `${current};${extra}` : extra)
+  }
+  for (const table of Array.from(doc.querySelectorAll('table'))) {
+    if (!table.getAttribute('border')) table.setAttribute('border', '1')
+    if (!table.getAttribute('cellspacing')) table.setAttribute('cellspacing', '0')
+    if (!table.getAttribute('cellpadding')) table.setAttribute('cellpadding', '4')
+    if (!/border-collapse/i.test(table.getAttribute('style') || '')) {
+      appendStyle(table, 'border-collapse:collapse;width:100%')
+    }
+  }
+  for (const cell of Array.from(doc.querySelectorAll('td, th'))) {
+    const el = cell as HTMLElement
+    const style = el.getAttribute('style') || ''
+    const domBg = el.style.backgroundColor && el.style.backgroundColor !== 'transparent'
+      ? el.style.backgroundColor
+      : ''
+    // 原始写法优先(保留 #hex), 再退到 DOM 归一化值与 bgcolor 属性
+    const bg = simpleCssColor(rawStyleValue(style, 'background-color'))
+      || simpleCssColor(rawStyleValue(style, 'background'))
+      || simpleCssColor(domBg)
+      || simpleCssColor(el.getAttribute('bgcolor') || '')
+    const isHead = el.tagName.toLowerCase() === 'th'
+    if (bg) {
+      el.setAttribute('bgcolor', bg)
+      if (!/background(-color)?\s*:/i.test(style)) appendStyle(el, `background-color:${bg}`)
+    } else if (isHead) {
+      el.setAttribute('bgcolor', '#f8fafc')
+      if (!/background(-color)?\s*:/i.test(style)) appendStyle(el, 'background-color:#f8fafc')
+    }
+    if (!/border(-(top|right|bottom|left))?\s*:/i.test(style)) appendStyle(el, 'border:1px solid #d0d7de')
+    if (isHead && !/font-weight\s*:/i.test(style)) appendStyle(el, 'font-weight:bold')
+    for (const attr of ['colspan', 'rowspan']) {
+      const value = el.getAttribute(attr)
+      if (value && !/^\d+$/.test(value)) el.removeAttribute(attr)
+    }
+  }
+  return '<!DOCTYPE html>\n' + doc.documentElement.outerHTML
+}

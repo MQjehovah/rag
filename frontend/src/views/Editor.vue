@@ -822,8 +822,8 @@ import {
   mapLimit, renderArchivePage, rewriteAttachmentLinks, sanitizeFileSegment,
   type ArchiveTreePage, type AttachmentRef,
 } from '../utils/pageArchive'
-import { fetchAttachmentBlob, inlineImagesInHtml } from '../utils/exportAssets'
-import { extractHeadings } from '../utils/wikiAnchors'
+import { enhanceHtmlForDocx, fetchAttachmentBlob, inlineImagesInHtml } from '../utils/exportAssets'
+import { extractHeadings, markdownHeadingAnchors } from '../utils/wikiAnchors'
 import { asBlob as htmlToDocxBlob } from 'html-docx-js-typescript'
 import JSZip from 'jszip'
 import {
@@ -842,6 +842,8 @@ const exportMd = new MarkdownIt({
     return (hljs.highlightAuto(str) as any).value
   },
 }).use(taskLists, { enabled: false, label: true })
+  // 标题 id 与 extractHeadings/编辑器标题装饰同一 slug 规则(打印目录锚点跳转用)
+  .use(markdownHeadingAnchors)
 
 const route = useRoute()
 const router = useRouter()
@@ -2120,7 +2122,11 @@ const buildExportHtml = () => {
   return `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><title>${escapeHtmlText(title)}</title><style>${css}</style></head><body><h1>${escapeHtmlText(title)}</h1>${body}</body></html>`
 }
 
-/** 打印版 HTML: 正文前插入 h1-h3 大纲页 + 打印分页样式(标题不孤行/表格代码块不跨页)。 */
+/**
+ * 打印版 HTML: 正文前插入 h1-h3 大纲页(条目为锚点链接, PDF 阅读器内可点击跳转) +
+ * 打印分页样式(标题不孤行/表格代码块不跨页)。
+ * 说明: 真页码需要服务端渲染引擎(分页由排版阶段决定), 本版以内部链接替代页码列。
+ */
 const buildPrintHtml = () => {
   const title = currentPage.value?.title || '无标题'
   const content = currentPage.value?.content || ''
@@ -2130,11 +2136,12 @@ const buildPrintHtml = () => {
   })
   const headings = extractHeadings(content).filter(h => h.level <= 3)
   const outlineItems = headings
-    .map(h => `<li class="lv${h.level}"><span class="ol-text">${escapeHtmlText(h.text)}</span><span class="ol-dots"></span><span class="ol-page">&nbsp;</span></li>`)
+    .map(h => `<li class="lv${h.level}"><a class="ol-link" href="#${encodeURIComponent(h.slug)}">`
+      + `<span class="ol-text">${escapeHtmlText(h.text)}</span><span class="ol-dots"></span></a></li>`)
     .join('')
   const outline = headings.length
     ? `<section class="pdf-outline"><h1>目录</h1><ol>${outlineItems}</ol>`
-      + '<p class="pdf-outline-note">页码请在浏览器打印对话框「更多设置 → 页眉和页脚」中勾选显示。</p></section>'
+      + '<p class="pdf-outline-note">点击目录条目可跳转到对应章节（PDF 阅读器内有效）。真页码需服务端渲染引擎，本版以锚点链接替代。</p></section>'
     : ''
   const css = "body{font-family:-apple-system,'PingFang SC','Microsoft YaHei',sans-serif;max-width:820px;margin:0 auto;padding:48px 24px;color:#1f2430;line-height:1.75}"
     + "h1{font-size:32px}h2{font-size:24px;margin-top:1.2em}h3{font-size:19px}img{max-width:100%;border-radius:10px}"
@@ -2144,10 +2151,10 @@ const buildPrintHtml = () => {
     + "mark{background:#fef08a}.callout{border-left:4px solid #3b82f6;background:#eff6ff;padding:12px 16px;border-radius:10px;margin:14px 0}"
     + ".pdf-outline{page-break-after:always;break-after:page;border-bottom:1px dashed #cbd5e1;padding-bottom:24px;margin-bottom:24px}"
     + ".pdf-outline h1{font-size:26px;margin-bottom:14px}.pdf-outline ol{list-style:none;padding:0;margin:0}"
-    + ".pdf-outline li{display:flex;align-items:baseline;gap:6px;margin:7px 0;font-size:15px}"
+    + ".pdf-outline li{display:flex;align-items:baseline;margin:7px 0;font-size:15px}"
     + ".pdf-outline li.lv2{padding-left:22px}.pdf-outline li.lv3{padding-left:44px;font-size:14px;color:#475569}"
+    + ".pdf-outline .ol-link{display:flex;flex:1;align-items:baseline;gap:6px;color:inherit;text-decoration:none}"
     + ".ol-dots{flex:1;border-bottom:1px dotted #cbd5e1;transform:translateY(-3px)}"
-    + ".ol-page{min-width:34px;text-align:right;color:#64748b}"
     + ".pdf-outline-note{margin-top:16px;font-size:12px;color:#94a3b8}"
     + "@media print{@page{margin:18mm 16mm}"
     + "h1,h2,h3,h4,h5,h6{break-after:avoid;page-break-after:avoid}"
@@ -2170,7 +2177,8 @@ const exportDocx = async () => {
   exportingDocx.value = true
   try {
     const { html, inlined, skipped } = await inlineImagesInHtml(buildExportHtml())
-    const blob = await htmlToDocxBlob(html)
+    // 导出前把表格边框/底色/合并样式尽力内联(Word 对 <style> 支持有限), 库限制处自动降级
+    const blob = await htmlToDocxBlob(enhanceHtmlForDocx(html))
     if (!(blob instanceof Blob)) throw new Error('生成 docx 失败')
     downloadBlob(blob, safeFilename(currentPage.value.title) + '.docx')
     const imgHint = inlined ? `，内嵌 ${inlined} 张图片${skipped ? `（${skipped} 张失败已跳过）` : ''}` : ''
