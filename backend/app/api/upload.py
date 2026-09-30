@@ -3,6 +3,7 @@ from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 import uuid
 import io
+import re
 import hashlib
 import httpx
 from datetime import datetime
@@ -18,8 +19,25 @@ router = APIRouter(prefix="/api/upload", tags=["文件上传"])
 UPLOAD_DIR = Path("./data/uploads")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
+ATTACHMENT_DIR = Path("./data/uploads/attachments")
+ATTACHMENT_DIR.mkdir(parents=True, exist_ok=True)
+
 IMAGE_CACHE_DIR = Path("./data/image_cache")
 IMAGE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+# 非图片附件大小上限(50MB)
+MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024
+
+# 可执行类扩展名黑名单(小写比较,含脚本/安装包/动态库)
+_BLOCKED_ATTACHMENT_EXTENSIONS = {
+    ".exe", ".com", ".scr", ".pif", ".cpl", ".msi", ".msp", ".dll", ".sys",
+    ".bat", ".cmd", ".ps1", ".psm1", ".vbs", ".vbe", ".js", ".jse", ".wsf", ".wsh",
+    ".hta", ".jar", ".apk", ".app", ".sh", ".lnk", ".deb", ".rpm",
+}
+
+# 文件名中不安全/会破坏 URL 的字符:控制字符与 Windows 非法字符,另加 % # ?
+_ATTACHMENT_BAD_CHARS = re.compile(r'[<>:"|?*%#\x00-\x1f\x7f]')
+_MAX_ATTACHMENT_NAME_LENGTH = 120
 
 # 只允许位图(raster)类型。刻意排除 image/svg+xml:SVG 可内嵌脚本,
 # 同源返回会在本站点执行,造成存储型 XSS。
@@ -64,9 +82,22 @@ class SignRequest(BaseModel):
     urls: list[str] = Field(max_length=100)
 
 
+def _sign_local_upload_path(raw: str, prefix: str) -> str | None:
+    """为形状正确的本地上传路径签发签名;非法路径返回 None。
+
+    形状要求恰好两段(date_dir/file_name)且段内无穿越字符,与图片一致。
+    附件与图片共用同一签名机制,只是前缀不同。
+    """
+    rest = unquote(raw[len(prefix):]).split("?")[0]
+    parts = [p for p in rest.split("/") if p]
+    if len(parts) != 2 or any(p in ("..", ".") or "\\" in p or ".." in p for p in parts):
+        return None
+    return sign_image_url(raw, settings.image_sign_ttl_seconds)
+
+
 @router.post("/images/sign")
 def sign_images(data: SignRequest, current_user=Depends(get_current_user)):
-    """把图片地址(本地上传路径或外链)换成带签名的可用 URL。"""
+    """把上传资源地址(本地上传路径或外链)换成带签名的可用 URL。"""
     out: list[str] = []
     for raw in data.urls:
         if raw.startswith("/api/upload/images/proxy?"):
@@ -77,12 +108,10 @@ def sign_images(data: SignRequest, current_user=Depends(get_current_user)):
         elif raw.startswith("/api/upload/images/"):
             # 只给形状正确的纯本地路径签名,绝不为任何可逃逸 uploads 目录的
             # 路径签发签名(否则签名校验反而会为路径穿越"背书")。
-            rest = unquote(raw[len("/api/upload/images/"):]).split("?")[0]
-            parts = [p for p in rest.split("/") if p]
-            if len(parts) != 2 or any(p in ("..", ".") or "\\" in p or ".." in p for p in parts):
-                out.append(raw)  # 非法路径不签名
-                continue
-            out.append(sign_image_url(raw, settings.image_sign_ttl_seconds))
+            out.append(_sign_local_upload_path(raw, "/api/upload/images/") or raw)
+        elif raw.startswith("/api/upload/attachments/"):
+            # 附件与图片同款签名机制(本地存储时使用)。
+            out.append(_sign_local_upload_path(raw, "/api/upload/attachments/") or raw)
         else:
             out.append(raw)
     return {"urls": out}
@@ -145,6 +174,94 @@ def get_image(date_dir: str, file_name: str, sig: str | None = None, exp: int | 
     file_path = (UPLOAD_DIR / date_dir / file_name).resolve()
     if not file_path.is_relative_to(base) or not file_path.is_file():
         raise HTTPException(status_code=404, detail="图片不存在")
+    return FileResponse(file_path, headers={"X-Content-Type-Options": "nosniff"})
+
+
+def _sanitize_attachment_name(raw: str | None) -> str:
+    """净化原始文件名:去路径、去控制字符/非法字符、限长,只保留纯文件名。"""
+    name = (raw or "").replace("\\", "/").rsplit("/", 1)[-1]
+    name = _ATTACHMENT_BAD_CHARS.sub("_", name).strip().rstrip(". ")
+    if not name or name in (".", ".."):
+        name = "attachment"
+    if len(name) > _MAX_ATTACHMENT_NAME_LENGTH:
+        dot = name.rfind(".")
+        if 0 < dot and len(name) - dot <= 16:
+            ext = name[dot:]
+            name = name[: _MAX_ATTACHMENT_NAME_LENGTH - len(ext)] + ext
+        else:
+            name = name[:_MAX_ATTACHMENT_NAME_LENGTH]
+    return name
+
+
+async def _read_limited(file: UploadFile, max_bytes: int) -> bytes:
+    """分块读入并强制大小上限;超过即 413,避免把超大文件整体读进内存后才判断。"""
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await file.read(1024 * 1024)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > max_bytes:
+            raise HTTPException(status_code=413, detail="附件超过 50MB 大小限制")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+@router.post("/attachment")
+async def upload_attachment(file: UploadFile = File(...), current_user=Depends(get_current_user)):
+    """上传非图片附件(≤50MB)。存储与访问复用图片同一套机制(MinIO 优先,本地签名兜底)。"""
+    original_name = _sanitize_attachment_name(file.filename)
+    ext = Path(original_name).suffix.lower()
+    if ext in _BLOCKED_ATTACHMENT_EXTENSIONS:
+        raise HTTPException(status_code=400, detail="不支持上传可执行文件")
+
+    content_type = (file.content_type or "").split(";")[0].strip().lower() or "application/octet-stream"
+    file_content = await _read_limited(file, MAX_ATTACHMENT_BYTES)
+
+    date_dir = datetime.now().strftime("%Y%m%d")
+    stored_name = f"{uuid.uuid4().hex[:12]}-{original_name}"
+
+    if MINIO_AVAILABLE:
+        try:
+            client = get_minio_client()
+            object_name = f"attachments/{date_dir}/{stored_name}"
+
+            client.put_object(
+                settings.minio_bucket,
+                object_name,
+                io.BytesIO(file_content),
+                length=len(file_content),
+                content_type=content_type
+            )
+
+            scheme = "https" if settings.minio_secure else "http"
+            url = f"{scheme}://{settings.minio_endpoint}/{settings.minio_bucket}/{object_name}"
+            return {"url": url, "name": original_name, "size": len(file_content), "mime": content_type}
+        except Exception:
+            pass
+
+    date_path = ATTACHMENT_DIR / date_dir
+    date_path.mkdir(parents=True, exist_ok=True)
+
+    file_path = date_path / stored_name
+    with open(file_path, "wb") as f:
+        f.write(file_content)
+
+    url = f"{settings.public_base_path}/api/upload/attachments/{date_dir}/{stored_name}"
+    return {"url": url, "name": original_name, "size": len(file_content), "mime": content_type}
+
+
+@router.get("/attachments/{date_dir}/{file_name}")
+def get_attachment(date_dir: str, file_name: str, sig: str | None = None, exp: int | None = None):
+    """下载附件。与图片一致:HMAC 签名 + 真实解析后的目录包含性校验。"""
+    signed_path = f"/api/upload/attachments/{date_dir}/{file_name}"
+    if not verify_image_signature(signed_path, sig, exp):
+        raise HTTPException(status_code=403, detail="附件签名无效或已过期")
+    base = ATTACHMENT_DIR.resolve()
+    file_path = (ATTACHMENT_DIR / date_dir / file_name).resolve()
+    if not file_path.is_relative_to(base) or not file_path.is_file():
+        raise HTTPException(status_code=404, detail="附件不存在")
     return FileResponse(file_path, headers={"X-Content-Type-Options": "nosniff"})
 
 
