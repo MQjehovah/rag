@@ -602,6 +602,7 @@ let provider: WebsocketProvider | null = null
 let collabSynced = false
 let collabSeedDone = false
 let collabSyncTimer: number | null = null
+let collabSeedTimer: number | null = null
 /** 同步完成前收到的外部内容(恢复版本/草稿), 同步后应用 */
 let pendingExternal: string | null = null
 const collabExtensions: any[] = []
@@ -660,16 +661,25 @@ if (provider) {
 
 function seedCollabIfEmpty() {
   if (!props.collab || !ydoc || !editor.value || !collabSynced || collabSeedDone) return
-  try {
-    if (ydoc.getXmlFragment('default').length > 0) {
+  if (collabSeedTimer !== null) return
+  // F4: 双端几乎同时打开同一空页面时会各自看到空文档而同时播种, 造成内容翻倍。
+  // 先随机延迟 300-800ms 再复查"仍为空", 给对端播种留出到达时间, 显著收窄同时播种窗口
+  // (残留风险: 两端网络时延差超过延迟窗口时仍可能双播, 不做内容哈希级别的强一致)。
+  const delay = 300 + Math.floor(Math.random() * 500)
+  collabSeedTimer = window.setTimeout(() => {
+    collabSeedTimer = null
+    if (!props.collab || !ydoc || !editor.value || !collabSynced || collabSeedDone) return
+    try {
+      if (ydoc.getXmlFragment('default').length > 0) {
+        collabSeedDone = true
+        return
+      }
+      const markdown = props.modelValue
+      if (!markdown) return
       collabSeedDone = true
-      return
-    }
-    const markdown = props.modelValue
-    if (!markdown) return
-    collabSeedDone = true
-    editor.value.commands.setContent(markdown, false)
-  } catch { /* ignore */ }
+      editor.value.commands.setContent(markdown, false)
+    } catch { /* ignore */ }
+  }, delay)
 }
 
 /**
@@ -1647,7 +1657,10 @@ const editor = useEditor({
   onUpdate: ({ editor }) => {
     const markdown = editor.storage.markdown.getMarkdown()
     lastEmitted = markdown
-    if (!applyingExternal) emit('update:modelValue', markdown)
+    // F2: y-websocket 会先应用服务器 sync 更新再置 collabSynced, 首帧事务落在这个窗口;
+    // 此时仅更新 lastEmitted, 不向外 emit, 避免触发自动保存用同步中的内容覆盖服务器。
+    // 同步完成后的正常编辑照常 emit。
+    if (!applyingExternal && !(props.collab && !collabSynced)) emit('update:modelValue', markdown)
     if (find.open) refreshFind()
     nextTick(() => { scheduleMermaid(); disableSpellcheck() })
   },
@@ -2575,6 +2588,10 @@ onBeforeUnmount(() => {
   if (collabSyncTimer) {
     clearTimeout(collabSyncTimer)
     collabSyncTimer = null
+  }
+  if (collabSeedTimer) {
+    clearTimeout(collabSeedTimer)
+    collabSeedTimer = null
   }
   provider?.awareness.off('change', emitCollabUsers)
   editor.value?.destroy()
