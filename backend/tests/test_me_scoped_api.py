@@ -9,6 +9,7 @@ from app.models.database import (
     UserPageFavorite,
     UserRecentPage,
     UserTemplate,
+    UserTemplateRevision,
     get_session,
 )
 
@@ -265,6 +266,148 @@ def test_templates_visibility_validation_and_put_semantics(api_client, api_engin
     assert down["visibility"] == "private"
 
 
+def test_template_revision_snapshot_on_update_and_prune(api_client, api_engine, as_user):
+    _seed(api_engine)
+    _login_a(as_user)
+    t = api_client.post("/api/me/templates", json={"name": "tpl", "content": "v0"}).json()
+    tid = t["id"]
+    # 无修订时列表为空; 模板不存在 → 404
+    assert api_client.get(f"/api/me/templates/{tid}/revisions").json()["items"] == []
+    assert api_client.get("/api/me/templates/t-nope/revisions").status_code == 404
+
+    # 更新前把旧版本存成快照
+    api_client.put(f"/api/me/templates/{tid}", json={"name": "tpl", "content": "v1"})
+    revs = api_client.get(f"/api/me/templates/{tid}/revisions").json()["items"]
+    assert len(revs) == 1
+    assert revs[0]["name"] == "tpl" and revs[0]["content_preview"] == "v0"
+    assert revs[0]["content_truncated"] is False
+
+    # 长内容预览截断为 500 字
+    api_client.put(f"/api/me/templates/{tid}", json={"name": "tpl", "content": "长" * 600})
+    api_client.put(f"/api/me/templates/{tid}", json={"name": "tpl", "content": "v2"})
+    revs = api_client.get(f"/api/me/templates/{tid}/revisions").json()["items"]
+    assert len(revs) == 3
+    assert len(revs[0]["content_preview"]) == 500 and revs[0]["content_truncated"] is True
+
+    # 预置 25 条历史(时间递增), 再更新一次 → 共 26 条剪枝到 20, 删最旧 6 条
+    db = get_session(api_engine)
+    try:
+        db.query(UserTemplateRevision).filter(
+            UserTemplateRevision.template_id == tid
+        ).delete(synchronize_session=False)
+        base = datetime.now() - timedelta(days=1)
+        for i in range(25):
+            db.add(UserTemplateRevision(
+                id=f"rev-{i:02d}", template_id=tid, user_id="u-a",
+                name=f"r{i}", content=f"c{i}",
+                created_at=base + timedelta(minutes=i),
+            ))
+        db.commit()
+    finally:
+        db.close()
+
+    api_client.put(f"/api/me/templates/{tid}", json={"name": "tpl", "content": "v3"})
+    db = get_session(api_engine)
+    try:
+        rows = db.query(UserTemplateRevision).filter(UserTemplateRevision.template_id == tid).all()
+    finally:
+        db.close()
+    assert len(rows) == 20
+    by_id = {r.id: r for r in rows}
+    assert "rev-00" not in by_id and "rev-05" not in by_id  # 最旧 6 条被删
+    assert all(f"rev-{i:02d}" in by_id for i in range(6, 25))
+    snapshots = [r for r in rows if not r.id.startswith("rev-")]
+    assert len(snapshots) == 1
+    assert snapshots[0].name == "tpl" and snapshots[0].content == "v2"  # 更新前快照
+
+
+def test_template_revision_restore(api_client, api_engine, as_user):
+    _seed(api_engine)
+    _login_a(as_user)
+    t = api_client.post("/api/me/templates", json={"name": "模板", "content": "第一版"}).json()
+    tid = t["id"]
+    api_client.put(f"/api/me/templates/{tid}", json={"name": "模板V2", "content": "第二版"})
+    api_client.put(f"/api/me/templates/{tid}", json={"name": "模板V3", "content": "第三版"})
+    # 固定时间保证列表倒序确定
+    db = get_session(api_engine)
+    try:
+        base = datetime.now() - timedelta(hours=1)
+        db.query(UserTemplateRevision).filter(
+            UserTemplateRevision.template_id == tid, UserTemplateRevision.content == "第一版"
+        ).update({UserTemplateRevision.created_at: base}, synchronize_session=False)
+        db.query(UserTemplateRevision).filter(
+            UserTemplateRevision.template_id == tid, UserTemplateRevision.content == "第二版"
+        ).update({UserTemplateRevision.created_at: base + timedelta(minutes=1)},
+                 synchronize_session=False)
+        db.commit()
+    finally:
+        db.close()
+    revs = api_client.get(f"/api/me/templates/{tid}/revisions").json()["items"]
+    assert [r["content_preview"] for r in revs] == ["第二版", "第一版"]
+
+    # 恢复最早那版: 先存当前(第三版)快照, 再覆盖模板
+    res = api_client.post(f"/api/me/templates/{tid}/revisions/{revs[1]['id']}/restore")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["name"] == "模板" and body["content"] == "第一版"
+    revs2 = api_client.get(f"/api/me/templates/{tid}/revisions").json()["items"]
+    assert len(revs2) == 3
+    assert revs2[0]["name"] == "模板V3" and revs2[0]["content_preview"] == "第三版"
+
+    # 不存在的修订 → 404; 修订不属于该模板 → 404; 空模板无修订
+    assert api_client.post(f"/api/me/templates/{tid}/revisions/r-nope/restore").status_code == 404
+    t2 = api_client.post("/api/me/templates", json={"name": "另一个", "content": "x"}).json()
+    assert api_client.get(f"/api/me/templates/{t2['id']}/revisions").json()["items"] == []
+    assert api_client.post(
+        f"/api/me/templates/{t2['id']}/revisions/{revs[0]['id']}/restore"
+    ).status_code == 404
+
+
+def test_template_revisions_cross_user_404(api_client, api_engine, as_user):
+    """他人模板(即使 public)的修订列表/恢复一律 404。"""
+    _seed(api_engine)
+    _login_a(as_user)
+    t = api_client.post("/api/me/templates", json={
+        "name": "公开模板", "content": "v1", "visibility": "public",
+    }).json()
+    api_client.put(f"/api/me/templates/{t['id']}", json={"name": "公开模板", "content": "v2"})
+    rid = api_client.get(f"/api/me/templates/{t['id']}/revisions").json()["items"][0]["id"]
+
+    _login_b(as_user)
+    assert api_client.get(f"/api/me/templates/{t['id']}/revisions").status_code == 404
+    assert api_client.post(
+        f"/api/me/templates/{t['id']}/revisions/{rid}/restore"
+    ).status_code == 404
+
+    # A 自己仍可见(修订未被 B 的操作影响)
+    _login_a(as_user)
+    assert len(api_client.get(f"/api/me/templates/{t['id']}/revisions").json()["items"]) == 1
+
+
+def test_template_revision_cascade_on_delete(api_client, api_engine, as_user):
+    """删除模板时其修订一并清理。"""
+    _seed(api_engine)
+    _login_a(as_user)
+    t = api_client.post("/api/me/templates", json={"name": "t", "content": "v0"}).json()
+    api_client.put(f"/api/me/templates/{t['id']}", json={"name": "t", "content": "v1"})
+    api_client.put(f"/api/me/templates/{t['id']}", json={"name": "t", "content": "v2"})
+    db = get_session(api_engine)
+    try:
+        assert db.query(UserTemplateRevision).filter(
+            UserTemplateRevision.template_id == t["id"]
+        ).count() == 2
+    finally:
+        db.close()
+    assert api_client.delete(f"/api/me/templates/{t['id']}").json() == {"ok": True}
+    db = get_session(api_engine)
+    try:
+        assert db.query(UserTemplateRevision).filter(
+            UserTemplateRevision.template_id == t["id"]
+        ).count() == 0
+    finally:
+        db.close()
+
+
 def test_user_templates_visibility_migration_idempotent(tmp_path):
     """旧库缺 visibility 列: 幂等迁移补列并回填 private, 重跑无副作用。"""
     from sqlalchemy import create_engine, inspect, text
@@ -415,6 +558,8 @@ def test_me_endpoints_require_auth(api_client):
         ("post", "/api/me/templates", {"name": "t", "content": ""}),
         ("put", "/api/me/templates/t-1", {"name": "t", "content": ""}),
         ("delete", "/api/me/templates/t-1", None),
+        ("get", "/api/me/templates/t-1/revisions", None),
+        ("post", "/api/me/templates/t-1/revisions/r-1/restore", None),
         ("get", "/api/me/chat-messages", None),
         ("post", "/api/me/chat-messages", {"role": "user", "content": "x"}),
         ("delete", "/api/me/chat-messages", None),

@@ -395,6 +395,18 @@ class UserTemplate(Base):
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 
 
+class UserTemplateRevision(Base):
+    """笔记模板的历史修订快照(更新/恢复模板前存旧版本; 每模板仅保留最近若干条)。"""
+    __tablename__ = 'user_template_revisions'
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    template_id = Column(String(36), ForeignKey('user_templates.id', ondelete='CASCADE'), nullable=False, index=True)
+    user_id = Column(String(36), ForeignKey('users.id', ondelete='CASCADE'), nullable=False, index=True)
+    name = Column(String(255), nullable=False, default='')
+    content = Column(Text, default='')
+    created_at = Column(DateTime, default=datetime.now, index=True)
+
+
 class UserChatMessage(Base):
     """用户聊天记录(单线程, 服务端按 user_id 隔离, 替代前端 localStorage)。"""
     __tablename__ = 'user_chat_messages'

@@ -25,6 +25,7 @@ from app.models.database import (
     UserPageFavorite,
     UserRecentPage,
     UserTemplate,
+    UserTemplateRevision,
 )
 
 router = APIRouter(prefix="/api/me", tags=["用户数据"])
@@ -36,6 +37,10 @@ CHAT_LIMIT_MAX = 500
 TEMPLATE_NAME_MAX = 128
 TEMPLATE_CONTENT_MAX = 200_000
 TEMPLATE_VISIBILITIES = ("private", "public")
+# 每模板保留的最近修订数(超出删最旧)
+TEMPLATE_REVISION_LIMIT = 20
+# 修订列表返回的内容预览截断长度
+TEMPLATE_REVISION_PREVIEW_MAX = 500
 CHAT_CONTENT_MAX = 100_000
 CHAT_SOURCES_MAX = 200_000
 CHAT_ROLES = ("user", "assistant")
@@ -258,6 +263,55 @@ def _user_display_name(user: Optional[dict]) -> str:
     return user.get("name") or user.get("username") or ""
 
 
+def _get_own_template_or_404(db: Session, current_user, template_id: str) -> UserTemplate:
+    """仅本人模板可读写, 不命中(含他人 public)一律 404。"""
+    t = (
+        db.query(UserTemplate)
+        .filter(UserTemplate.id == template_id, UserTemplate.user_id == current_user["id"])
+        .first()
+    )
+    if t is None:
+        raise HTTPException(status_code=404, detail="模板不存在")
+    return t
+
+
+def _prune_template_revisions(db: Session, template_id: str):
+    """每模板仅保留最近 TEMPLATE_REVISION_LIMIT 条修订, 超出删最旧。"""
+    rows = (
+        db.query(UserTemplateRevision.id)
+        .filter(UserTemplateRevision.template_id == template_id)
+        .order_by(UserTemplateRevision.created_at.desc(), UserTemplateRevision.id.desc())
+        .all()
+    )
+    excess = [rid for (rid,) in rows[TEMPLATE_REVISION_LIMIT:]]
+    if excess:
+        db.query(UserTemplateRevision).filter(UserTemplateRevision.id.in_(excess)).delete(
+            synchronize_session=False
+        )
+
+
+def _snapshot_template_revision(db: Session, t: UserTemplate):
+    """把模板当前 name/content 存成一条修订快照, 并存后剪枝。"""
+    db.add(UserTemplateRevision(
+        id=str(uuid.uuid4()),
+        template_id=t.id,
+        user_id=t.user_id,
+        name=t.name or "",
+        content=t.content or "",
+    ))
+    db.flush()  # 先落库, 剪枝排序才能看到新快照
+    _prune_template_revisions(db, t.id)
+
+
+def _revision_out(r: UserTemplateRevision, preview: bool = False) -> dict:
+    out = {"id": r.id, "name": r.name or "", "created_at": r.created_at}
+    if preview:
+        content = r.content or ""
+        out["content_preview"] = content[:TEMPLATE_REVISION_PREVIEW_MAX]
+        out["content_truncated"] = len(content) > TEMPLATE_REVISION_PREVIEW_MAX
+    return out
+
+
 @router.get("/templates")
 def list_templates(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     """本人全部模板 + 他人 public 模板(带 owner/is_mine 标记, 共享条目只读)。"""
@@ -306,13 +360,9 @@ def update_template(template_id: str, body: TemplateBody, db: Session = Depends(
                     current_user=Depends(get_current_user)):
     name, content = _validate_template(body.name, body.content)
     visibility = _validate_template_visibility(body.visibility) if body.visibility is not None else None
-    t = (
-        db.query(UserTemplate)
-        .filter(UserTemplate.id == template_id, UserTemplate.user_id == current_user["id"])
-        .first()
-    )
-    if t is None:
-        raise HTTPException(status_code=404, detail="模板不存在")
+    t = _get_own_template_or_404(db, current_user, template_id)
+    # 更新前把旧版本存一条修订(恢复也走这里覆盖)
+    _snapshot_template_revision(db, t)
     t.name = name
     t.content = content
     if visibility is not None:
@@ -323,16 +373,53 @@ def update_template(template_id: str, body: TemplateBody, db: Session = Depends(
     return _template_out(t, owner=_user_display_name(current_user), is_mine=True)
 
 
+@router.get("/templates/{template_id}/revisions")
+def list_template_revisions(template_id: str, db: Session = Depends(get_db),
+                            current_user=Depends(get_current_user)):
+    """本人模板的修订列表(时间倒序; content 以截断预览返回, 避免整表传输)。"""
+    t = _get_own_template_or_404(db, current_user, template_id)
+    rows = (
+        db.query(UserTemplateRevision)
+        .filter(UserTemplateRevision.template_id == t.id)
+        .order_by(UserTemplateRevision.created_at.desc(), UserTemplateRevision.id.desc())
+        .all()
+    )
+    return {"items": [_revision_out(r, preview=True) for r in rows]}
+
+
+@router.post("/templates/{template_id}/revisions/{revision_id}/restore")
+def restore_template_revision(template_id: str, revision_id: str, db: Session = Depends(get_db),
+                              current_user=Depends(get_current_user)):
+    """恢复某修订: 先把当前版本存快照, 再以该修订覆盖模板 name/content。"""
+    t = _get_own_template_or_404(db, current_user, template_id)
+    r = (
+        db.query(UserTemplateRevision)
+        .filter(
+            UserTemplateRevision.id == revision_id,
+            UserTemplateRevision.template_id == t.id,
+            UserTemplateRevision.user_id == current_user["id"],
+        )
+        .first()
+    )
+    if r is None:
+        raise HTTPException(status_code=404, detail="版本不存在")
+    _snapshot_template_revision(db, t)
+    t.name = r.name or ""
+    t.content = r.content or ""
+    t.updated_at = datetime.now()
+    db.commit()
+    db.refresh(t)
+    return _template_out(t, owner=_user_display_name(current_user), is_mine=True)
+
+
 @router.delete("/templates/{template_id}")
 def delete_template(template_id: str, db: Session = Depends(get_db),
                     current_user=Depends(get_current_user)):
-    t = (
-        db.query(UserTemplate)
-        .filter(UserTemplate.id == template_id, UserTemplate.user_id == current_user["id"])
-        .first()
+    t = _get_own_template_or_404(db, current_user, template_id)
+    # SQLite 默认不启用外键级联, 手动清理修订(与 FK ondelete CASCADE 双保险)
+    db.query(UserTemplateRevision).filter(UserTemplateRevision.template_id == t.id).delete(
+        synchronize_session=False
     )
-    if t is None:
-        raise HTTPException(status_code=404, detail="模板不存在")
     db.delete(t)
     db.commit()
     return {"ok": True}
