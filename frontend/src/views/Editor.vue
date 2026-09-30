@@ -416,6 +416,7 @@
               @collab-users="collabUsers = $event"
               @collab-status="collabConnected = $event"
               @collab-unavailable="handleCollabUnavailable"
+              @wiki-link="onWikiLink"
             />
           </div>
           <div class="editor-footer">
@@ -1316,7 +1317,7 @@ const selectPage = async (page: PageListItem) => {
   }
 }
 
-const openPageById = async (pageId: string) => {
+const openPageById = async (pageId: string, anchor = '') => {
   if (getCachedCollabProbe() === null) await ensureCollabReady()
   currentPage.value = { id: pageId, notebook_id: null, title: '加载中...', content: '', icon: '', cover: '', updated_at: '' }
   pageLoading.value = true
@@ -1331,6 +1332,7 @@ const openPageById = async (pageId: string) => {
     const page = res.data
     currentPage.value = page
     void maybeOfferDraft(page)
+    if (anchor) scrollToAnchorInEditor(anchor)
     if (page.notebook_id) {
       const nb = notebooks.value.find(n => n.id === page.notebook_id)
       if (nb) {
@@ -1347,6 +1349,41 @@ const openPageById = async (pageId: string) => {
       loadAbort = null
     }
   }
+}
+
+/**
+ * [[页面#锚点]] 点击后滚动定位: 编辑器标题 id 由 TipTapEditor 装饰生成,
+ * 页面切换后组件重挂载, 用有限重试等待标题渲染完成。
+ */
+const scrollToAnchorInEditor = (anchor: string) => {
+  const slug = String(anchor || '').trim()
+  if (!slug) return
+  let attempts = 0
+  const tryScroll = () => {
+    attempts++
+    let el: HTMLElement | null = null
+    try {
+      el = document.querySelector(`.ProseMirror [id="${CSS.escape(slug)}"]`) as HTMLElement | null
+    } catch { /* ignore */ }
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      el.classList.add('wiki-anchor-flash')
+      window.setTimeout(() => el?.classList.remove('wiki-anchor-flash'), 1700)
+      return
+    }
+    if (attempts < 30) window.setTimeout(tryScroll, 150)
+  }
+  tryScroll()
+}
+
+/** 编辑器内点击 [[页面#锚点]]: 同页直接滚动, 跨页打开目标页后定位 */
+const onWikiLink = async (payload: { pageId: string; title: string; anchor: string }) => {
+  if (!payload?.pageId) return
+  if (currentPage.value?.id === payload.pageId) {
+    scrollToAnchorInEditor(payload.anchor)
+    return
+  }
+  await openPageById(payload.pageId, payload.anchor)
 }
 
 /** 切换页面时重置保存状态与在线列表(避免上一页状态残留)。 */

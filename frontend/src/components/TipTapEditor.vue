@@ -1,5 +1,5 @@
 <template>
-  <div class="tiptap-editor" :class="prefClasses" @mousemove="onEditorMouseMove" @mouseleave="onEditorMouseLeave" @contextmenu="onTableContextMenu">
+  <div class="tiptap-editor" :class="prefClasses" @mousemove="onEditorMouseMove" @mouseleave="onEditorMouseLeave" @mouseover="onEditorMouseOver" @contextmenu="onTableContextMenu">
     <!-- 工具栏 -->
     <div class="editor-toolbar" v-if="editor">
       <select class="tb-select" :value="headingValue" @change="setHeading" title="段落样式">
@@ -254,7 +254,7 @@
       </div>
     </Teleport>
 
-    <!-- [[ 页面提及 -->
+    <!-- [[ 页面提及 / 标题(锚点)补全 -->
     <Teleport to="body">
       <div
         v-if="mention.open && mention.items.length"
@@ -262,7 +262,7 @@
         :style="{ top: mention.y + 'px', left: mention.x + 'px' }"
         @mousedown.prevent
       >
-        <div class="slash-header">链接到页面</div>
+        <div class="slash-header">{{ mention.mode === 'heading' ? '链接到标题' : '链接到页面' }}</div>
         <div
           v-for="(item, i) in mention.items"
           :key="item.id"
@@ -271,11 +271,29 @@
           @mouseenter="mention.index = i"
           @click="pickMention(i)"
         >
-          <span class="slash-icon">📄</span>
-          <span class="slash-text"><span class="slash-title">{{ item.title }}</span></span>
+          <span class="slash-icon">{{ item.kind === 'heading' ? 'H' + item.level : '📄' }}</span>
+          <span class="slash-text">
+            <span class="slash-title">{{ item.title }}</span>
+            <span v-if="item.kind === 'heading'" class="slash-desc">#{{ item.slug }}</span>
+          </span>
         </div>
       </div>
     </Teleport>
+
+    <!-- wiki-link 悬浮预览(页面标题 + 摘要/锚点段落) -->
+    <el-popover
+      :visible="wikiPreview.visible"
+      :virtual-ref="wikiPreviewRef"
+      virtual-triggering
+      placement="top"
+      :width="340"
+      :show-arrow="true"
+    >
+      <div class="wiki-preview">
+        <div class="wiki-preview-title">{{ wikiPreview.title }}</div>
+        <div class="wiki-preview-snippet">{{ wikiPreview.snippet }}</div>
+      </div>
+    </el-popover>
 
     <!-- @ 用户提及 -->
     <Teleport to="body">
@@ -340,7 +358,7 @@
 </template>
 
 <script setup lang="ts">
-import { watch, ref, computed, reactive, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { watch, ref, computed, reactive, onMounted, onBeforeUnmount, nextTick, shallowRef } from 'vue'
 import { useEditor, EditorContent, VueNodeViewRenderer, BubbleMenu } from '@tiptap/vue-3'
 import { Extension } from '@tiptap/core'
 import Suggestion from '@tiptap/suggestion'
@@ -386,6 +404,10 @@ import FootnoteBlockView from './FootnoteBlockView.vue'
 import { Attachment, Callout, Toggle } from './editorExt'
 import { MathBlock, MathInline } from './editorMath'
 import { FootnoteItem, FootnoteRef, Footnotes } from './editorFootnotes'
+import {
+  createHeadingSlugger, extractHeadingSection, extractHeadings, findWikiSuggestionMatch,
+  markdownSnippet, parseWikiMentionQuery, splitWikiTarget,
+} from '../utils/wikiAnchors'
 import { Markdown } from 'tiptap-markdown'
 import 'katex/dist/katex.min.css'
 import * as Y from 'yjs'
@@ -545,6 +567,7 @@ const emit = defineEmits<{
   (e: 'collab-users', users: CollabPeer[]): void
   (e: 'collab-status', connected: boolean): void
   (e: 'collab-unavailable'): void
+  (e: 'wiki-link', payload: { pageId: string; title: string; anchor: string }): void
 }>()
 
 let lastEmitted = props.modelValue
@@ -769,19 +792,103 @@ const SlashCommand = Extension.create({
   },
 })
 
-// ---------------- [[ 页面提及 ----------------
-const mention = reactive({ open: false, items: [] as { id: string; title: string }[], index: 0, x: 0, y: 0 })
-let mentionCommand: ((item: { id: string; title: string }) => void) | null = null
+// ---------------- [[ 页面提及 / [[页面#标题]] 标题补全 ----------------
+interface MentionItem {
+  id: string
+  title: string
+  kind: 'page' | 'heading'
+  level?: number
+  pageId?: string
+  pageTitle?: string
+  slug?: string
+}
+
+const mention = reactive({
+  open: false,
+  items: [] as MentionItem[],
+  index: 0,
+  x: 0,
+  y: 0,
+  mode: 'page' as 'page' | 'heading',
+})
+let mentionCommand: ((item: MentionItem) => void) | null = null
 let mentionPages: { id: string; title: string }[] = []
 let mentionLoaded = false
+/** 标题按需拉取(选中页面后输入 # 才请求), 按页面 id 缓存 */
+const headingCache = new Map<string, { level: number; text: string; slug: string }[]>()
+/** 标题 -> 页面 id(用于 wiki-link 装饰与点击解析, 标题重复取第一个) */
+const mentionPageByTitle = new Map<string, string>()
 
 async function ensureMentionPages() {
   if (mentionLoaded) return
   try {
     const res = await http.get('/api/pages', { params: { page: 1, page_size: 500 } })
     mentionPages = (res.data.items || []).map((p: any) => ({ id: p.id, title: p.title || '无标题' }))
+    mentionPageByTitle.clear()
+    for (const p of mentionPages) {
+      const key = p.title.toLowerCase()
+      if (!mentionPageByTitle.has(key)) mentionPageByTitle.set(key, p.id)
+    }
     mentionLoaded = true
+    refreshWikiLinkDecorations()
   } catch { /* ignore */ }
+}
+
+function findMentionPage(title: string): { id: string; title: string } | null {
+  const q = String(title || '').trim().toLowerCase()
+  if (!q) return null
+  const exact = mentionPages.find(p => p.title.toLowerCase() === q)
+  if (exact) return exact
+  const prefixed = mentionPages.filter(p => p.title.toLowerCase().startsWith(q))
+  return prefixed.length === 1 ? prefixed[0] : null
+}
+
+async function loadPageHeadings(pageId: string) {
+  const cached = headingCache.get(pageId)
+  if (cached) return cached
+  try {
+    const res = await http.get(`/api/pages/${pageId}`)
+    const list = extractHeadings(String(res.data?.content || ''))
+    headingCache.set(pageId, list)
+    return list
+  } catch {
+    return []
+  }
+}
+
+async function mentionItems(query: string): Promise<MentionItem[]> {
+  await ensureMentionPages()
+  const parsed = parseWikiMentionQuery(query)
+  if (parsed.anchorPart !== null) {
+    const page = findMentionPage(parsed.pagePart)
+    if (!page) return []
+    const headings = await loadPageHeadings(page.id)
+    const q = parsed.anchorPart.toLowerCase()
+    // 选择/输入完成后(链接已闭合且锚点精确命中)关闭菜单
+    if (parsed.complete && q && headings.some(h => h.slug === q)) return []
+    return headings
+      .filter(h => !q || h.text.toLowerCase().includes(q) || h.slug.includes(q))
+      .slice(0, 20)
+      .map(h => ({
+        id: `${page.id}#${h.slug}`,
+        title: h.text,
+        kind: 'heading' as const,
+        level: h.level,
+        pageId: page.id,
+        pageTitle: page.title,
+        slug: h.slug,
+      }))
+  }
+  const q = parsed.pagePart.toLowerCase()
+  if (parsed.complete && q && mentionPages.some(p => p.title.toLowerCase() === q)) return []
+  return mentionPages
+    .filter(p => !q || p.title.toLowerCase().includes(q))
+    .slice(0, 20)
+    .map(p => ({ id: p.id, title: p.title, kind: 'page' as const }))
+}
+
+function mentionModeOf(query: string): 'page' | 'heading' {
+  return parseWikiMentionQuery(query).anchorPart !== null ? 'heading' : 'page'
 }
 
 function pickMention(i: number) {
@@ -800,19 +907,26 @@ const PageMention = Extension.create({
         char: '[[',
         startOfLine: false,
         allowSpaces: false,
-        items: async ({ query }: { query: string }) => {
-          await ensureMentionPages()
-          const q = (query || '').trim().toLowerCase()
-          if (!q) return mentionPages.slice(0, 20)
-          return mentionPages.filter(p => p.title.toLowerCase().includes(q)).slice(0, 20)
-        },
+        findSuggestionMatch: findWikiSuggestionMatch,
+        items: async ({ query }: { query: string }) => mentionItems(query),
         command: ({ editor, range, props: item }: any) => {
-          editor.chain().focus().deleteRange(range).insertContent({ type: 'text', text: `[[${item.title}]]` }).run()
+          if (item.kind === 'heading') {
+            editor.chain().focus().deleteRange(range)
+              .insertContent({ type: 'text', text: `[[${item.pageTitle}#${item.slug}]]` })
+              .run()
+            return
+          }
+          // 插入完整链接, 光标停在 ]] 之前: 继续输入 # 即可进入标题列表
+          editor.chain().focus().deleteRange(range)
+            .insertContent({ type: 'text', text: `[[${item.title}]]` })
+            .setTextSelection(range.from + 2 + String(item.title).length)
+            .run()
         },
         render: () => ({
           onStart: (p: any) => {
             mention.items = p.items || []
             mention.index = 0
+            mention.mode = mentionModeOf(p.query || '')
             mention.open = mention.items.length > 0
             mentionCommand = (it: any) => p.command(it)
             const rect = p.clientRect?.()
@@ -821,6 +935,7 @@ const PageMention = Extension.create({
           onUpdate: (p: any) => {
             mention.items = p.items || []
             mention.index = 0
+            mention.mode = mentionModeOf(p.query || '')
             mention.open = mention.items.length > 0
             mentionCommand = (it: any) => p.command(it)
             const rect = p.clientRect?.()
@@ -840,6 +955,127 @@ const PageMention = Extension.create({
     ]
   },
 })
+
+// ---------------- 编辑器内 wiki-link: 标题 id / [[链接]] 装饰 / 点击跳转 / 悬浮预览 ----------------
+const wikiLinkKey = new PluginKey('ragWikiLinks')
+const headingAnchorKey = new PluginKey('ragHeadingAnchors')
+const WIKI_LINK_RE = /\[\[([^[\]\n]+?)\]\]/g
+
+/** 顶层 h1-h6 生成稳定 id(slug + 序号去重), 供 [[页面#锚点]] 滚动定位 */
+const headingAnchorPlugin = new Plugin({
+  key: headingAnchorKey,
+  props: {
+    decorations(state) {
+      const decos: Decoration[] = []
+      const slugger = createHeadingSlugger()
+      state.doc.forEach((node, offset) => {
+        if (node.type.name !== 'heading' || !node.textContent.trim()) return
+        decos.push(Decoration.node(offset, offset + node.nodeSize, { id: slugger(node.textContent) }))
+      })
+      return decos.length ? DecorationSet.create(state.doc, decos) : null
+    },
+  },
+})
+
+/** [[页面]] / [[页面#锚点]] 装饰为可点击的 .wiki-link(内容保持纯文本, 往返不变) */
+const wikiLinkPlugin = new Plugin({
+  key: wikiLinkKey,
+  props: {
+    decorations(state) {
+      const decos: Decoration[] = []
+      state.doc.descendants((node, pos) => {
+        if (!node.isText || !node.text) return
+        WIKI_LINK_RE.lastIndex = 0
+        let m: RegExpExecArray | null
+        while ((m = WIKI_LINK_RE.exec(node.text))) {
+          const { title, anchor } = splitWikiTarget(m[1])
+          if (!title) continue
+          const id = mentionPageByTitle.get(title.toLowerCase()) || ''
+          const from = pos + m.index
+          decos.push(Decoration.inline(from, from + m[0].length, {
+            class: id ? 'wiki-link' : 'wiki-link wiki-link-missing',
+            'data-id': id,
+            'data-anchor': anchor,
+            'data-wiki-title': title,
+          }))
+        }
+      })
+      return decos.length ? DecorationSet.create(state.doc, decos) : null
+    },
+  },
+})
+
+/** 页面列表异步到达后触发一次无步骤事务, 刷新装饰里的 标题→id 映射 */
+function refreshWikiLinkDecorations() {
+  const e = editor.value
+  if (!e) return
+  e.view.dispatch(e.state.tr.setMeta(wikiLinkKey, Date.now()))
+}
+
+const wikiPreview = reactive({ visible: false, title: '', snippet: '' })
+const wikiPreviewRef = shallowRef<HTMLElement>()
+const wikiPageCache = new Map<string, { title: string; content: string }>()
+let wikiPreviewSeq = 0
+
+async function resolveWikiPageId(el: HTMLElement, title: string): Promise<string> {
+  let id = el.getAttribute('data-id') || ''
+  if (!id) {
+    await ensureMentionPages()
+    id = mentionPageByTitle.get(title.toLowerCase()) || ''
+  }
+  return id
+}
+
+async function showWikiPreview(el: HTMLElement) {
+  const title = el.getAttribute('data-wiki-title') || el.textContent || ''
+  const anchor = el.getAttribute('data-anchor') || ''
+  wikiPreviewRef.value = el
+  wikiPreview.title = title
+  wikiPreview.snippet = '加载中…'
+  wikiPreview.visible = true
+  const seq = ++wikiPreviewSeq
+  try {
+    const id = await resolveWikiPageId(el, title)
+    if (!id) throw new Error('missing')
+    let data = wikiPageCache.get(id)
+    if (!data) {
+      const res = await http.get(`/api/pages/${id}`)
+      data = { title: res.data?.title || title, content: String(res.data?.content || '') }
+      wikiPageCache.set(id, data)
+    }
+    if (seq !== wikiPreviewSeq || !wikiPreview.visible) return
+    wikiPreview.title = data.title
+    wikiPreview.snippet = anchor
+      ? (extractHeadingSection(data.content, anchor) || markdownSnippet(data.content))
+      : markdownSnippet(data.content)
+  } catch {
+    // 加载失败静默关闭
+    if (seq === wikiPreviewSeq) wikiPreview.visible = false
+  }
+}
+
+function hideWikiPreview() {
+  wikiPreviewSeq++
+  wikiPreview.visible = false
+}
+
+function onEditorMouseOver(ev: MouseEvent) {
+  const link = (ev.target as HTMLElement | null)?.closest?.('.wiki-link') as HTMLElement | null
+  if (!link || !editor.value?.view.dom.contains(link)) return
+  if (wikiPreview.visible && wikiPreviewRef.value === link) return
+  void showWikiPreview(link)
+}
+
+async function openWikiLink(el: HTMLElement) {
+  const title = el.getAttribute('data-wiki-title') || ''
+  const anchor = el.getAttribute('data-anchor') || ''
+  const id = await resolveWikiPageId(el, title)
+  if (!id) {
+    ElMessage.warning(`未找到页面「${title}」`)
+    return
+  }
+  emit('wiki-link', { pageId: id, title, anchor })
+}
 
 // ---------------- @ 用户提及 ----------------
 const userMention = reactive({ open: false, items: [] as { id: string; name: string }[], index: 0, x: 0, y: 0 })
@@ -1293,6 +1529,8 @@ const editor = useEditor({
     UserMention,
     attachmentPasteDrop,
     findPlugin,
+    headingAnchorPlugin,
+    wikiLinkPlugin,
     Markdown.configure({ html: true, breaks: true, linkify: true }),
   ],
   // 协同模式绝不把 content 交给编辑器初始文档(会在 Yjs 同步前写入本地并和服务器内容合并 → 重复);
@@ -1315,6 +1553,13 @@ const editor = useEditor({
   },
   editorProps: {
     transformPastedHTML: (html: string) => sanitizePastedHTML(html),
+    handleClick: (_view, _pos, event) => {
+      const link = (event.target as HTMLElement | null)?.closest?.('.wiki-link') as HTMLElement | null
+      if (!link) return false
+      event.preventDefault()
+      void openWikiLink(link)
+      return true
+    },
     handleKeyDown: (_view, event) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault()
@@ -1443,6 +1688,7 @@ function onEditorMouseMove(ev: MouseEvent) {
 
 function onEditorMouseLeave() {
   if (leaveTimer) { clearTimeout(leaveTimer); leaveTimer = null }
+  hideWikiPreview()
   leaveTimer = window.setTimeout(() => {
     leaveTimer = null
     if (!blockMenu.open) handle.visible = false
@@ -2277,6 +2523,32 @@ onBeforeUnmount(() => {
   25%, 75% { box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.45); }
 }
 
+/* wiki-link(纯文本 [[页面#锚点]] 的装饰) */
+.editor-content :deep(.ProseMirror .wiki-link) {
+  color: var(--primary);
+  border-bottom: 1px dashed rgba(79, 70, 229, 0.45);
+  cursor: pointer;
+}
+
+.editor-content :deep(.ProseMirror .wiki-link:hover) {
+  border-bottom-style: solid;
+}
+
+.editor-content :deep(.ProseMirror .wiki-link-missing) {
+  color: #9ca3af;
+  border-bottom-color: #d1d5db;
+}
+
+/* 跳转锚点后的标题闪烁 */
+.editor-content :deep(.ProseMirror .wiki-anchor-flash) {
+  animation: wiki-anchor-flash 1.6s ease;
+}
+
+@keyframes wiki-anchor-flash {
+  0%, 100% { background: transparent; }
+  30%, 70% { background: rgba(250, 204, 21, 0.35); }
+}
+
 .editor-content :deep(.ProseMirror img) {
   max-width: 100%;
   border-radius: 10px;
@@ -2553,6 +2825,30 @@ onBeforeUnmount(() => {
 .slash-item .slash-desc { font-size: 11px; color: #9ca3af; line-height: 1.3; }
 
 .dd-icon { display: inline-block; width: 20px; }
+
+/* wiki-link 悬浮预览(teleport 到 body, 需全局样式) */
+.wiki-preview {
+  max-width: 340px;
+}
+
+.wiki-preview .wiki-preview-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #111827;
+  margin-bottom: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wiki-preview .wiki-preview-snippet {
+  font-size: 12px;
+  line-height: 1.6;
+  color: #6b7280;
+  max-height: 96px;
+  overflow: hidden;
+  word-break: break-word;
+}
 
 .block-handle {
   position: fixed;

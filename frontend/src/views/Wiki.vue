@@ -148,6 +148,8 @@
             ref="bodyRef"
             v-html="renderContent(current.content)"
             @click="handleContentClick"
+            @mouseover="onBodyMouseOver"
+            @mouseleave="hidePreview"
             @error.capture="handleImgError"
           ></div>
         </template>
@@ -269,15 +271,33 @@
         <el-button type="primary" :loading="savingSpaceEdit" @click="saveSpaceSettings">保存</el-button>
       </template>
     </el-dialog>
+
+    <!-- wiki-link 悬浮预览(页面标题 + 摘要/锚点段落) -->
+    <el-popover
+      :visible="preview.visible"
+      :virtual-ref="previewRef"
+      virtual-triggering
+      placement="top"
+      :width="340"
+      :show-arrow="true"
+    >
+      <div class="wiki-preview">
+        <div class="wiki-preview-title">{{ preview.title }}</div>
+        <div class="wiki-preview-snippet">{{ preview.snippet }}</div>
+      </div>
+    </el-popover>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick, reactive, shallowRef } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import http from '../api/http'
 import { signImageElement, signRenderedImages } from '../utils/imageSign'
+import {
+  extractHeadingSection, markdownHeadingAnchors, markdownSnippet, splitWikiTarget,
+} from '../utils/wikiAnchors'
 import { useAuthStore } from '../stores/auth'
 import { PERM } from '../constants/perms'
 import MarkdownIt from 'markdown-it'
@@ -296,6 +316,7 @@ const md = new MarkdownIt({
     return (hljs.highlightAuto(str) as any).value
   },
 }).use(taskLists, { enabled: false, label: true })
+  .use(markdownHeadingAnchors)
 
 const route = useRoute()
 const router = useRouter()
@@ -617,27 +638,107 @@ const saveGroup = async () => {
   }
 }
 
+const escapeAttr = (text: string) =>
+  String(text).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+
 const renderContent = (text: string) => {
   if (!text) return ''
-  const withLinks = text.replace(/\[\[([^\]]+)\]\]/g, (_, title: string) => {
+  const withLinks = text.replace(/\[\[([^\]]+)\]\]/g, (_, raw: string) => {
+    const { title, anchor } = splitWikiTarget(raw)
     const id = titleToId.value[title]
     if (id) {
-      return `<span class="wiki-link" data-id="${id}">${title}</span>`
+      const anchorAttr = anchor ? ` data-anchor="${escapeAttr(anchor)}"` : ''
+      const label = anchor ? `${title}#${anchor}` : title
+      return `<span class="wiki-link" data-id="${id}"${anchorAttr}>${label}</span>`
     }
     return `<strong>${title}</strong>`
   })
   // 笔记可含 HTML(如提示框/折叠块/下划线/高亮),渲染前统一做白名单净化,防止 XSS
   return DOMPurify.sanitize(md.render(withLinks), {
     ADD_TAGS: ['details', 'summary'],
-    ADD_ATTR: ['data-id', 'data-callout', 'data-toggle', 'open', 'target'],
+    ADD_ATTR: ['data-id', 'data-anchor', 'data-callout', 'data-toggle', 'open', 'target'],
   })
 }
 
-const handleContentClick = (e: MouseEvent) => {
+/** [[页面#锚点]] 跳转后滚动到标题 id(渲染时机不定, 有限重试) */
+const scrollToAnchor = (anchor: string) => {
+  const slug = String(anchor || '').trim()
+  if (!slug) return
+  nextTick(() => {
+    let attempts = 0
+    const tryScroll = () => {
+      attempts++
+      let el: HTMLElement | null = null
+      try {
+        el = (bodyRef.value?.querySelector(`[id="${CSS.escape(slug)}"]`) as HTMLElement | null) || null
+      } catch { /* ignore */ }
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+        el.classList.add('wiki-anchor-flash')
+        window.setTimeout(() => el?.classList.remove('wiki-anchor-flash'), 1700)
+        return
+      }
+      if (attempts < 20) window.setTimeout(tryScroll, 150)
+    }
+    tryScroll()
+  })
+}
+
+const handleContentClick = async (e: MouseEvent) => {
   const target = (e.target as HTMLElement).closest('.wiki-link') as HTMLElement | null
-  if (target && target.dataset.id) {
-    openPage(target.dataset.id)
+  if (!target || !target.dataset.id) return
+  const anchor = target.dataset.anchor || ''
+  if (current.value?.id === target.dataset.id) {
+    scrollToAnchor(anchor)
+    return
   }
+  await openPage(target.dataset.id)
+  if (anchor && current.value?.id === target.dataset.id) scrollToAnchor(anchor)
+}
+
+// ---------------- wiki-link 悬浮预览 ----------------
+const preview = reactive({ visible: false, title: '', snippet: '' })
+const previewRef = shallowRef<HTMLElement>()
+const previewCache = new Map<string, any>()
+let previewSeq = 0
+
+async function showPreview(el: HTMLElement) {
+  const id = el.dataset.id || ''
+  if (!id) return
+  const anchor = el.dataset.anchor || ''
+  previewRef.value = el
+  preview.title = el.textContent || ''
+  preview.snippet = '加载中…'
+  preview.visible = true
+  const seq = ++previewSeq
+  try {
+    let data = previewCache.get(id)
+    if (!data) {
+      data = (await http.get(`/api/wiki/${id}`)).data
+      previewCache.set(id, data)
+    }
+    if (seq !== previewSeq || !preview.visible) return
+    preview.title = data.title || preview.title
+    const content = String(data.content || '')
+    preview.snippet = anchor
+      ? (extractHeadingSection(content, anchor) || data.summary || markdownSnippet(content))
+      : (data.summary || markdownSnippet(content))
+  } catch {
+    // 加载失败静默关闭
+    if (seq === previewSeq) preview.visible = false
+  }
+}
+
+function hidePreview() {
+  previewSeq++
+  preview.visible = false
+}
+
+function onBodyMouseOver(ev: MouseEvent) {
+  const link = (ev.target as HTMLElement | null)?.closest?.('.wiki-link') as HTMLElement | null
+  if (!link || !bodyRef.value?.contains(link)) return
+  if (preview.visible && previewRef.value === link) return
+  void showPreview(link)
 }
 
 const handleImgError = (e: Event) => {
@@ -975,15 +1076,22 @@ onBeforeUnmount(() => {
   border-left: 2px solid #eef2f7;
   margin-left: 6px;
 }
-.wiki-link {
+.wiki-body :deep(.wiki-link) {
   color: #2563eb;
   text-decoration: none;
   border-bottom: 1px dashed #93c5fd;
   cursor: pointer;
 }
-.wiki-link:hover {
+.wiki-body :deep(.wiki-link:hover) {
   color: #1d4ed8;
   border-bottom-style: solid;
+}
+.wiki-body :deep(.wiki-anchor-flash) {
+  animation: wiki-anchor-flash 1.6s ease;
+}
+@keyframes wiki-anchor-flash {
+  0%, 100% { background: transparent; }
+  30%, 70% { background: rgba(250, 204, 21, 0.35); }
 }
 .wiki-sources {
   margin-top: 32px;
@@ -1116,4 +1224,28 @@ onBeforeUnmount(() => {
   cursor: pointer;
 }
 .wiki-tree-add:hover { background: var(--surface-2); color: var(--text-2); }
+</style>
+
+<style>
+/* wiki-link 悬浮预览(teleport 到 body, 需全局样式) */
+.wiki-preview {
+  max-width: 340px;
+}
+.wiki-preview .wiki-preview-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #111827;
+  margin-bottom: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wiki-preview .wiki-preview-snippet {
+  font-size: 12px;
+  line-height: 1.6;
+  color: #6b7280;
+  max-height: 96px;
+  overflow: hidden;
+  word-break: break-word;
+}
 </style>
