@@ -3171,6 +3171,7 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   flex: 0 0 auto;
+  align-self: flex-start;
   width: max-content;
   max-width: min(100%, calc(100vw - 24px));
   gap: 6px;
