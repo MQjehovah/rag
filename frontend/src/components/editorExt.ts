@@ -85,6 +85,43 @@ export const Toggle = Node.create({
 })
 
 /**
+ * 块缩进容器(段落/标题/引用等顶层块). 手柄菜单「缩进/减少缩进」或 Tab/Shift+Tab
+ * 将块包进该节点, attr.indent(1..4) 控制 padding-left; 序列化走 tiptap-markdown
+ * 的 HTML 兜底(与 callout 相同机制): `<div data-indent="2" class="...">…</div>`,
+ * 重新打开时由 parseHTML 还原, 保证 Markdown 往返不丢缩进。
+ */
+export const IndentBlock = Node.create({
+  name: 'indentBlock',
+  group: 'block',
+  content: 'block+',
+  defining: true,
+
+  addAttributes() {
+    return {
+      indent: {
+        default: 1,
+        parseHTML: (el: HTMLElement) => {
+          const n = parseInt(el.getAttribute('data-indent') || '1', 10) || 1
+          return Math.max(1, Math.min(4, n))
+        },
+        renderHTML: (attrs: Record<string, any>) => {
+          const n = Math.max(1, Math.min(4, Number(attrs.indent) || 1))
+          return { 'data-indent': String(n), class: `indent-block indent-${n}` }
+        },
+      },
+    }
+  },
+
+  parseHTML() {
+    return [{ tag: 'div[data-indent]' }]
+  },
+
+  renderHTML({ HTMLAttributes }) {
+    return ['div', mergeAttributes(HTMLAttributes), 0]
+  },
+})
+
+/**
  * 非图片附件卡片(块级原子节点)。序列化为 HTML 兜底
  * `<div data-attachment data-url data-name data-size data-mime><a>…</a></div>`,
  * 在编辑器(html:true)与 Wiki(html:true + DOMPurify)中均可解析/渲染;

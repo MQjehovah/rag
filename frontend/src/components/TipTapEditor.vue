@@ -1,5 +1,5 @@
 <template>
-  <div class="tiptap-editor" :class="prefClasses" @mousemove="onEditorMouseMove" @mouseleave="onEditorMouseLeave" @mouseover="onEditorMouseOver" @contextmenu="onTableContextMenu">
+  <div class="tiptap-editor" :class="prefClasses" @mousemove="onEditorMouseMove" @mouseleave="onEditorMouseLeave" @mouseover="onEditorMouseOver" @mousedown="onEditorMouseDown" @contextmenu="onTableContextMenu">
     <!-- 工具栏 -->
     <div class="editor-toolbar" v-if="editor">
       <select class="tb-select" :value="headingValue" @change="setHeading" title="段落样式">
@@ -165,9 +165,10 @@
       </button>
       <button
         class="handle-btn"
-        title="拖动排序 / 点击菜单"
-        draggable="true"
+        title="拖动排序 / 点击菜单 / Shift 点击或拖拽多选"
+        :draggable="!rangeDrag.active"
         @click.stop="toggleBlockMenu"
+        @mousedown="onHandleMouseDown"
         @dragstart="onHandleDragStart"
         @dragend="onHandleDragEnd"
       >
@@ -179,11 +180,22 @@
         :style="{ top: (handle.y + 26) + 'px', left: (handle.x - 30) + 'px' }"
         @mouseleave="blockMenu.open = false"
       >
+        <template v-if="multi.active">
+          <div class="bm-title">已选 {{ multi.count }} 个块</div>
+          <button class="bm-item" @click="copySelectedBlocks"><Copy :size="15" /> 复制所选块</button>
+          <button class="bm-item danger" @click="deleteSelectedBlocks"><Trash2 :size="15" /> 删除所选块</button>
+          <div class="bm-sep"></div>
+          <button class="bm-item" @click="clearMultiSelection"><X :size="15" /> 取消选择</button>
+        </template>
+        <template v-else>
         <button class="bm-item" @click="moveBlock('up')"><ArrowUp :size="15" /> 上移</button>
         <button class="bm-item" @click="moveBlock('down')"><ArrowDown :size="15" /> 下移</button>
         <button class="bm-item" @click="duplicateBlock"><Copy :size="15" /> 复制</button>
         <button class="bm-item" @click="copyBlockMarkdown"><FileText :size="15" /> 复制 Markdown</button>
         <button class="bm-item" @click="insertParagraphAfter"><BetweenHorizontalEnd :size="15" /> 在下方加段落</button>
+        <div class="bm-sep"></div>
+        <button class="bm-item" @click="menuIndent(1)"><IndentIncrease :size="15" /> 缩进</button>
+        <button class="bm-item" @click="menuIndent(-1)"><IndentDecrease :size="15" /> 减少缩进</button>
         <div class="bm-sep"></div>
         <div class="bm-title">转换为</div>
         <button class="bm-item" @click="changeBlock('p')"><Pilcrow :size="15" /> 正文</button>
@@ -196,6 +208,7 @@
         <button class="bm-item" @click="changeBlock('quote')"><Quote :size="15" /> 引用</button>
         <div class="bm-sep"></div>
         <button class="bm-item danger" @click="deleteBlock"><Trash2 :size="15" /> 删除</button>
+        </template>
       </div>
     </div>
 
@@ -401,13 +414,14 @@ import AttachmentNodeView from './AttachmentNodeView.vue'
 import MathNodeView from './MathNodeView.vue'
 import FootnoteItemView from './FootnoteItemView.vue'
 import FootnoteBlockView from './FootnoteBlockView.vue'
-import { Attachment, Callout, Toggle } from './editorExt'
+import { Attachment, Callout, IndentBlock, Toggle } from './editorExt'
 import { MathBlock, MathInline } from './editorMath'
 import { FootnoteItem, FootnoteRef, Footnotes } from './editorFootnotes'
 import {
   createHeadingSlugger, extractHeadingSection, extractHeadings, findWikiSuggestionMatch,
   markdownSnippet, parseWikiMentionQuery, splitWikiTarget,
 } from '../utils/wikiAnchors'
+import { applyBlockIndent, isListBlock, topBlocksInRange, type TopBlock } from '../utils/editorBlocks'
 import { Markdown } from 'tiptap-markdown'
 import 'katex/dist/katex.min.css'
 import * as Y from 'yjs'
@@ -422,7 +436,7 @@ import { sanitizePastedHTML } from '../utils/sanitizePaste'
 import { nextFootnoteLabel } from '../utils/markdownFootnotes'
 import type { CollabPeer } from '../utils/collab'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plugin, PluginKey } from 'prosemirror-state'
+import { Plugin, PluginKey, TextSelection } from 'prosemirror-state'
 import { Decoration, DecorationSet } from 'prosemirror-view'
 import type { Editor } from '@tiptap/core'
 import {
@@ -431,7 +445,7 @@ import {
   Image as ImageIcon, Table as TableIcon, Workflow, Undo2, Redo2, Plus, Trash2, Copy,
   ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Pilcrow, GripVertical, Heading1, Heading2, Heading3, Eraser,
   Settings2, Keyboard, FileText, BetweenHorizontalEnd, Search, ChevronUp, ChevronDown, X, Sparkles, Paperclip,
-  Combine, Split,
+  Combine, Split, IndentIncrease, IndentDecrease,
 } from 'lucide-vue-next'
 
 const uploadAndInsert = (view: any, file: File) => {
@@ -1516,6 +1530,7 @@ const editor = useEditor({
     Typography,
     CharacterCount,
     Callout,
+    IndentBlock,
     Toggle.extend({ addNodeView() { return VueNodeViewRenderer(ToggleNodeView) } }),
     Attachment.extend({ addNodeView() { return VueNodeViewRenderer(AttachmentNodeView) } }),
     MathInline.extend({ addNodeView() { return VueNodeViewRenderer(MathNodeView) } }),
@@ -1549,6 +1564,7 @@ const editor = useEditor({
   onSelectionUpdate: ({ editor }) => {
     const { from, to } = editor.state.selection
     if (from !== to) lastAiSelection = { from, to }
+    syncMultiSelection()
     keepCaretCentered()
   },
   editorProps: {
@@ -1569,6 +1585,20 @@ const editor = useEditor({
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') {
         event.preventDefault()
         openFind()
+        return true
+      }
+      if (event.key === 'Tab' && !event.altKey && !event.ctrlKey && !event.metaKey) {
+        const e = editor.value
+        if (!e) return false
+        // 列表用原生 sink/lift, 代码块/表格保留各自的 Tab 行为
+        if (e.isActive('codeBlock') || e.isActive('table') || e.isActive('listItem') || e.isActive('taskItem')) return false
+        event.preventDefault()
+        applyIndentToBlocks(selectedTopBlocks(), event.shiftKey ? -1 : 1)
+        return true
+      }
+      if (event.key === 'Escape' && multi.active) {
+        event.preventDefault()
+        clearMultiSelection()
         return true
       }
       if (event.key === 'Escape' && find.open) {
@@ -1656,6 +1686,9 @@ function insertBlock(title: string) {
 // ---------------- 块操作手柄 ----------------
 const handle = reactive({ visible: false, x: 0, y: 0, pos: 0 })
 const blockMenu = reactive({ open: false })
+/** 多块选区(Shift+点手柄 / Shift+拖拽手柄): 块菜单切换为批量操作 */
+const multi = reactive({ active: false, count: 0 })
+const rangeDrag = reactive({ active: false, anchorIndex: -1, lastIndex: -1 })
 
 let leaveTimer: number | null = null
 
@@ -1699,19 +1732,14 @@ function toggleBlockMenu() {
   blockMenu.open = !blockMenu.open
 }
 
-interface BlockRange { start: number; end: number; index: number; node: any }
+interface BlockRange { pos: number; end: number; index: number; node: any }
 
 function topRange(pos: number): BlockRange | null {
   const e = editor.value
   if (!e) return null
   const doc = e.state.doc
-  const $pos = doc.resolve(Math.max(0, Math.min(pos, doc.content.size)))
-  if ($pos.depth === 0) return null
-  const start = $pos.before(1)
-  const end = $pos.after(1)
-  const index = $pos.index(0)
-  const node = doc.child(index)
-  return { start, end, index, node }
+  const clamped = Math.max(0, Math.min(pos, doc.content.size))
+  return topBlocksInRange(doc, clamped, clamped)[0] ?? null
 }
 
 function moveBlock(dir: 'up' | 'down') {
@@ -1723,13 +1751,13 @@ function moveBlock(dir: 'up' | 'down') {
   if (dir === 'up') {
     if (r.index === 0) return
     const prev = doc.child(r.index - 1)
-    tr.delete(r.start, r.end)
-    tr.insert(r.start - prev.nodeSize, r.node)
+    tr.delete(r.pos, r.end)
+    tr.insert(r.pos - prev.nodeSize, r.node)
   } else {
     if (r.index >= doc.childCount - 1) return
     const next = doc.child(r.index + 1)
-    tr.delete(r.start, r.end)
-    tr.insert(r.start + next.nodeSize, r.node)
+    tr.delete(r.pos, r.end)
+    tr.insert(r.pos + next.nodeSize, r.node)
   }
   e.view.dispatch(tr)
   blockMenu.open = false
@@ -1747,7 +1775,7 @@ function deleteBlock() {
   const e = editor.value
   const r = topRange(handle.pos)
   if (!e || !r) return
-  e.view.dispatch(e.state.tr.delete(r.start, r.end))
+  e.view.dispatch(e.state.tr.delete(r.pos, r.end))
   blockMenu.open = false
   handle.visible = false
 }
@@ -1791,6 +1819,181 @@ async function copyText(text: string) {
   }
 }
 
+// ---------------- 块缩进 / 多块选区 ----------------
+function allTopBlocks(): TopBlock[] {
+  const e = editor.value
+  if (!e) return []
+  return topBlocksInRange(e.state.doc, 0, e.state.doc.content.size)
+}
+
+function selectedTopBlocks(): TopBlock[] {
+  const e = editor.value
+  if (!e) return []
+  const { from, to } = e.state.selection
+  return topBlocksInRange(e.state.doc, from, to)
+}
+
+/** 同步多块选区状态: 跨 ≥2 个顶层块的非折叠选区视为多块选区 */
+function syncMultiSelection() {
+  const e = editor.value
+  if (!e) { multi.active = false; multi.count = 0; return }
+  const sel = e.state.selection
+  if (sel.from === sel.to) {
+    multi.active = false
+    multi.count = 0
+    rangeDrag.anchorIndex = -1
+    return
+  }
+  const blocks = topBlocksInRange(e.state.doc, sel.from, sel.to)
+  multi.count = blocks.length
+  multi.active = blocks.length >= 2
+}
+
+/** 从「锚点块到目标块」建立 TextSelection(NodeSelection 无法跨块, 用文本选区表达) */
+function selectBlockRange(anchorIndex: number, targetIndex: number) {
+  const e = editor.value
+  if (!e) return
+  const blocks = allTopBlocks()
+  if (!blocks.length) return
+  const lo = Math.max(0, Math.min(anchorIndex, targetIndex, blocks.length - 1))
+  const hi = Math.max(0, Math.min(Math.max(anchorIndex, targetIndex), blocks.length - 1))
+  const doc = e.state.doc
+  const $from = doc.resolve(Math.max(0, Math.min(blocks[lo].pos + 1, doc.content.size)))
+  const $to = doc.resolve(Math.max(0, Math.min(blocks[hi].end - 1, doc.content.size)))
+  e.view.dispatch(e.state.tr.setSelection(TextSelection.between($from, $to)))
+}
+
+function clearMultiSelection() {
+  const e = editor.value
+  if (!e) return
+  const blocks = selectedTopBlocks()
+  const last = blocks[blocks.length - 1]
+  const pos = last ? Math.max(0, Math.min(last.end - 1, e.state.doc.content.size)) : 0
+  e.view.dispatch(e.state.tr.setSelection(TextSelection.near(e.state.doc.resolve(pos))))
+  blockMenu.open = false
+}
+
+/** Shift+点/拖手柄: 记录锚点块并扩展选区; 普通按下清空锚点(保留原有拖拽排序) */
+function onHandleMouseDown(ev: MouseEvent) {
+  if (!ev.shiftKey) {
+    rangeDrag.anchorIndex = -1
+    return
+  }
+  const r = topRange(handle.pos)
+  if (!r) return
+  ev.preventDefault()
+  rangeDrag.active = true
+  if (rangeDrag.anchorIndex < 0) rangeDrag.anchorIndex = r.index
+  rangeDrag.lastIndex = r.index
+  selectBlockRange(rangeDrag.anchorIndex, r.index)
+}
+
+function onDocMouseMove(ev: MouseEvent) {
+  if (!rangeDrag.active) return
+  const el = (document.elementFromPoint(ev.clientX, ev.clientY) as HTMLElement | null)
+    ?.closest('.ProseMirror > *') as HTMLElement | null
+  const e = editor.value
+  if (!el || !e) return
+  let pos = 0
+  try { pos = e.view.posAtDOM(el, 0) } catch { return }
+  const r = topRange(pos)
+  if (!r || r.index === rangeDrag.lastIndex) return
+  rangeDrag.lastIndex = r.index
+  selectBlockRange(rangeDrag.anchorIndex, r.index)
+}
+
+function onDocMouseUp() {
+  if (!rangeDrag.active) return
+  rangeDrag.active = false
+  syncMultiSelection()
+}
+
+/** 在正文中普通点击/选择文本: 结束多块选择语义, 清掉锚点 */
+function onEditorMouseDown(ev: MouseEvent) {
+  const el = ev.target as HTMLElement | null
+  if (!el?.closest('.ProseMirror')) return
+  if (!ev.shiftKey) rangeDrag.anchorIndex = -1
+}
+
+/** 列表缩进: TipTap 原生 sinkListItem/liftListItem(taskList 用 taskItem) */
+function sinkOrLiftList(block: TopBlock, delta: number): boolean {
+  const e = editor.value
+  if (!e) return false
+  const itemType = block.node.type.name === 'taskList' ? 'taskItem' : 'listItem'
+  const chain = e.chain().focus()
+  const sel = e.state.selection
+  if (!(sel.from > block.pos && sel.to < block.end)) {
+    const $pos = e.state.doc.resolve(Math.min(block.pos + 2, e.state.doc.content.size))
+    chain.setTextSelection(TextSelection.near($pos).from)
+  }
+  return delta > 0 ? chain.sinkListItem(itemType).run() : chain.liftListItem(itemType).run()
+}
+
+/** 对若干顶层块应用缩进(列表原生 sink/lift, 其余包一层 indentBlock); 倒序处理保持位置有效 */
+function applyIndentToBlocks(blocks: TopBlock[], delta: number): boolean {
+  const e = editor.value
+  if (!e || !blocks.length) return false
+  if (blocks.length === 1 && isListBlock(blocks[0].node)) return sinkOrLiftList(blocks[0], delta)
+  const tr = e.state.tr
+  let changed = false
+  for (let i = blocks.length - 1; i >= 0; i--) {
+    const b = blocks[i]
+    if (isListBlock(b.node)) continue
+    if (applyBlockIndent(tr, e.state.schema, b, delta)) changed = true
+  }
+  if (changed) e.view.dispatch(tr)
+  return changed
+}
+
+function menuIndent(delta: number) {
+  const e = editor.value
+  const r = topRange(handle.pos)
+  if (!e || !r) return
+  blockMenu.open = false
+  if (multi.active) {
+    applyIndentToBlocks(selectedTopBlocks(), delta)
+    return
+  }
+  const sel = e.state.selection
+  if (!(sel.from > r.pos && sel.to < r.end)) {
+    const $pos = e.state.doc.resolve(Math.min(r.pos + 1, e.state.doc.content.size))
+    e.commands.setTextSelection(TextSelection.near($pos).from)
+  }
+  applyIndentToBlocks([r], delta)
+}
+
+async function copySelectedBlocks() {
+  const e = editor.value
+  if (!e) return
+  const blocks = selectedTopBlocks()
+  if (blocks.length < 2) return
+  const slice = e.state.doc.slice(blocks[0].pos, blocks[blocks.length - 1].end)
+  const docCopy = e.state.schema.topNodeType.create(null, slice.content)
+  let text = ''
+  try { text = e.storage.markdown.serializer.serialize(docCopy) } catch { text = blocks.map(b => b.node.textContent).join('\n\n') }
+  await copyText(text.trim())
+  ElMessage.success(`已复制 ${blocks.length} 个块`)
+  blockMenu.open = false
+}
+
+function deleteSelectedBlocks() {
+  const e = editor.value
+  if (!e) return
+  const blocks = selectedTopBlocks()
+  if (blocks.length < 2) return
+  const from = blocks[0].pos
+  const to = blocks[blocks.length - 1].end
+  const tr = e.state.tr
+  if (from === 0 && to === e.state.doc.content.size) {
+    tr.replaceWith(0, to, e.state.schema.nodes.paragraph.create())
+  } else {
+    tr.delete(from, to)
+  }
+  e.view.dispatch(tr)
+  blockMenu.open = false
+  handle.visible = false
+}
+
 // ---------------- 拖拽排序 ----------------
 const drag = reactive({ active: false, fromIndex: -1, toIndex: -1, indicatorY: 0, indicatorX: 0, indicatorW: 0 })
 let dragNode: any = null
@@ -1804,13 +2007,14 @@ const dragIndicatorStyle = computed(() => ({
 }))
 
 function onHandleDragStart(ev: DragEvent) {
+  if (rangeDrag.active) { ev.preventDefault(); return }
   const e = editor.value
   const r = topRange(handle.pos)
   if (!e || !r) { ev.preventDefault?.(); return }
   drag.active = true
   drag.fromIndex = r.index
   dragNode = r.node
-  dragStart = r.start
+  dragStart = r.pos
   dragEnd = r.end
   drag.toIndex = -1
   if (ev.dataTransfer) {
@@ -1927,6 +2131,7 @@ const SHORTCUTS = [
   { label: '引用', keys: ['Ctrl', 'Shift', 'B'] },
   { label: '代码块', keys: ['Ctrl', 'Alt', 'C'] },
   { label: '插入链接', keys: ['Ctrl', 'K'] },
+  { label: '缩进 / 减少缩进', keys: ['Tab / Shift', 'Tab'] },
   { label: '撤销 / 重做', keys: ['Ctrl', 'Z / Y'] },
   { label: '插入内容块', keys: ['/'] },
 ]
@@ -1935,7 +2140,7 @@ function changeBlock(kind: string) {
   const e = editor.value
   const r = topRange(handle.pos)
   if (!e || !r) return
-  const chain = e.chain().focus().setTextSelection({ from: r.start + 1, to: Math.max(r.start + 1, r.end - 1) })
+  const chain = e.chain().focus().setTextSelection({ from: r.pos + 1, to: Math.max(r.pos + 1, r.end - 1) })
   if (kind === 'p') chain.setParagraph().run()
   else if (kind === '1' || kind === '2' || kind === '3') chain.setHeading({ level: Number(kind) as 1 | 2 | 3 }).run()
   else if (kind === 'bullet') chain.toggleBulletList().run()
@@ -2102,6 +2307,8 @@ onMounted(() => {
   document.addEventListener('drop', onDocDrop)
   document.addEventListener('click', closeTableMenu)
   document.addEventListener('scroll', closeTableMenu, true)
+  document.addEventListener('mousemove', onDocMouseMove)
+  document.addEventListener('mouseup', onDocMouseUp)
 })
 
 onBeforeUnmount(() => {
@@ -2109,6 +2316,8 @@ onBeforeUnmount(() => {
   document.removeEventListener('drop', onDocDrop)
   document.removeEventListener('click', closeTableMenu)
   document.removeEventListener('scroll', closeTableMenu, true)
+  document.removeEventListener('mousemove', onDocMouseMove)
+  document.removeEventListener('mouseup', onDocMouseUp)
   if (mermaidTimer) {
     clearTimeout(mermaidTimer)
     mermaidTimer = null
@@ -2548,6 +2757,12 @@ onBeforeUnmount(() => {
   0%, 100% { background: transparent; }
   30%, 70% { background: rgba(250, 204, 21, 0.35); }
 }
+
+/* 块缩进(容器节点, 与 Markdown HTML 兜底的 class 对应) */
+.editor-content :deep(.ProseMirror .indent-block.indent-1) { padding-left: 24px; }
+.editor-content :deep(.ProseMirror .indent-block.indent-2) { padding-left: 48px; }
+.editor-content :deep(.ProseMirror .indent-block.indent-3) { padding-left: 72px; }
+.editor-content :deep(.ProseMirror .indent-block.indent-4) { padding-left: 96px; }
 
 .editor-content :deep(.ProseMirror img) {
   max-width: 100%;

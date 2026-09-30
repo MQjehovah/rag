@@ -71,7 +71,7 @@ const KEEP_ATTRS: Record<string, string[]> = {
   sup: ['data-fn', 'data-fn-id'],
   table: [], thead: [], tbody: [], tfoot: [], tr: [], td: ['colspan', 'rowspan'],
   th: ['colspan', 'rowspan'], caption: [], colgroup: [], col: ['span'],
-  div: ['data-callout', 'data-attachment', 'data-url', 'data-name', 'data-size', 'data-mime', 'data-math-block', 'data-latex', 'data-footnotes', 'data-footnote'],
+  div: ['data-callout', 'data-attachment', 'data-url', 'data-name', 'data-size', 'data-mime', 'data-math-block', 'data-latex', 'data-footnotes', 'data-footnote', 'data-indent'],
   details: ['data-toggle', 'open'], summary: [],
 }
 
