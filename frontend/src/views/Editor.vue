@@ -240,9 +240,9 @@
             </span>
             <span
               class="save-state"
-              :class="[saveStatus, { clickable: saveStatus === 'error' }]"
-              :title="saveStatus === 'error' ? '点击重试保存' : saveText"
-              @click="saveStatus === 'error' && retrySave()"
+              :class="[saveStatus, { clickable: saveStatus === 'error' || saveStatus === 'conflict' }]"
+              :title="saveStatus === 'error' ? '点击重试保存' : saveStatus === 'conflict' ? '存在保存冲突，点击处理' : saveText"
+              @click="onSaveStateClick"
             >
               <span class="save-dot" :class="saveStatus"></span>
               <span class="save-text">{{ saveText }}</span>
@@ -726,14 +726,17 @@
             :class="{ active: revisionPreview?.id === r.id }"
             @click="previewRevision(r.id)"
           >
-            <div class="history-time">{{ formatTime(r.created_at) }}</div>
-            <div class="history-meta">{{ r.editor || '未知' }} · {{ r.size }} 字</div>
+            <div class="history-time">{{ r.author_name || r.editor || '—' }} · {{ formatTime(r.created_at) }}</div>
+            <div class="history-meta">{{ r.size }} 字</div>
           </div>
         </div>
         <div class="history-preview">
           <template v-if="revisionPreview">
             <div class="history-preview-head">
-              <span class="history-preview-title">{{ revisionPreview.title }}</span>
+              <div class="history-preview-title-box">
+                <span class="history-preview-title">{{ revisionPreview.title }}</span>
+                <span class="history-preview-sub">{{ revisionPreview.author_name || revisionPreview.editor || '—' }} · {{ formatTime(revisionPreview.created_at) }}</span>
+              </div>
               <div class="history-head-actions">
                 <el-radio-group v-model="historyView" size="small">
                   <el-radio-button value="diff">对比当前</el-radio-button>
@@ -766,6 +769,18 @@
           </template>
           <div v-else class="muted-hint" style="padding: 14px">选择左侧版本查看内容</div>
         </div>
+      </div>
+    </el-dialog>
+
+    <!-- 保存冲突(非协作模式乐观锁) -->
+    <el-dialog v-model="conflictOpen" title="保存冲突" width="540px" :close-on-click-modal="false">
+      <p class="conflict-hint">
+        该页面已被他人修改，你的本地版本尚未保存。当前内容已备份到本地草稿，不会丢失，请选择处理方式：
+      </p>
+      <div class="conflict-actions">
+        <el-button @click="resolveConflict('server')">加载服务端版本</el-button>
+        <el-button type="primary" @click="resolveConflict('overwrite')">覆盖保存</el-button>
+        <el-button @click="resolveConflict('cancel')">取消</el-button>
       </div>
     </el-dialog>
 
@@ -966,17 +981,37 @@ const treePages = ref<PageListItem[]>([])
 const treeCache = new Map<string, PageListItem[]>()
 const currentNotebook = ref<Notebook | null>(null)
 const currentPage = ref<Page | null>(null)
-const saveStatus = ref<'saved' | 'saving' | 'unsaved' | 'error'>('saved')
+const saveStatus = ref<'saved' | 'saving' | 'unsaved' | 'error' | 'conflict'>('saved')
 const lastSavedAt = ref<Date | null>(null)
 let saveRetryTimer: number | null = null
 const saveText = computed(() => {
   if (saveStatus.value === 'saving') return '保存中…'
   if (saveStatus.value === 'unsaved') return '未保存'
   if (saveStatus.value === 'error') return '保存失败(点击重试)'
+  if (saveStatus.value === 'conflict') return '有冲突'
   if (!lastSavedAt.value) return '已保存'
   const t = lastSavedAt.value.toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit' })
   return `已保存 ${t}`
 })
+
+/** 非协作保存冲突(乐观锁 409): 暂停自动保存, 等用户处理。 */
+const conflictOpen = ref(false)
+let conflictPageId: string | null = null
+/** 每页最近一次见到的服务端 updated_at(乐观锁基准): 打开页面以服务端返回值为准, 保存成功后更新。 */
+const updatedAtBases = new Map<string, string>()
+/** 曾进入协同模式的页面: 回退单人编辑后不再携带 base(避免用陈旧基准误报冲突)。 */
+const collabEngagedPages = new Set<string>()
+
+/** 乐观锁请求字段纯函数: 仅非协作模式且已知基准时携带 base_updated_at。 */
+function lockFieldsFor(baseUpdatedAt: string | null | undefined, collab: boolean): { base_updated_at?: string } {
+  if (collab || !baseUpdatedAt) return {}
+  return { base_updated_at: baseUpdatedAt }
+}
+
+/** 保存失败分类纯函数: 409 = 乐观锁冲突(需弹窗决策), 其余 = 普通失败(重试/草稿)。 */
+function classifySaveFailure(status: number | undefined): 'conflict' | 'error' {
+  return status === 409 ? 'conflict' : 'error'
+}
 const draftUid = () => auth.user?.id || 'anon'
 /** 冷启动时 auth.user 可能尚未就绪, 先补拉一次 /api/auth/me, 保证草稿 key 用真实用户 id。 */
 const ensureDraftUid = async (): Promise<string> => {
@@ -1392,6 +1427,7 @@ const selectPage = async (page: PageListItem) => {
     const res = await http.get(`/api/pages/${page.id}`, { signal: controller.signal })
     if (seq !== pageLoadSeq) return
     currentPage.value = res.data
+    if (res.data?.updated_at) updatedAtBases.set(res.data.id, res.data.updated_at)
     void maybeOfferDraft(res.data)
   } catch (e: any) {
     if (seq !== pageLoadSeq) return
@@ -1418,6 +1454,7 @@ const openPageById = async (pageId: string, anchor = '') => {
     if (seq !== pageLoadSeq) return
     const page = res.data
     currentPage.value = page
+    if (page?.updated_at) updatedAtBases.set(page.id, page.updated_at)
     void maybeOfferDraft(page)
     if (anchor) scrollToAnchorInEditor(anchor)
     if (page.notebook_id) {
@@ -1503,6 +1540,8 @@ const onGlobalSearchLocate = async (payload: { pageId: string; query: string }) 
 const resetPerPageState = () => {
   saveStatus.value = 'saved'
   lastSavedAt.value = null
+  conflictPageId = null
+  conflictOpen.value = false
   collabUsers.value = []
   collabConnected.value = false
 }
@@ -1605,6 +1644,7 @@ const createPage = async (parentId: string | null = null) => {
     loadAbort?.abort()
     loadAbort = null
     currentPage.value = res.data
+    if (res.data?.updated_at) updatedAtBases.set(res.data.id, res.data.updated_at)
     pageLoading.value = false
     resetPerPageState()
     await loadTree()
@@ -1615,6 +1655,11 @@ const createPage = async (parentId: string | null = null) => {
 }
 
 const scheduleSave = () => {
+  // 冲突未处理: 暂停自动保存, 状态保持「有冲突」(点状态可重新打开决策框)
+  if (conflictPageId && conflictPageId === currentPage.value?.id) {
+    saveStatus.value = 'conflict'
+    return
+  }
   saveStatus.value = 'unsaved'
   if (saveTimeout) clearTimeout(saveTimeout)
   saveTimeout = window.setTimeout(() => savePage(), 1000)
@@ -1625,9 +1670,63 @@ const retrySave = () => {
   if (currentPage.value) void savePage(currentPage.value)
 }
 
-const savePage = async (target?: Page, isRetry = false) => {
+/** 状态指示点击: 保存失败→重试; 有冲突→重新打开决策框。 */
+const onSaveStateClick = () => {
+  if (saveStatus.value === 'error') { retrySave(); return }
+  if (saveStatus.value === 'conflict') conflictOpen.value = true
+}
+
+/** 保存请求的乐观锁字段: 协同中或曾协同(回退前)的页面不携带 base。 */
+const lockFields = (pageId: string): { base_updated_at?: string } => {
+  const inCollab = collabActive.value && currentPage.value?.id === pageId
+  return lockFieldsFor(updatedAtBases.get(pageId), inCollab || collabEngagedPages.has(pageId))
+}
+
+// 页面一旦真正进入协同模式就记住: 协同回退为单人后仍不携带 base
+watch(collabActive, (active) => {
+  if (active && currentPage.value) collabEngagedPages.add(currentPage.value.id)
+})
+
+/** 保存冲突三选一: 加载服务端版本 / 覆盖保存 / 取消(保持暂停, 稍后手动处理)。 */
+const resolveConflict = async (action: 'server' | 'overwrite' | 'cancel') => {
+  const page = currentPage.value
+  if (!page) return
+  if (action === 'cancel') {
+    conflictOpen.value = false
+    saveStatus.value = 'conflict'
+    return
+  }
+  conflictOpen.value = false
+  if (action === 'server') {
+    // 丢弃本地编辑(草稿保留), 以服务端版本为准并恢复自动保存
+    try {
+      const res = await http.get(`/api/pages/${page.id}`)
+      if (currentPage.value?.id !== page.id) return
+      currentPage.value = res.data
+      if (res.data?.updated_at) updatedAtBases.set(page.id, res.data.updated_at)
+      applyContentToEditor(res.data.content || '')
+      conflictPageId = null
+      saveStatus.value = 'saved'
+      lastSavedAt.value = new Date()
+      ElMessage.success('已加载服务端版本（本地编辑保留在离线草稿）')
+    } catch {
+      saveStatus.value = 'conflict'
+      ElMessage.error('加载服务端版本失败，请稍后重试')
+    }
+    return
+  }
+  // 覆盖保存: 强制 PUT 不带 base, 成功后以响应 updated_at 为新基准
+  conflictPageId = null
+  await savePage(page, false, true)
+}
+
+const savePage = async (target?: Page, isRetry = false, force = false) => {
   const page = target || currentPage.value
   if (!page) return
+  if (conflictPageId === page.id && !force) {
+    if (currentPage.value?.id === page.id) saveStatus.value = 'conflict'
+    return
+  }
   if (saveTimeout) {
     clearTimeout(saveTimeout)
     saveTimeout = null
@@ -1642,10 +1741,14 @@ const savePage = async (target?: Page, isRetry = false) => {
       title: page.title,
       content: page.content,
       icon: page.icon || '',
-      cover: page.cover || ''
+      cover: page.cover || '',
+      ...(force ? {} : lockFields(page.id))
     })
-    // 基准时间用于离线草稿的新旧判定(下次保存失败时记录)
-    if (res.data?.updated_at) page.updated_at = res.data.updated_at
+    // 基准时间用于离线草稿的新旧判定与乐观锁(下次保存失败时记录/校验)
+    if (res.data?.updated_at) {
+      page.updated_at = res.data.updated_at
+      updatedAtBases.set(page.id, res.data.updated_at)
+    }
     // 保存成功 → 清理该页离线草稿
     clearDraft(localStorage, draftUid(), page.id)
     if (currentPage.value?.id === page.id) {
@@ -1670,6 +1773,16 @@ const savePage = async (target?: Page, isRetry = false) => {
       }
     }
   } catch (e) {
+    // 409 乐观锁冲突: 先备份草稿, 暂停自动保存并弹决策框(不重试、不覆盖服务端)
+    if (!force && classifySaveFailure((e as any)?.response?.status) === 'conflict') {
+      backupDraft(page)
+      if (currentPage.value?.id === page.id) {
+        conflictPageId = page.id
+        saveStatus.value = 'conflict'
+        conflictOpen.value = true
+      }
+      return
+    }
     // 失败: 先落离线草稿兜底, 再自动重试一次; 仍失败则状态指示可点击手动重试
     backupDraft(page)
     if (!isRetry) {
@@ -1994,8 +2107,8 @@ const copyShareUrl = async () => {
 
 // 版本历史
 const historyOpen = ref(false)
-const revisions = ref<{ id: string; title: string; editor: string; created_at: string; size: number }[]>([])
-const revisionPreview = ref<{ id: string; title: string; content: string; editor: string; created_at: string } | null>(null)
+const revisions = ref<{ id: string; title: string; editor: string; author_id?: string; author_name?: string; created_at: string; size: number }[]>([])
+const revisionPreview = ref<{ id: string; title: string; content: string; editor: string; author_id?: string; author_name?: string; created_at: string } | null>(null)
 const historyView = ref<'diff' | 'preview'>('diff')
 const formatTime = (s: string) => (s ? new Date(s).toLocaleString('zh-CN', { hour12: false }) : '')
 /** 行级 diff: 该历史版本 → 当前内容(add 绿色=当前新增, del 红色=该版本有而当前没有)。 */
@@ -2025,6 +2138,7 @@ const restoreRevision = async (id: string) => {
   try {
     const res = await http.post(`/api/pages/${currentPage.value.id}/revisions/${id}/restore`)
     currentPage.value = res.data
+    if (res.data?.updated_at) updatedAtBases.set(res.data.id, res.data.updated_at)
     applyContentToEditor(res.data?.content || '')
     await loadTree()
     historyOpen.value = false
@@ -3647,7 +3761,9 @@ html, body, #app { height: 100%; }
 .history-meta { font-size: 11px; color: #9b9a97; margin-top: 2px; }
 .history-preview { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .history-preview-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+.history-preview-title-box { display: flex; flex-direction: column; min-width: 0; gap: 2px; }
 .history-preview-title { font-weight: 600; color: #37352f; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.history-preview-sub { font-size: 11px; color: #9b9a97; }
 .history-head-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
 .history-diff-stat { display: flex; align-items: center; gap: 10px; font-size: 12px; color: #64748b; margin-bottom: 8px; }
 .history-diff-stat .stat-add { color: #16a34a; font-weight: 600; }
@@ -3794,6 +3910,7 @@ html, body, #app { height: 100%; }
   white-space: nowrap;
 }
 .save-state.error { color: #dc2626; }
+.save-state.conflict { color: #d97706; }
 .save-state.clickable { cursor: pointer; }
 .save-state.clickable:hover { text-decoration: underline; }
 .save-dot {
@@ -3807,7 +3924,12 @@ html, body, #app { height: 100%; }
 .save-dot.saving { background: #f59e0b; animation: dotPulse 1s infinite; }
 .save-dot.unsaved { background: #ef4444; }
 .save-dot.error { background: #ef4444; }
+.save-dot.conflict { background: #f59e0b; }
 @keyframes dotPulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+/* 保存冲突对话框 */
+.conflict-hint { margin: 0 0 14px; color: #475569; font-size: 13px; line-height: 1.6; }
+.conflict-actions { display: flex; justify-content: flex-end; gap: 8px; }
 
 .collab-peers { display: inline-flex; align-items: center; padding-left: 6px; }
 .collab-peers.is-offline { opacity: 0.5; }
