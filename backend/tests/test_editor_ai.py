@@ -91,6 +91,21 @@ def test_editor_ai_continue_uses_context(api_client, as_user, monkeypatch):
     assert "上一段的结尾是这里" in prompt
 
 
+def test_editor_ai_restructure_happy_path(api_client, as_user, monkeypatch):
+    """restructure 在白名单内:返回 {"result": ...},提示词包含输入文本。"""
+    _login(as_user)
+    captured = _capture_llm(monkeypatch, reply="重排后的全文")
+    res = api_client.post(
+        "/api/editor/ai",
+        json={"action": "restructure", "text": "## 小节一\n内容\n## 小节二\n内容"},
+    )
+    assert res.status_code == 200
+    assert res.json() == {"result": "重排后的全文"}
+    prompt = json.dumps(captured["messages"], ensure_ascii=False)
+    assert "小节一" in prompt
+    assert "重排" in prompt
+
+
 def test_editor_ai_llm_not_configured(api_client, as_user, monkeypatch):
     """LLM 未配置 -> 500,文案与 chat.py 一致。"""
     _login(as_user)
