@@ -444,6 +444,7 @@
               @collab-status="collabConnected = $event"
               @collab-unavailable="handleCollabUnavailable"
               @wiki-link="onWikiLink"
+              @citation-open="onCitationOpen"
             />
           </div>
           <div class="editor-footer">
@@ -798,7 +799,7 @@
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElNotification, ElMessageBox } from 'element-plus'
 import type { UploadFile as ElUploadFile } from 'element-plus'
 import http from '../api/http'
@@ -838,6 +839,7 @@ const exportMd = new MarkdownIt({
 }).use(taskLists, { enabled: false, label: true })
 
 const route = useRoute()
+const router = useRouter()
 
 const API_BASE = (import.meta.env.BASE_URL || '/').replace(/\/$/, '')
 
@@ -1461,6 +1463,16 @@ const onWikiLink = async (payload: { pageId: string; title: string; anchor: stri
     return
   }
   await openPageById(payload.pageId, payload.anchor)
+}
+
+/** 引用卡片 / 知识库检索结果点击: wiki → 跳阅读页; 笔记 → 编辑器内打开 */
+const onCitationOpen = (payload: { id: string; kind: string }) => {
+  if (!payload?.id) return
+  if (payload.kind === 'wiki' || payload.id.startsWith('wiki:')) {
+    router.push(`/wiki/${payload.id.replace(/^wiki:/, '')}`)
+    return
+  }
+  void openPageById(payload.id)
 }
 
 /** 切换页面时重置保存状态与在线列表(避免上一页状态残留)。 */

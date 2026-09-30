@@ -39,6 +39,7 @@
       <button class="tb-btn" @click="handleAttachmentUpload" title="插入附件"><Paperclip :size="16" /></button>
       <button class="tb-btn" @click="editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()" title="插入表格"><TableIcon :size="16" /></button>
       <button class="tb-btn" @click="insertMermaid" title="插入图表"><Workflow :size="16" /></button>
+      <button class="tb-btn" @click="openCitationPicker" title="引用知识库"><Library :size="16" /></button>
 
       <span class="divider"></span>
 
@@ -396,6 +397,35 @@
         </template>
       </template>
     </el-dialog>
+
+    <!-- 知识库检索 → 插入引用卡片 -->
+    <el-dialog v-model="citationPicker.open" title="引用知识库" width="640px" append-to-body>
+      <div class="kb-search-bar">
+        <el-input
+          ref="citationInputEl"
+          v-model="citationPicker.query"
+          placeholder="输入关键词检索笔记与知识库，回车检索"
+          clearable
+          @keyup.enter="runCitationSearch"
+        />
+        <el-button type="primary" :loading="citationPicker.loading" @click="runCitationSearch">检索</el-button>
+      </div>
+      <div v-loading="citationPicker.loading" class="kb-result-list">
+        <div v-if="citationPicker.error" class="kb-hint kb-hint-error">{{ citationPicker.error }}</div>
+        <div v-else-if="citationPicker.searched && !citationPicker.results.length" class="kb-hint">未找到相关内容</div>
+        <button v-for="r in citationPicker.results" :key="r.id" class="kb-result" @click="insertCitation(r)">
+          <span class="kb-result-icon">{{ r.icon }}</span>
+          <span class="kb-result-main">
+            <span class="kb-result-title">{{ r.title }}</span>
+            <span class="kb-result-snippet">{{ r.snippet || '（无摘要）' }}</span>
+          </span>
+          <span class="kb-result-meta">
+            <span class="kb-result-source">{{ r.label }}</span>
+            <span class="kb-result-score">{{ r.score.toFixed(2) }}</span>
+          </span>
+        </button>
+      </div>
+    </el-dialog>
   </div>
 </template>
 
@@ -447,7 +477,7 @@ import { createLazyObserver, type LazyObserver } from '../utils/lazyRender'
 import { printExpand } from '../utils/printExpand'
 import FootnoteItemView from './FootnoteItemView.vue'
 import FootnoteBlockView from './FootnoteBlockView.vue'
-import { Attachment, Callout, IndentBlock, Toggle } from './editorExt'
+import { Attachment, Callout, Citation, CITATION_META, IndentBlock, Toggle } from './editorExt'
 import { MathBlock, MathInline } from './editorMath'
 import { FootnoteItem, FootnoteRef, Footnotes } from './editorFootnotes'
 import {
@@ -487,7 +517,7 @@ import {
   Image as ImageIcon, Table as TableIcon, Workflow, Undo2, Redo2, Plus, Trash2, Copy,
   ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Pilcrow, GripVertical, Heading1, Heading2, Heading3, Eraser,
   Settings2, Keyboard, FileText, BetweenHorizontalEnd, Search, ChevronUp, ChevronDown, X, Sparkles, Paperclip,
-  Combine, Split, IndentIncrease, IndentDecrease, WandSparkles,
+  Combine, Split, IndentIncrease, IndentDecrease, WandSparkles, Library,
 } from 'lucide-vue-next'
 
 const uploadAndInsert = (view: any, file: File) => {
@@ -626,6 +656,7 @@ const emit = defineEmits<{
   (e: 'collab-status', connected: boolean): void
   (e: 'collab-unavailable'): void
   (e: 'wiki-link', payload: { pageId: string; title: string; anchor: string }): void
+  (e: 'citation-open', payload: { id: string; kind: 'note' | 'wiki' }): void
 }>()
 
 let lastEmitted = props.modelValue
@@ -1070,6 +1101,7 @@ const SLASH_ITEMS: SlashItem[] = [
   { title: '图片', desc: '上传或插入图片', icon: '▧', keywords: ['image', 'img', '图片', '照片'], action: (e, r) => { e.chain().focus().deleteRange(r).run(); handleImageUpload() } },
   { title: '附件', desc: '上传文件附件卡片', icon: '📎', keywords: ['attachment', 'file', '附件', '文件'], action: (e, r) => { e.chain().focus().deleteRange(r).run(); handleAttachmentUpload() } },
   { title: '图表', desc: 'Mermaid 流程图/时序图', icon: '◈', keywords: ['mermaid', 'chart', 'diagram', '图表', '流程图'], action: (e, r) => { e.chain().focus().deleteRange(r).run(); insertMermaid() } },
+  { title: '引用知识库', desc: '检索笔记/知识库并插入引用卡片', icon: '📚', keywords: ['citation', 'cite', 'quote', '引用', '知识库', '检索', '卡片'], action: (e, r) => { e.chain().focus().deleteRange(r).run(); openCitationPicker() } },
   { title: 'AI 续写', desc: '根据光标前文继续写作', icon: '✨', keywords: ['ai', 'continue', '续写', '生成', '写作'], action: (e, r) => { void aiContinue(e, r) } },
   { title: 'AI 总结本页', desc: '生成整页摘要并插入提示框', icon: '🤖', keywords: ['ai', 'summary', '总结', '摘要'], action: (e, r) => { void aiSummarize(e, r) } },
 ]
@@ -1416,11 +1448,59 @@ function hideWikiPreview() {
   wikiPreview.visible = false
 }
 
+// 引用卡片悬浮预览(与 wiki-link 共用 el-popover + 序号防串台)
+const citationPageCache = new Map<string, { title: string; snippet: string }>()
+
+async function loadCitationPreview(el: HTMLElement): Promise<{ title: string; snippet: string }> {
+  const id = el.getAttribute('data-id') || ''
+  const kind = el.getAttribute('data-kind') === 'wiki' || id.startsWith('wiki:') ? 'wiki' : 'note'
+  const fallbackTitle = el.getAttribute('data-title') || '引用'
+  const fallbackSnippet = el.getAttribute('data-summary') || ''
+  if (!id) return { title: fallbackTitle, snippet: fallbackSnippet }
+  const cached = citationPageCache.get(id)
+  if (cached) return cached
+  const res = kind === 'wiki'
+    ? await http.get(`/api/wiki/${id.replace(/^wiki:/, '')}`)
+    : await http.get(`/api/pages/${id}`)
+  const data = res.data || {}
+  const info = {
+    title: String(data.title || fallbackTitle),
+    snippet: String(data.summary || data.content || fallbackSnippet).replace(/\s+/g, ' ').trim().slice(0, 200),
+  }
+  citationPageCache.set(id, info)
+  return info
+}
+
+async function showCitationPreview(el: HTMLElement) {
+  wikiPreviewRef.value = el
+  wikiPreview.title = el.getAttribute('data-title') || '引用'
+  wikiPreview.snippet = el.getAttribute('data-summary') || '加载中…'
+  wikiPreview.visible = true
+  const seq = ++wikiPreviewSeq
+  try {
+    const info = await loadCitationPreview(el)
+    if (seq !== wikiPreviewSeq || !wikiPreview.visible) return
+    wikiPreview.title = info.title
+    wikiPreview.snippet = info.snippet || '（无摘要）'
+  } catch {
+    // 加载失败保留卡片自带标题/摘要兜底, 不关闭
+  }
+}
+
 function onEditorMouseOver(ev: MouseEvent) {
-  const link = (ev.target as HTMLElement | null)?.closest?.('.wiki-link') as HTMLElement | null
-  if (!link || !editor.value?.view.dom.contains(link)) return
-  if (wikiPreview.visible && wikiPreviewRef.value === link) return
-  void showWikiPreview(link)
+  const target = ev.target as HTMLElement | null
+  if (!target || !editor.value?.view.dom.contains(target)) return
+  const link = target.closest?.('.wiki-link') as HTMLElement | null
+  if (link) {
+    if (wikiPreview.visible && wikiPreviewRef.value === link) return
+    void showWikiPreview(link)
+    return
+  }
+  const card = target.closest?.('[data-citation]') as HTMLElement | null
+  if (card) {
+    if (wikiPreview.visible && wikiPreviewRef.value === card) return
+    void showCitationPreview(card)
+  }
 }
 
 async function openWikiLink(el: HTMLElement) {
@@ -1645,6 +1725,89 @@ function replaceAll() {
   chain.run()
   ElMessage.success(`已替换 ${find.matches.length} 处`)
   refreshFind()
+}
+
+// ---------------- 知识库检索(引用卡片) ----------------
+interface SearchHit {
+  id: string
+  kind: 'note' | 'wiki'
+  title: string
+  score: number
+  snippet: string
+  label: string
+  icon: string
+}
+
+/** /api/search 结果 → 卡片/列表展示模型(`wiki:` 前缀 = 知识库页面) */
+function toSearchHit(raw: any): SearchHit {
+  const id = String(raw?.id || '')
+  const kind: 'note' | 'wiki' = id.startsWith('wiki:') ? 'wiki' : 'note'
+  const meta = CITATION_META[kind]
+  return {
+    id,
+    kind,
+    title: String(raw?.title || '').trim() || '无标题',
+    score: Number(raw?.score) || 0,
+    snippet: String(raw?.content || '').replace(/\s+/g, ' ').trim().slice(0, 160),
+    label: meta.label,
+    icon: meta.icon,
+  }
+}
+
+async function runApiSearch(query: string, topK: number): Promise<SearchHit[]> {
+  const res = await http.post('/api/search', { query, top_k: topK })
+  const results = Array.isArray(res.data?.results) ? res.data.results : []
+  return results.map(toSearchHit)
+}
+
+function searchErrorMessage(err: any): string {
+  const detail = err?.response?.data?.detail
+  if (typeof detail === 'string' && detail) return detail
+  return '检索失败，请重试'
+}
+
+const citationPicker = reactive({
+  open: false,
+  query: '',
+  loading: false,
+  error: '',
+  searched: false,
+  results: [] as SearchHit[],
+})
+const citationInputEl = ref<any>()
+
+function openCitationPicker() {
+  citationPicker.open = true
+  nextTick(() => citationInputEl.value?.focus?.())
+}
+
+async function runCitationSearch() {
+  const q = citationPicker.query.trim()
+  if (!q || citationPicker.loading) return
+  citationPicker.loading = true
+  citationPicker.error = ''
+  try {
+    citationPicker.results = await runApiSearch(q, 8)
+    citationPicker.searched = true
+  } catch (err: any) {
+    citationPicker.results = []
+    citationPicker.searched = true
+    citationPicker.error = searchErrorMessage(err)
+  } finally {
+    citationPicker.loading = false
+  }
+}
+
+/** 选择一条结果 → 在光标处插入引用卡片(atom 块节点) */
+function insertCitation(hit: SearchHit) {
+  const e = editor.value
+  if (!e) return
+  e.chain().focus().insertContent({
+    type: 'citation',
+    attrs: { id: hit.id, kind: hit.kind, title: hit.title, summary: hit.snippet },
+  }).run()
+  citationPicker.open = false
+  ElMessage.success(`已插入引用：${hit.title}`)
 }
 
 // ---------------- AI 编辑 ----------------
@@ -2217,6 +2380,7 @@ const editor = useEditor({
     Typography,
     CharacterCount,
     Callout,
+    Citation,
     IndentBlock,
     Toggle.extend({ addNodeView() { return VueNodeViewRenderer(ToggleNodeView) } }),
     Attachment.extend({ addNodeView() { return VueNodeViewRenderer(AttachmentNodeView) } }),
@@ -2268,11 +2432,23 @@ const editor = useEditor({
   editorProps: {
     transformPastedHTML: (html: string) => sanitizePastedHTML(html),
     handleClick: (_view, _pos, event) => {
-      const link = (event.target as HTMLElement | null)?.closest?.('.wiki-link') as HTMLElement | null
-      if (!link) return false
-      event.preventDefault()
-      void openWikiLink(link)
-      return true
+      const target = event.target as HTMLElement | null
+      const link = target?.closest?.('.wiki-link') as HTMLElement | null
+      if (link) {
+        event.preventDefault()
+        void openWikiLink(link)
+        return true
+      }
+      const card = target?.closest?.('[data-citation]') as HTMLElement | null
+      if (card) {
+        event.preventDefault()
+        emit('citation-open', {
+          id: card.getAttribute('data-id') || '',
+          kind: card.getAttribute('data-kind') === 'wiki' ? 'wiki' : 'note',
+        })
+        return true
+      }
+      return false
     },
     handleKeyDown: (_view, event) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
@@ -4045,6 +4221,165 @@ html.dark .editor-content :deep(.find-hit-current) {
   max-height: 96px;
   overflow: hidden;
   word-break: break-word;
+}
+
+/* 引用卡片(atom 块节点): 编辑器内渲染 + Wiki 阅读侧 HTML 兜底渲染 */
+.ProseMirror .citation-card,
+.citation-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 8px 0;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--primary);
+  border-radius: var(--radius-lg);
+  background: var(--surface-2);
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.ProseMirror .citation-card:hover,
+.citation-card:hover { background: var(--primary-weak); }
+
+.ProseMirror .citation-card.ProseMirror-selectednode {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px var(--primary-weak);
+}
+
+.citation-card .citation-icon {
+  flex: 0 0 auto;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.citation-card .citation-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.citation-card .citation-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.citation-card .citation-summary {
+  font-size: 12px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.citation-card .citation-source {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--text-3);
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  padding: 1px 8px;
+  background: var(--surface);
+}
+
+/* 知识库检索/全库搜索弹窗 */
+.kb-search-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.kb-search-bar .el-input { flex: 1 1 auto; }
+
+.kb-result-list {
+  min-height: 120px;
+  max-height: 46vh;
+  overflow-y: auto;
+}
+
+.kb-hint {
+  padding: 18px 8px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-3);
+}
+
+.kb-hint-error { color: var(--danger); }
+
+.kb-result {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 10px;
+  border: none;
+  border-radius: var(--radius-lg);
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.12s ease;
+}
+
+.kb-result:hover { background: var(--surface-hover); }
+
+.kb-result .kb-result-icon {
+  flex: 0 0 auto;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.kb-result .kb-result-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.kb-result .kb-result-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kb-result .kb-result-snippet {
+  font-size: 12px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kb-result .kb-result-meta {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.kb-result .kb-result-source {
+  font-size: 11px;
+  color: var(--text-3);
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+
+.kb-result .kb-result-score {
+  font-size: 11px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
 }
 
 .block-handle {

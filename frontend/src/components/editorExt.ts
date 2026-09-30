@@ -11,6 +11,17 @@ const escapeHtmlAttr = (text: string): string =>
 const escapeHtmlText = (text: string): string =>
   text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
+export const CITATION_META: Record<'note' | 'wiki', { icon: string; label: string }> = {
+  note: { icon: '📄', label: '笔记' },
+  wiki: { icon: '📚', label: '知识库' },
+}
+
+/** 引用来源判定: `wiki:` 前缀 = 知识库页面, 其余 = 笔记; kind 显式给定时优先。 */
+export function citationKindOf(id: string, kind?: unknown): 'note' | 'wiki' {
+  if (kind === 'wiki' || kind === 'note') return kind
+  return String(id || '').startsWith('wiki:') ? 'wiki' : 'note'
+}
+
 /**
  * 提示框(callout)块。序列化走 tiptap-markdown 的 HTML 回退
  * (`<div data-callout="info">...</div>`), 在编辑器(html:true)与
@@ -205,6 +216,87 @@ export const Attachment = Node.create({
           ].join(' ')
           const sizeText = size ? ` · ${formatBytes(size)}` : ''
           state.write(`<div ${attrText}><a href="${escapeHtmlAttr(url)}">📎 ${escapeHtmlText(name || url || '附件')}</a>${sizeText}</div>`)
+          state.closeBlock(node)
+        },
+      },
+    }
+  },
+})
+
+/**
+ * 知识库引用卡片(块级原子节点)。attrs id/kind/title/summary, 序列化为 HTML 兜底
+ * `<div data-citation data-id data-kind data-title data-summary>`, 重开页面由
+ * parseHTML 还原; 点击跳转目标(笔记/Wiki), hover 悬浮预览由 TipTapEditor 提供。
+ */
+export const Citation = Node.create({
+  name: 'citation',
+  group: 'block',
+  atom: true,
+  draggable: true,
+  selectable: true,
+
+  addAttributes() {
+    return {
+      id: {
+        default: '',
+        parseHTML: (el: HTMLElement) => el.getAttribute('data-id') || '',
+        renderHTML: (attrs: Record<string, any>) => ({ 'data-id': attrs.id || '' }),
+      },
+      kind: {
+        default: 'note',
+        parseHTML: (el: HTMLElement) => citationKindOf(el.getAttribute('data-id') || '', el.getAttribute('data-kind')),
+        renderHTML: (attrs: Record<string, any>) => ({
+          'data-kind': citationKindOf(String(attrs.id || ''), attrs.kind),
+        }),
+      },
+      title: {
+        default: '',
+        parseHTML: (el: HTMLElement) => el.getAttribute('data-title') || '',
+        renderHTML: (attrs: Record<string, any>) => ({ 'data-title': attrs.title || '' }),
+      },
+      summary: {
+        default: '',
+        parseHTML: (el: HTMLElement) => el.getAttribute('data-summary') || '',
+        renderHTML: (attrs: Record<string, any>) => ({ 'data-summary': attrs.summary || '' }),
+      },
+    }
+  },
+
+  parseHTML() {
+    return [{ tag: 'div[data-citation]' }]
+  },
+
+  renderHTML({ node, HTMLAttributes }) {
+    const kind = citationKindOf(String(node.attrs.id || ''), node.attrs.kind)
+    const meta = CITATION_META[kind]
+    return [
+      'div',
+      mergeAttributes(HTMLAttributes, { 'data-citation': '', class: `citation-card citation-${kind}` }),
+      ['span', { class: 'citation-icon' }, meta.icon],
+      ['span', { class: 'citation-main' },
+        ['span', { class: 'citation-title' }, node.attrs.title || node.attrs.id || '引用'],
+        ['span', { class: 'citation-summary' }, node.attrs.summary || ''],
+      ],
+      ['span', { class: 'citation-source' }, meta.label],
+    ]
+  },
+
+  addStorage() {
+    return {
+      markdown: {
+        // 显式 HTML 兜底(与 Attachment 同机制): 保证 Markdown 往返后仍是卡片
+        serialize(state: any, node: any) {
+          const kind = citationKindOf(String(node.attrs.id || ''), node.attrs.kind)
+          const meta = CITATION_META[kind]
+          const attrText = [
+            'data-citation=""',
+            `data-id="${escapeHtmlAttr(String(node.attrs.id || ''))}"`,
+            `data-kind="${kind}"`,
+            `data-title="${escapeHtmlAttr(String(node.attrs.title || ''))}"`,
+            `data-summary="${escapeHtmlAttr(String(node.attrs.summary || ''))}"`,
+          ].join(' ')
+          const text = `${meta.icon} ${escapeHtmlText(String(node.attrs.title || node.attrs.id || '引用'))} · ${meta.label}`
+          state.write(`<div ${attrText}>${text}</div>`)
           state.closeBlock(node)
         },
       },

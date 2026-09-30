@@ -2,7 +2,7 @@
  * 粘贴 HTML 净化(网页 / Word / 其它站点的富文本)。
  *
  * 仅保留: 标题(p/h1-h6)/段落/列表(ul/ol/li)/表格/链接/加粗/斜体/下划线/删除线/代码/引用/图片,
- * 以及编辑器既有节点所需的 marker(callout/折叠块/附件/任务列表/高亮)。
+ * 以及编辑器既有节点所需的 marker(callout/折叠块/附件/引用卡片/任务列表/高亮)。
  * 剥离 style/class/id/data-* (明确白名单的 marker 除外) 与 script/iframe 等;
  * 空段落(`<p></p>`/`<p><br></p>`/`<p>&nbsp;</p>`)折叠。
  *
@@ -71,7 +71,7 @@ const KEEP_ATTRS: Record<string, string[]> = {
   sup: ['data-fn', 'data-fn-id'],
   table: [], thead: [], tbody: [], tfoot: [], tr: [], td: ['colspan', 'rowspan'],
   th: ['colspan', 'rowspan'], caption: [], colgroup: [], col: ['span'],
-  div: ['data-callout', 'data-attachment', 'data-url', 'data-name', 'data-size', 'data-mime', 'data-math-block', 'data-latex', 'data-footnotes', 'data-footnote', 'data-indent'],
+  div: ['data-callout', 'data-attachment', 'data-url', 'data-name', 'data-size', 'data-mime', 'data-math-block', 'data-latex', 'data-footnotes', 'data-footnote', 'data-indent', 'data-citation', 'data-id', 'data-kind', 'data-title', 'data-summary'],
   details: ['data-toggle', 'open'], summary: [],
 }
 
