@@ -51,8 +51,10 @@ export function buildArchiveEntries(pages: ArchiveTreePage[]): Map<string, strin
       const base = sanitizeFileSegment(page.title || '无标题')
       let name = base
       let n = 2
-      while (used.has(name)) name = `${base} (${n++})`
+      // 文件名(`name.md`)与目录名(`name`)都纳入去重集合, 防止 `guide.md` 文件与 `guide/` 目录互相占用同名路径
+      while (used.has(name) || used.has(`${name}.md`)) name = `${base} (${n++})`
       used.add(name)
+      used.add(`${name}.md`)
       const dir = prefix ? `${prefix}/${name}` : name
       entries.set(page.id, `${dir}.md`)
       walk(page.id, dir)

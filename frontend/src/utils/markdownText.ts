@@ -44,9 +44,20 @@ function escapeHtmlAngles(str: string): string {
 const WIKI_LINK_RE = /\[\[[^\[\]\n]+\]\]/g
 
 /**
+ * `[[x]]` 豁免转义的边界判定: 前一字符是 `!`(会被 Markdown 重开为图片)或后一字符是 `(`(重开为链接)
+ * 时不豁免, 交回普通转义。用索引手工判断而非正则 lookbehind(Safari < 16.4 不支持后行断言)。
+ */
+function wikiLinkExempt(html: string, start: number, end: number): boolean {
+  if (start > 0 && html[start - 1] === '!') return false
+  if (end < html.length && html[end] === '(') return false
+  return true
+}
+
+/**
  * 文本 → Markdown 片段:
  * - `startOfLine` 为该文本是否位于行首(会影响列表/标题标记转义);
- * - code=true 时跳过 Markdown 转义(行内代码内容按字面量保存)。
+ * - code=true 时跳过 Markdown 转义(行内代码内容按字面量保存);
+ * - `[[x]]` 仅在不是 `![[x]]` / `[[x]](y)` 这类会被重开为图片/链接的边界才保留字面量。
  */
 export function escapeMarkdownText(text: string, startOfLine: boolean, code = false): string {
   // 行内代码内容按字面量保存: 反引号内的转义/实体都不会被还原, 必须原样输出
@@ -55,9 +66,11 @@ export function escapeMarkdownText(text: string, startOfLine: boolean, code = fa
   let out = ''
   let last = 0
   html.replace(WIKI_LINK_RE, (match, idx: number) => {
+    const end = idx + match.length
+    if (!wikiLinkExempt(html, idx, end)) return match
     out += escapeChars(html.slice(last, idx))
     out += '[[' + escapeChars(match.slice(2, -2)) + ']]'
-    last = idx + match.length
+    last = end
     return match
   })
   out += escapeChars(html.slice(last))

@@ -419,6 +419,7 @@ import AttachmentNodeView from './AttachmentNodeView.vue'
 import MathNodeView from './MathNodeView.vue'
 import { TableFold } from './editorTableFold'
 import { createLazyObserver, type LazyObserver } from '../utils/lazyRender'
+import { printExpand } from '../utils/printExpand'
 import FootnoteItemView from './FootnoteItemView.vue'
 import FootnoteBlockView from './FootnoteBlockView.vue'
 import { Attachment, Callout, IndentBlock, Toggle } from './editorExt'
@@ -707,7 +708,26 @@ function applyExternalContentNow(markdown: string) {
   nextTick(() => { scheduleMermaid(); disableSpellcheck() })
 }
 
-defineExpose({ applyExternalContent })
+defineExpose({ applyExternalContent, prepareForPrint, finishPrint })
+
+/**
+ * 打印/导出 PDF 兜底(Editor.vue 的 beforeprint 调用):
+ * - 置 printExpand 让惰渲染图片立即加载;
+ * - 强制渲染所有尚未进入视口的 mermaid 图(mermaid.render 为异步, 尽力在打印取快照前完成)。
+ */
+function prepareForPrint() {
+  printExpand.value = true
+  const root = editor.value?.view?.dom as HTMLElement | undefined
+  if (!root) return
+  for (const block of Array.from(root.querySelectorAll('.language-mermaid'))) {
+    void renderMermaidBlock(block)
+  }
+}
+
+/** 打印结束后恢复惰渲染(已进入过视口的图片不受影响)。 */
+function finishPrint() {
+  printExpand.value = false
+}
 
 mermaid.initialize({ startOnLoad: false, theme: 'default' })
 

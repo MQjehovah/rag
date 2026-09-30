@@ -976,9 +976,23 @@ const ensureDraftUid = async (): Promise<string> => {
   return draftUid()
 }
 /** 编辑器实例(用于把恢复的历史版本/离线草稿写入编辑器; 协同模式下必须显式写入 Yjs)。 */
-const editorRef = ref<{ applyExternalContent?: (markdown: string) => void } | null>(null)
+const editorRef = ref<{
+  applyExternalContent?: (markdown: string) => void
+  prepareForPrint?: () => void
+  finishPrint?: () => void
+} | null>(null)
 const applyContentToEditor = (markdown: string) => {
   editorRef.value?.applyExternalContent?.(markdown || '')
+}
+
+// F6: 浏览器直接打印(Ctrl+P)兜底 —— 打印前强制展开惰渲染图片/mermaid,
+// 打印后恢复; Safari 等不触发 beforeprint 的场景由 matchMedia('print') 变化覆盖。
+const prepareEditorForPrint = () => { editorRef.value?.prepareForPrint?.() }
+const finishEditorPrint = () => { editorRef.value?.finishPrint?.() }
+const printMedia = window.matchMedia('print')
+const onPrintMediaChange = (e: MediaQueryListEvent) => {
+  if (e.matches) prepareEditorForPrint()
+  else finishEditorPrint()
 }
 
 /** PUT 失败时备份最新内容(按用户隔离), 保存成功后清理。 */
@@ -2709,6 +2723,9 @@ onMounted(async () => {
   // 协同编辑默认开启(见 collab 配置): 探活失败自动回退单人编辑; ?collab=0 可一键退回。
   window.addEventListener('keydown', handleKeydown)
   document.addEventListener('mousedown', onDocMousedown)
+  window.addEventListener('beforeprint', prepareEditorForPrint)
+  window.addEventListener('afterprint', finishEditorPrint)
+  printMedia.addEventListener('change', onPrintMediaChange)
   const targetId = route.query.page as string | undefined
   if (targetId) {
     await openPageById(targetId)
@@ -2727,6 +2744,9 @@ onBeforeUnmount(() => {
   }
   window.removeEventListener('keydown', handleKeydown)
   document.removeEventListener('mousedown', onDocMousedown)
+  window.removeEventListener('beforeprint', prepareEditorForPrint)
+  window.removeEventListener('afterprint', finishEditorPrint)
+  printMedia.removeEventListener('change', onPrintMediaChange)
 })
 </script>
 
@@ -3734,5 +3754,7 @@ html, body, #app { height: 100%; }
   /* 折叠的代码块/表格在打印时全部展开 */
   .code-block.is-collapsed pre.is-collapsed-pre { max-height: none !important; overflow: visible !important; }
   table.table-folded tr { display: table-row !important; }
+  /* 展开后折叠按钮不再有意义, 打印时隐藏(内容已由上方规则全部展开) */
+  .table-fold-toggle, .code-fold { display: none !important; }
 }
 </style>

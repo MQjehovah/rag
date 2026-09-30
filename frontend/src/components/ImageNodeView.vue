@@ -27,6 +27,7 @@
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { NodeViewWrapper, nodeViewProps } from '@tiptap/vue-3'
 import { createLazyObserver, type LazyObserver } from '../utils/lazyRender'
+import { printExpand } from '../utils/printExpand'
 
 const props = defineProps(nodeViewProps)
 
@@ -35,7 +36,8 @@ const previewWidth = ref<number | null>(props.node.attrs.width || null)
 
 const wrapStyle = computed(() => (previewWidth.value ? `width:${previewWidth.value}px` : ''))
 
-// 图片惰性加载: 未进入视口前用 1x1 透明占位, 进入视口(含 300px 预加载边距)才真正请求
+// 图片惰性加载: 未进入视口前用 1x1 透明占位, 进入视口(含 300px 预加载边距)才真正请求;
+// 打印期间(TipTapEditor prepareForPrint 置 printExpand)忽略占位, 强制加载, 避免打印稿缺图
 const PLACEHOLDER_SRC = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'
 const visible = ref(false)
 const wrapRef = ref<{ $el?: HTMLElement } | null>(null)
@@ -43,7 +45,7 @@ let observer: LazyObserver | null = null
 
 const displaySrc = computed(() => {
   const src = String(props.node.attrs.src || '')
-  if (visible.value || src.startsWith('data:')) return src
+  if (visible.value || printExpand.value || src.startsWith('data:')) return src
   return PLACEHOLDER_SRC
 })
 
