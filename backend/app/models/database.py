@@ -379,13 +379,15 @@ class UserPageFavorite(Base):
 
 
 class UserTemplate(Base):
-    """用户笔记模板(纯本人资源, 服务端按 user_id 隔离)。"""
+    """用户笔记模板(服务端按 user_id 隔离; visibility=public 时对所有用户只读共享)。"""
     __tablename__ = 'user_templates'
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     user_id = Column(String(36), ForeignKey('users.id', ondelete='CASCADE'), nullable=False, index=True)
     name = Column(String(255), nullable=False)
     content = Column(Text, default='')
+    # 可见性: private 仅本人 | public 跨用户共享(他人只读, 仍仅本人可改删)
+    visibility = Column(String(16), nullable=False, default='private', server_default='private')
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 
@@ -647,9 +649,29 @@ def run_user_column_migrations(engine):
         ))
 
 
+def run_user_template_column_migrations(engine):
+    """user_templates 幂等迁移(Postgres+SQLite 兼容): 补 visibility 列, 存量行回填 private。
+
+    Base.metadata.create_all 不会给已存在表加列; 必须在 _migrate_schema 之前调用,
+    由本函数显式 ALTER(带 DEFAULT, 存量行即回填)。缺列才加, 重复执行无副作用。
+    """
+    inspector = inspect(engine)
+    if not inspector.has_table("user_templates"):
+        return
+    existing = {c["name"] for c in inspector.get_columns("user_templates")}
+    if "visibility" in existing:
+        return
+    with engine.begin() as conn:
+        conn.execute(sqlalchemy_text(
+            "ALTER TABLE user_templates ADD COLUMN visibility VARCHAR(16) NOT NULL DEFAULT 'private'"
+        ))
+    logger.info("Added column visibility to table user_templates")
+
+
 def init_db(engine):
     Base.metadata.create_all(engine)
     run_user_column_migrations(engine)
+    run_user_template_column_migrations(engine)
     _migrate_schema(engine)
     _backfill_text_defaults(engine)
     _ensure_wiki_group_index(engine)

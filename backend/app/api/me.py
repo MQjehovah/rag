@@ -11,6 +11,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -19,6 +20,7 @@ from app.api.search_common import page_visible_condition
 from app.core.jwt_utils import get_current_user
 from app.models.database import (
     Page,
+    User,
     UserChatMessage,
     UserPageFavorite,
     UserRecentPage,
@@ -33,6 +35,7 @@ CHAT_LIMIT_DEFAULT = 200
 CHAT_LIMIT_MAX = 500
 TEMPLATE_NAME_MAX = 128
 TEMPLATE_CONTENT_MAX = 200_000
+TEMPLATE_VISIBILITIES = ("private", "public")
 CHAT_CONTENT_MAX = 100_000
 CHAT_SOURCES_MAX = 200_000
 CHAT_ROLES = ("user", "assistant")
@@ -45,6 +48,8 @@ class PageIdBody(BaseModel):
 class TemplateBody(BaseModel):
     name: str = ""
     content: str = ""
+    # private(默认, 仅本人) | public(共享给所有用户只读); PUT 缺省=None 表示不改可见性
+    visibility: Optional[str] = None
 
 
 class ChatMessageBody(BaseModel):
@@ -98,8 +103,17 @@ def _page_items(db: Session, current_user, model, order_col, limit: Optional[int
     ]
 
 
-def _template_out(t: UserTemplate) -> dict:
-    return {"id": t.id, "name": t.name, "content": t.content or "", "updated_at": t.updated_at}
+def _template_out(t: UserTemplate, owner: str = "", is_mine: bool = True) -> dict:
+    return {
+        "id": t.id,
+        "name": t.name,
+        "content": t.content or "",
+        "visibility": t.visibility or "private",
+        "owner": owner,
+        "owner_id": t.user_id,
+        "is_mine": is_mine,
+        "updated_at": t.updated_at,
+    }
 
 
 def _parse_sources(raw: Optional[str]) -> list:
@@ -231,32 +245,67 @@ def _validate_template(name: str, content: str):
     return name, content
 
 
+def _validate_template_visibility(raw: Optional[str]) -> str:
+    visibility = (raw or "private").strip().lower()
+    if visibility not in TEMPLATE_VISIBILITIES:
+        raise HTTPException(status_code=400, detail="visibility 仅支持 private/public")
+    return visibility
+
+
+def _user_display_name(user: Optional[dict]) -> str:
+    if not user:
+        return ""
+    return user.get("name") or user.get("username") or ""
+
+
 @router.get("/templates")
 def list_templates(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    """本人全部模板 + 他人 public 模板(带 owner/is_mine 标记, 共享条目只读)。"""
+    uid = current_user["id"]
     rows = (
         db.query(UserTemplate)
-        .filter(UserTemplate.user_id == current_user["id"])
+        .filter(or_(UserTemplate.user_id == uid, UserTemplate.visibility == "public"))
         .order_by(UserTemplate.updated_at.desc())
         .all()
     )
-    return {"items": [_template_out(t) for t in rows]}
+    other_ids = {t.user_id for t in rows if t.user_id != uid}
+    owner_names: dict = {}
+    if other_ids:
+        owner_names = {
+            row.id: (row.name or row.username or "")
+            for row in db.query(User.id, User.name, User.username).filter(User.id.in_(other_ids)).all()
+        }
+    my_name = _user_display_name(current_user)
+    return {
+        "items": [
+            _template_out(
+                t,
+                owner=my_name if t.user_id == uid else owner_names.get(t.user_id, ""),
+                is_mine=t.user_id == uid,
+            )
+            for t in rows
+        ]
+    }
 
 
 @router.post("/templates")
 def create_template(body: TemplateBody, db: Session = Depends(get_db),
                     current_user=Depends(get_current_user)):
     name, content = _validate_template(body.name, body.content)
-    t = UserTemplate(id=str(uuid.uuid4()), user_id=current_user["id"], name=name, content=content)
+    visibility = _validate_template_visibility(body.visibility)
+    t = UserTemplate(id=str(uuid.uuid4()), user_id=current_user["id"], name=name,
+                     content=content, visibility=visibility)
     db.add(t)
     db.commit()
     db.refresh(t)
-    return _template_out(t)
+    return _template_out(t, owner=_user_display_name(current_user), is_mine=True)
 
 
 @router.put("/templates/{template_id}")
 def update_template(template_id: str, body: TemplateBody, db: Session = Depends(get_db),
                     current_user=Depends(get_current_user)):
     name, content = _validate_template(body.name, body.content)
+    visibility = _validate_template_visibility(body.visibility) if body.visibility is not None else None
     t = (
         db.query(UserTemplate)
         .filter(UserTemplate.id == template_id, UserTemplate.user_id == current_user["id"])
@@ -266,10 +315,12 @@ def update_template(template_id: str, body: TemplateBody, db: Session = Depends(
         raise HTTPException(status_code=404, detail="模板不存在")
     t.name = name
     t.content = content
+    if visibility is not None:
+        t.visibility = visibility
     t.updated_at = datetime.now()
     db.commit()
     db.refresh(t)
-    return _template_out(t)
+    return _template_out(t, owner=_user_display_name(current_user), is_mine=True)
 
 
 @router.delete("/templates/{template_id}")

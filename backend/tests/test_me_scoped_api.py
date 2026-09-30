@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from app.models.database import (
     Notebook,
     Page,
+    User,
     UserChatMessage,
     UserPageFavorite,
     UserRecentPage,
@@ -201,6 +202,109 @@ def test_templates_crud_validation_and_order(api_client, api_engine, as_user):
     assert api_client.delete(f"/api/me/templates/{t2['id']}").json() == {"ok": True}
     assert api_client.delete(f"/api/me/templates/{t2['id']}").status_code == 404
     assert [t["id"] for t in api_client.get("/api/me/templates").json()["items"]] == [t1["id"]]
+
+
+def test_templates_visibility_shared_readonly(api_client, api_engine, as_user):
+    """跨用户共享: public 他人可见(is_mine=False + owner), private 不可见; 他人不可改删。"""
+    _seed(api_engine)
+    db = get_session(api_engine)
+    try:
+        db.add(User(id="u-a", username="10086", name="甲"))
+        db.add(User(id="u-b", username="10087", name="乙"))
+        db.commit()
+    finally:
+        db.close()
+    as_user([], id="u-a", name="甲")
+    t_pub = api_client.post("/api/me/templates", json={
+        "name": "公开模板", "content": "正文 {{姓名}}", "visibility": "public",
+    }).json()
+    t_priv = api_client.post("/api/me/templates", json={"name": "私有模板", "content": "私"}).json()
+    assert t_pub["visibility"] == "public" and t_pub["is_mine"] is True
+    assert t_priv["visibility"] == "private" and t_priv["owner"] == "甲"
+
+    as_user([], id="u-b", name="乙")
+    items = api_client.get("/api/me/templates").json()["items"]
+    assert [t["id"] for t in items] == [t_pub["id"]]  # 私有不可见
+    sh = items[0]
+    assert sh["is_mine"] is False and sh["owner"] == "甲" and sh["content"] == "正文 {{姓名}}"
+    # 他人 public 模板不可改/删(仅本人条目可操作)
+    assert api_client.put(f"/api/me/templates/{t_pub['id']}",
+                          json={"name": "改名", "content": "x"}).status_code == 404
+    assert api_client.delete(f"/api/me/templates/{t_pub['id']}").status_code == 404
+    # B 自己的模板与共享列表合并返回(B 新建的在前, updated_at 降序)
+    t_b = api_client.post("/api/me/templates", json={"name": "乙模板", "content": "y"}).json()
+    assert [t["id"] for t in api_client.get("/api/me/templates").json()["items"]] == [t_b["id"], t_pub["id"]]
+
+    # A 看 B: 只有 public; A 自己的两条都在
+    as_user([], id="u-a", name="甲")
+    ids = [t["id"] for t in api_client.get("/api/me/templates").json()["items"]]
+    assert set(ids) == {t_pub["id"], t_priv["id"]}
+
+
+def test_templates_visibility_validation_and_put_semantics(api_client, api_engine, as_user):
+    """visibility 仅 private/public(大小写/空格归一), 非法值 400; PUT 不传则保持原值。"""
+    _seed(api_engine)
+    as_user([], id="u-a")
+    for bad in ("team", "shared", "PRIVATE2", "公有"):
+        assert api_client.post("/api/me/templates", json={
+            "name": "t", "content": "", "visibility": bad,
+        }).status_code == 400, f"visibility={bad!r}"
+    t = api_client.post("/api/me/templates", json={
+        "name": "t", "content": "", "visibility": "PUBLIC ",
+    }).json()
+    assert t["visibility"] == "public"  # 归一化
+    # PUT 非法值 400, 且不落库
+    assert api_client.put(f"/api/me/templates/{t['id']}", json={
+        "name": "t", "content": "", "visibility": "shared",
+    }).status_code == 400
+    kept = api_client.put(f"/api/me/templates/{t['id']}", json={"name": "t2", "content": "x"}).json()
+    assert kept["visibility"] == "public" and kept["name"] == "t2"
+    down = api_client.put(f"/api/me/templates/{t['id']}", json={
+        "name": "t2", "content": "x", "visibility": "PRIVATE",
+    }).json()
+    assert down["visibility"] == "private"
+
+
+def test_user_templates_visibility_migration_idempotent(tmp_path):
+    """旧库缺 visibility 列: 幂等迁移补列并回填 private, 重跑无副作用。"""
+    from sqlalchemy import create_engine, inspect, text
+
+    from app.models.database import run_user_template_column_migrations
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'legacy.db'}")
+    with engine.begin() as conn:
+        conn.execute(text(
+            "CREATE TABLE user_templates ("
+            "id VARCHAR(36) PRIMARY KEY, user_id VARCHAR(36) NOT NULL, "
+            "name VARCHAR(255) NOT NULL, content TEXT, "
+            "created_at DATETIME, updated_at DATETIME)"
+        ))
+        conn.execute(text(
+            "INSERT INTO user_templates (id, user_id, name, content) "
+            "VALUES ('t-legacy', 'u-a', '旧模板', '正文')"
+        ))
+    # 缺列 → 补列 + 回填; 重跑幂等
+    run_user_template_column_migrations(engine)
+    run_user_template_column_migrations(engine)
+    cols = {c["name"] for c in inspect(engine).get_columns("user_templates")}
+    assert "visibility" in cols
+    with engine.begin() as conn:
+        row = conn.execute(text(
+            "SELECT name, content, visibility FROM user_templates WHERE id = 't-legacy'"
+        )).fetchone()
+    assert tuple(row) == ("旧模板", "正文", "private")
+    # 已含 visibility 的表(新库路径)同样 no-op
+    run_user_template_column_migrations(engine)
+    with engine.begin() as conn:
+        conn.execute(text(
+            "INSERT INTO user_templates (id, user_id, name, content, visibility) "
+            "VALUES ('t-new', 'u-a', '新模板', '', 'public')"
+        ))
+    run_user_template_column_migrations(engine)
+    with engine.begin() as conn:
+        assert conn.execute(text(
+            "SELECT visibility FROM user_templates WHERE id = 't-new'"
+        )).scalar() == "public"
 
 
 def test_chat_messages_order_limit_sources_and_validation(api_client, api_engine, as_user):
