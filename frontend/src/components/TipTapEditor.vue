@@ -444,7 +444,8 @@ import { sanitizePastedHTML } from '../utils/sanitizePaste'
 import { nextFootnoteLabel } from '../utils/markdownFootnotes'
 import { serializeTextMarkdown } from '../utils/markdownText'
 import { serializeTableMarkdown } from '../utils/markdownTable'
-import type { CollabPeer } from '../utils/collab'
+import type { CollabPeer, CollabMetaSnapshot } from '../utils/collab'
+import { decideSeed, readSeedClaim } from '../utils/collab'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plugin, PluginKey, TextSelection } from 'prosemirror-state'
 import { Decoration, DecorationSet } from 'prosemirror-view'
@@ -603,10 +604,17 @@ let provider: WebsocketProvider | null = null
 let collabSynced = false
 let collabSeedDone = false
 let collabSyncTimer: number | null = null
-let collabSeedTimer: number | null = null
+let collabDisposed = false
+/** 播种总流程只跑一次; 页面内容未就绪而中止时复位, 由 modelValue 变化重新触发 */
+let collabReadyStarted = false
+/** 认领时间与"已过一轮 seed 判定"标记(并发认领的收敛窗口) */
+let collabClaimAt = 0
+let collabSeedConfirmed = false
 /** 同步完成前收到的外部内容(恢复版本/草稿), 同步后应用 */
 let pendingExternal: string | null = null
 const collabExtensions: any[] = []
+/** 协同相关的全部定时器(超时/轮询), 卸载时统一清理 */
+const collabTimers = new Set<number>()
 if (props.collab) {
   ydoc = new Y.Doc()
   provider = new WebsocketProvider(props.collab.url, props.collab.room, ydoc)
@@ -638,13 +646,7 @@ if (provider) {
     if (collabSynced) return
     collabSynced = true
     emit('collab-status', true)
-    if (pendingExternal !== null) {
-      const markdown = pendingExternal
-      pendingExternal = null
-      nextTick(() => applyExternalContentNow(markdown))
-    } else {
-      nextTick(() => seedCollabIfEmpty())
-    }
+    nextTick(() => ensureCollabReadyFlow())
   }
   // 仅在与服务器初始同步完成后才允许播种/外部覆盖, 避免"本地插入 + 服务器内容"并发合并导致重复
   p.on('sync', onSynced)
@@ -660,27 +662,158 @@ if (provider) {
   }, 5000)
 }
 
-function seedCollabIfEmpty() {
-  if (!props.collab || !ydoc || !editor.value || !collabSynced || collabSeedDone) return
-  if (collabSeedTimer !== null) return
-  // F4: 双端几乎同时打开同一空页面时会各自看到空文档而同时播种, 造成内容翻倍。
-  // 先随机延迟 300-800ms 再复查"仍为空", 给对端播种留出到达时间, 显著收窄同时播种窗口
-  // (残留风险: 两端网络时延差超过延迟窗口时仍可能双播, 不做内容哈希级别的强一致)。
-  const delay = 300 + Math.floor(Math.random() * 500)
-  collabSeedTimer = window.setTimeout(() => {
-    collabSeedTimer = null
-    if (!props.collab || !ydoc || !editor.value || !collabSynced || collabSeedDone) return
-    try {
-      if (ydoc.getXmlFragment('default').length > 0) {
-        collabSeedDone = true
-        return
-      }
-      const markdown = props.modelValue
-      if (!markdown) return
-      collabSeedDone = true
-      editor.value.commands.setContent(markdown, false)
-    } catch { /* ignore */ }
-  }, delay)
+// ---------------- 单点播种(Yjs 认领模式, 根治双播) ----------------
+// 双端同时首开空房间: 各自先在 meta map 写 seedClaim(单事务), 等一个同步回合后复查,
+// 只有"认领者是自己且文档仍为空"才播种, 否则等对方播。Yjs 对同一 key 的并发写按
+// clientID 确定性合并, 两端收敛出唯一赢家 → 恰好一个端播种; 5s 上限内认领非本端则不再播。
+
+/** 认领后等待一个同步回合(y-websocket 即时广播, 覆盖一次往返) */
+const CLAIM_SYNC_ROUND_MS = 400
+/** 首次 seed 判定后的收敛窗口: 并发认领需在两端合并出唯一赢家 */
+const CLAIM_SETTLE_MS = 300
+/** 等待对端播种的上限; 超过后本端不再播(由认领者负责), 双保险 */
+const SEED_WAIT_DEADLINE_MS = 5000
+/** wait 状态轮询间隔 */
+const SEED_POLL_MS = 300
+/** 页面内容为空的宽限: 空页与加载占位无法即时区分, 让真实页面数据先到 */
+const PAGE_CONTENT_GRACE_MS = 600
+
+function collabAborted(): boolean {
+  return collabDisposed || !props.collab || !ydoc
+}
+
+function collabTimeout(fn: () => void, ms: number): number {
+  const id = window.setTimeout(() => { collabTimers.delete(id); fn() }, ms)
+  collabTimers.add(id)
+  return id
+}
+
+function clearCollabTimers(): void {
+  for (const id of collabTimers) {
+    clearTimeout(id)
+    clearInterval(id)
+  }
+  collabTimers.clear()
+}
+
+function sleepCollab(ms: number): Promise<void> {
+  return new Promise(resolve => { collabTimeout(resolve, ms) })
+}
+
+function collabMeta(): Y.Map<any> | null {
+  return ydoc ? ydoc.getMap('meta') : null
+}
+
+function metaSnapshot(): CollabMetaSnapshot {
+  const meta = collabMeta()
+  if (!meta) return {}
+  const base = meta.get('baseUpdatedAt')
+  return {
+    seedClaim: readSeedClaim(meta.get('seedClaim')),
+    seedDone: meta.get('seedDone') === true,
+    baseUpdatedAt: typeof base === 'string' ? base : null,
+  }
+}
+
+function collabFragmentEmpty(): boolean {
+  return !ydoc || ydoc.getXmlFragment('default').length === 0
+}
+
+function writeSeedClaim(): void {
+  const meta = collabMeta()
+  if (!meta || !ydoc) return
+  const doc = ydoc
+  doc.transact(() => { meta.set('seedClaim', { by: doc.clientID, at: Date.now() }) })
+  collabClaimAt = Date.now()
+}
+
+/** 页面内容就绪(内容非空, 或空页宽限已过)后返回, 避免用占位空内容播种。 */
+async function waitPageContentReady(): Promise<void> {
+  const start = Date.now()
+  while (!String(props.modelValue || '').trim() && Date.now() - start < PAGE_CONTENT_GRACE_MS) {
+    if (collabAborted()) break
+    await sleepCollab(150)
+  }
+}
+
+async function applyPendingExternalIfAny(): Promise<void> {
+  if (pendingExternal === null) return
+  const markdown = pendingExternal
+  pendingExternal = null
+  await nextTick()
+  applyExternalContentNow(markdown)
+}
+
+/** 文档已有内容: 不播种(清空也不重播), 缺失时补写 seedDone。 */
+function markSeedSettled(): void {
+  collabSeedDone = true
+  const meta = collabMeta()
+  if (!meta || !ydoc || metaSnapshot().seedDone) return
+  const doc = ydoc
+  doc.transact(() => { meta.set('seedDone', true) })
+}
+
+/** 播种总流程(协同在线后执行一次): 等内容就绪 → 外部内容 → 认领/播种/等待。 */
+async function runCollabReadyFlow(): Promise<void> {
+  await waitPageContentReady()
+  if (collabAborted()) return
+  await applyPendingExternalIfAny()
+  if (collabAborted() || collabSeedDone) return
+  if (!collabFragmentEmpty()) { markSeedSettled(); return }
+  if (!String(props.modelValue || '').trim()) {
+    // 内容仍为空(加载占位/空页): 不认领; 内容到达后由 modelValue watch 重新触发
+    collabReadyStarted = false
+    return
+  }
+  beginSeedClaim()
+}
+
+function ensureCollabReadyFlow(): void {
+  if (collabReadyStarted || collabSeedDone || !collabSynced || collabAborted()) return
+  collabReadyStarted = true
+  void runCollabReadyFlow()
+}
+
+function beginSeedClaim(): void {
+  if (collabAborted() || collabSeedDone) return
+  writeSeedClaim()
+  collabSeedConfirmed = false
+  collabTimeout(() => recheckSeedDecision(), CLAIM_SYNC_ROUND_MS)
+}
+
+/** 复查认领决策: seed(二次确认后播) / wait(轮询至 5s 上限) / skip。 */
+function recheckSeedDecision(): void {
+  if (collabAborted() || collabSeedDone || !ydoc) return
+  const decision = decideSeed(metaSnapshot(), ydoc.clientID, collabFragmentEmpty())
+  if (decision === 'skip') { collabSeedDone = true; return }
+  if (decision === 'seed') {
+    if (!collabSeedConfirmed) {
+      collabSeedConfirmed = true
+      collabTimeout(() => recheckSeedDecision(), CLAIM_SETTLE_MS)
+      return
+    }
+    performSeed()
+    return
+  }
+  if (Date.now() - collabClaimAt >= SEED_WAIT_DEADLINE_MS) return
+  collabTimeout(() => recheckSeedDecision(), SEED_POLL_MS)
+}
+
+function performSeed(): void {
+  if (collabAborted() || collabSeedDone || !ydoc || !editor.value) return
+  if (!collabFragmentEmpty()) { collabSeedDone = true; return }
+  if (metaSnapshot().seedClaim?.by !== ydoc.clientID) return
+  const markdown = props.modelValue || ''
+  if (!markdown) return
+  collabSeedDone = true
+  editor.value.commands.setContent(markdown, false)
+  const meta = collabMeta()
+  if (meta) {
+    const doc = ydoc
+    doc.transact(() => { meta.set('seedDone', true) })
+  }
+  mermaidCache.clear()
+  nextTick(() => { scheduleMermaid(); disableSpellcheck() })
 }
 
 /**
@@ -1672,7 +1805,7 @@ const editor = useEditor({
     Markdown.configure({ html: true, breaks: true, linkify: true }),
   ],
   // 协同模式绝不把 content 交给编辑器初始文档(会在 Yjs 同步前写入本地并和服务器内容合并 → 重复);
-  // 改为同步完成后由 seedCollabIfEmpty 从 Markdown 播种空文档。
+  // 改为同步完成后由 runCollabReadyFlow(认领单点播种)从 Markdown 播种空文档。
   content: props.collab ? '' : props.modelValue,
   onUpdate: ({ editor }) => {
     const markdown = editor.storage.markdown.getMarkdown()
@@ -2436,7 +2569,7 @@ async function setLink() {
 watch(() => props.modelValue, (newValue) => {
   if (props.collab) {
     // 协同模式内容由 Yjs 驱动; 仅在"已完成初始同步且从未播种过"时用最新 Markdown 播种
-    if (collabSynced && !collabSeedDone) nextTick(() => seedCollabIfEmpty())
+    if (collabSynced && !collabSeedDone) nextTick(() => ensureCollabReadyFlow())
     return
   }
   if (!editor.value || lastEmitted === newValue) return
@@ -2589,6 +2722,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  collabDisposed = true
   document.removeEventListener('dragover', onDocDragOver)
   document.removeEventListener('drop', onDocDrop)
   document.removeEventListener('click', closeTableMenu)
@@ -2609,10 +2743,7 @@ onBeforeUnmount(() => {
     clearTimeout(collabSyncTimer)
     collabSyncTimer = null
   }
-  if (collabSeedTimer) {
-    clearTimeout(collabSeedTimer)
-    collabSeedTimer = null
-  }
+  clearCollabTimers()
   provider?.awareness.off('change', emitCollabUsers)
   editor.value?.destroy()
   provider?.destroy()

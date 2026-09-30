@@ -1,8 +1,52 @@
-/** 协同编辑开关与 WebSocket 探活(失败回退单人编辑)。 */
+/** 协同编辑开关、WebSocket 探活(失败回退单人编辑)与单点播种认领决策。 */
 
 export interface CollabPeer {
   name: string
   color: string
+}
+
+/** 播种认领(房间 meta map 上的 seedClaim): 只有认领者负责把 Markdown 播进空房间。 */
+export interface SeedClaim {
+  by: number
+  at: number
+}
+
+/** 房间 meta(Y.Map<'meta'>)快照, 结构见 TipTapEditor 的 meta 读写。 */
+export interface CollabMetaSnapshot {
+  seedClaim?: SeedClaim | null
+  seedDone?: boolean
+  baseUpdatedAt?: string | null
+}
+
+export type SeedDecision = 'seed' | 'wait' | 'skip'
+
+/** 校验并归一化 meta.seedClaim(容忍历史/脏数据)。 */
+export function readSeedClaim(raw: unknown): SeedClaim | null {
+  if (!raw || typeof raw !== 'object') return null
+  const by = Number((raw as { by?: unknown }).by)
+  const at = Number((raw as { at?: unknown }).at)
+  if (!Number.isFinite(by)) return null
+  return { by, at: Number.isFinite(at) ? at : 0 }
+}
+
+/**
+ * 单点播种决策(纯函数): sync 完成、写入自己的 seedClaim 并等一个同步回合后复查。
+ * - 文档已有内容(对端已播 / y-indexeddb 恢复) → skip;
+ * - 房间已播种过(seedDone, 即便内容被清空) → skip;
+ * - 认领者是自己且文档为空 → seed;
+ * - 认领者是别人 → wait(等待其播种);
+ * - 无认领(遗留房间/异常) → seed 兜底(调用方已先写入自己的认领)。
+ */
+export function decideSeed(
+  meta: CollabMetaSnapshot | null | undefined,
+  clientID: number,
+  fragmentEmpty: boolean,
+): SeedDecision {
+  if (!fragmentEmpty) return 'skip'
+  if (meta?.seedDone) return 'skip'
+  const claim = meta?.seedClaim
+  if (claim && Number.isFinite(claim.by)) return claim.by === clientID ? 'seed' : 'wait'
+  return 'seed'
 }
 
 /** 探活结果缓存: 成功缓存整个会话(页面内 4s 无同步还有兜底), 失败缓存 30s 后允许重试。 */
