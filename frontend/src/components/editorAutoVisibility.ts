@@ -8,6 +8,9 @@
  *
  * - 纯展示装饰: 不改文档内容、不参与 Markdown 序列化、不广播 Yjs;
  * - 选区变化用 meta-only 事务刷新装饰(不进 undo 栈);
+ * - 含表格的块不打 cv-auto(R4a): content-visibility 会给祖先套上 contain,
+ *   而 sticky 表头需要无 contain/无滚动容器的祖先链, 故整块跳过(表格一般不大,
+ *   其折叠/折叠展开由 TableFold 负责);
  * - 打印兜底: 打印 CSS 强制 `content-visibility: visible`(见 Editor.vue), 与
  *   beforeprint 的图片/mermaid 展开路径一致。
  */
@@ -41,6 +44,8 @@ export const CvAutoVisibility = Extension.create<CvAutoOptions>({
               // 与选区相交的块完整渲染(含光标所在块)
               if (sel.from <= end && sel.to >= offset) return
               if (isBlockProtected?.(node, offset, state)) return
+              // 表格(sticky 表头)要求祖先链无 contain, 整块跳过惰渲染
+              if (blockHasTable(node)) return
               decos.push(Decoration.node(offset, end, { class: 'cv-auto' }))
             })
             return decos.length ? DecorationSet.create(state.doc, decos) : null
@@ -55,3 +60,18 @@ export const CvAutoVisibility = Extension.create<CvAutoOptions>({
     ]
   },
 })
+
+/** 块自身或后代含 table(表格或其嵌套容器, 如 callout/列表); 文本块快速短路。 */
+export function blockHasTable(node: PMNode): boolean {
+  if (node.type.name === 'table') return true
+  if (node.isTextblock || node.isLeaf) return false
+  let found = false
+  node.descendants((child) => {
+    if (child.type.name === 'table') {
+      found = true
+      return false
+    }
+    return !found
+  })
+  return found
+}

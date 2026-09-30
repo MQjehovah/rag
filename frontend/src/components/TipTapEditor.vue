@@ -152,6 +152,11 @@
       <button class="tb-btn sm" @click="tableCommand('addColumnBefore')">左侧列</button>
       <button class="tb-btn sm" @click="tableCommand('addColumnAfter')">右侧列</button>
       <span class="divider"></span>
+      <button class="tb-btn sm" :disabled="!canMove('row', 'up')" title="与上一行交换（合并单元格/首行不可用）" @click="moveTable('row', 'up')">上移本行</button>
+      <button class="tb-btn sm" :disabled="!canMove('row', 'down')" title="与下一行交换（合并单元格/末行不可用）" @click="moveTable('row', 'down')">下移本行</button>
+      <button class="tb-btn sm" :disabled="!canMove('column', 'left')" title="与左一列交换（合并单元格/首列不可用）" @click="moveTable('column', 'left')">左移本列</button>
+      <button class="tb-btn sm" :disabled="!canMove('column', 'right')" title="与右一列交换（合并单元格/末列不可用）" @click="moveTable('column', 'right')">右移本列</button>
+      <span class="divider"></span>
       <button class="tb-btn sm" @click="tableCommand('toggleHeaderRow')">表头行</button>
       <button class="tb-btn sm" @click="tableCommand('mergeCells')">合并</button>
       <button class="tb-btn sm" @click="tableCommand('splitCell')">拆分</button>
@@ -177,6 +182,11 @@
         <button class="ctx-item" @click="ctxTable('toggleHeaderRow')"><TableIcon :size="14" /> 切换表头行</button>
         <button class="ctx-item" @click="ctxTable('mergeCells')"><Combine :size="14" /> 合并单元格</button>
         <button class="ctx-item" @click="ctxTable('splitCell')"><Split :size="14" /> 拆分单元格</button>
+        <div class="ctx-sep"></div>
+        <button class="ctx-item" :disabled="!canMove('row', 'up')" @click="ctxTableMove('row', 'up')"><ArrowUp :size="14" /> 上移本行</button>
+        <button class="ctx-item" :disabled="!canMove('row', 'down')" @click="ctxTableMove('row', 'down')"><ArrowDown :size="14" /> 下移本行</button>
+        <button class="ctx-item" :disabled="!canMove('column', 'left')" @click="ctxTableMove('column', 'left')"><ArrowLeft :size="14" /> 左移本列</button>
+        <button class="ctx-item" :disabled="!canMove('column', 'right')" @click="ctxTableMove('column', 'right')"><ArrowRight :size="14" /> 右移本列</button>
         <div class="ctx-sep"></div>
         <button class="ctx-item danger" @click="ctxTable('deleteRow')"><Trash2 :size="14" /> 删除本行</button>
         <button class="ctx-item danger" @click="ctxTable('deleteColumn')"><Trash2 :size="14" /> 删除本列</button>
@@ -551,6 +561,10 @@ import { sanitizePastedHTML } from '../utils/sanitizePaste'
 import { nextFootnoteLabel } from '../utils/markdownFootnotes'
 import { serializeTextMarkdown } from '../utils/markdownText'
 import { serializeTableMarkdown } from '../utils/markdownTable'
+import {
+  canMoveColumn, canMoveRow, moveTableColumn, moveTableRow,
+  type MoveAxis, type MoveDirection,
+} from '../utils/tableMove'
 import type { CollabPeer, CollabMetaSnapshot } from '../utils/collab'
 import { decideSeed, isPersistenceEnabled, isPersistedBaseStale, readSeedClaim } from '../utils/collab'
 import {
@@ -2716,6 +2730,24 @@ function tableCommand(name: string) {
   } catch { /* 边界情况静默忽略 */ }
 }
 
+/** 行列移动按钮的可用态(首末行/列与合并单元格由 tableMove.can* 守卫)。 */
+function canMove(axis: MoveAxis, dir: MoveDirection): boolean {
+  const e = editor.value
+  if (!e) return false
+  const state = e.state
+  return axis === 'row' ? canMoveRow(state, dir) : canMoveColumn(state, dir)
+}
+
+/** 菜单式行列移动(ProseMirror 事务; 拖拽方案见 utils/tableMove.ts 注释)。 */
+function moveTable(axis: MoveAxis, dir: MoveDirection) {
+  const e = editor.value
+  if (!e) return
+  const tr = axis === 'row' ? moveTableRow(e.state, dir) : moveTableColumn(e.state, dir)
+  if (!tr) return
+  e.view.dispatch(tr)
+  e.view.focus()
+}
+
 function onTableContextMenu(ev: MouseEvent) {
   const e = editor.value
   if (!e) return
@@ -2729,7 +2761,7 @@ function onTableContextMenu(ev: MouseEvent) {
   } catch { /* ignore */ }
   tableMenu.open = true
   tableMenu.x = Math.max(8, Math.min(ev.clientX, window.innerWidth - 196))
-  tableMenu.y = Math.max(8, Math.min(ev.clientY, window.innerHeight - 360))
+  tableMenu.y = Math.max(8, Math.min(ev.clientY, window.innerHeight - 460))
 }
 
 function closeTableMenu() {
@@ -2739,6 +2771,11 @@ function closeTableMenu() {
 function ctxTable(name: string) {
   tableMenu.open = false
   tableCommand(name)
+}
+
+function ctxTableMove(axis: MoveAxis, dir: MoveDirection) {
+  tableMenu.open = false
+  moveTable(axis, dir)
 }
 
 function setHeading(ev: Event) {
@@ -4045,6 +4082,22 @@ onBeforeUnmount(() => {
   overflow-x: auto;
 }
 
+/* R4a 表头吸顶: 只对首行表头单元格(thead/tableHeader 首行, 关掉表头行自动失效)。
+   prosemirror-tables 生成的 .tableWrapper 带 overflow-x:auto, 本身是滚动容器,
+   sticky 会只相对 wrapper(不滚动)而失效; 含表头的表格改为 overflow:visible,
+   让 .doc-scroll 成为最近滚动口(超宽表仍可整页横向滚动)。 */
+.editor-content :deep(.ProseMirror .tableWrapper:has(> table tr:first-child > th)) {
+  overflow: visible;
+}
+
+.editor-content :deep(.ProseMirror table tr:first-child > th) {
+  position: sticky;
+  top: 46px;
+  z-index: 3;
+  background: var(--surface);
+  box-shadow: inset 0 -1px 0 var(--border-strong);
+}
+
 .editor-content :deep(.ProseMirror.resize-cursor) {
   cursor: col-resize;
 }
@@ -4090,12 +4143,14 @@ onBeforeUnmount(() => {
   text-align: center;
 }
 
-/* 超大表格折叠: 默认只显示表头 + 前 20 行正文, 由装饰加类 */
-.editor-content :deep(.ProseMirror table.table-folded-head tr:nth-child(n+22)) {
+/* 超大表格折叠: 默认只显示表头 + 前 20 行正文, 由装饰加类。
+   注意: resizable 表格经 prosemirror-tables TableView 渲染, 节点装饰类落在
+   .tableWrapper 上(而非 <table>), 选择器不能带 table 前缀(R1-R3 后折叠曾失效)。 */
+.editor-content :deep(.ProseMirror .table-folded-head tr:nth-child(n+22)) {
   display: none;
 }
 
-.editor-content :deep(.ProseMirror table.table-folded:not(.table-folded-head) tr:nth-child(n+21)) {
+.editor-content :deep(.ProseMirror .table-folded:not(.table-folded-head) tr:nth-child(n+21)) {
   display: none;
 }
 
@@ -4513,6 +4568,12 @@ html.dark .editor-content :deep(.find-hit-current) {
   contain-intrinsic-size: auto 80px;
 }
 
+/* R4a: content-visibility 会引入 contain, 祖先含 table 时禁用(CvAutoVisibility
+   已按块跳过, 这里兜底覆盖任何来源的 cv-auto), 保证 sticky 表头可用 */
+.ProseMirror .cv-auto:has(table) {
+  content-visibility: visible;
+}
+
 /* 知识库检索/全库搜索弹窗 */
 .kb-search-bar {
   display: flex;
@@ -4709,6 +4770,8 @@ html.dark .editor-content :deep(.find-hit-current) {
 }
 
 .table-ctx .ctx-item:hover { background: #f3f4f6; }
+.table-ctx .ctx-item:disabled { opacity: 0.45; cursor: default; }
+.table-ctx .ctx-item:disabled:hover { background: transparent; }
 .table-ctx .ctx-item.danger { color: #dc2626; }
 .table-ctx .ctx-item.danger:hover { background: #fef2f2; }
 .table-ctx .ctx-sep { height: 1px; background: #f0f1f4; margin: 4px 0; }
