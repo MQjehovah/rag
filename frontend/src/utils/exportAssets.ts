@@ -11,10 +11,11 @@
  */
 import http from '../api/http'
 import { mapImageSrc } from './imageSign'
-import { mapLimit } from './pageArchive'
+import { mapLimit, parseAttachmentUrl } from './pageArchive'
 
 const API_BASE = (import.meta.env.BASE_URL || '/').replace(/\/$/, '')
 const SIGN_ENDPOINT = '/api/upload/images/sign'
+const ATTACHMENT_PREFIX = '/api/upload/attachments/'
 
 const stripBase = (path: string): string =>
   API_BASE && path.startsWith(API_BASE + '/') ? path.slice(API_BASE.length) : path
@@ -85,12 +86,22 @@ export function classifyImageSrc(raw: string, origin = window.location.origin): 
   return { kind: 'skip' }
 }
 
-/** 带 token 的同源路径请求(仅由 classifyImageSrc 的 path/sign 分支调用)。 */
-async function fetchAuthedPathAsDataUrl(path: string, timeoutMs: number): Promise<string | null> {
+/** 带 token 的同源路径请求(仅由 classifyImageSrc/fetchAttachmentBlob 的 path/sign 分支调用)。 */
+async function fetchAuthedPathAsBlob(path: string, timeoutMs: number): Promise<Blob | null> {
   try {
     const res = await http.get(path, { responseType: 'blob', timeout: timeoutMs })
     const blob = res.data as Blob
     if (!blob || !blob.size) return null
+    return blob
+  } catch {
+    return null
+  }
+}
+
+async function fetchAuthedPathAsDataUrl(path: string, timeoutMs: number): Promise<string | null> {
+  const blob = await fetchAuthedPathAsBlob(path, timeoutMs)
+  if (!blob) return null
+  try {
     return await blobToDataUrl(blob)
   } catch {
     return null
@@ -157,5 +168,71 @@ export async function inlineImagesInHtml(
     html: '<!DOCTYPE html>\n' + doc.documentElement.outerHTML,
     inlined,
     skipped,
+  }
+}
+
+// ---------------- 附件(zip 导出附带) ----------------
+
+/** 附件地址的获取计划(纯函数, 安全分类的唯一入口)。 */
+export type AttachmentSrcPlan =
+  | { kind: 'sign'; path: string }
+  | { kind: 'path'; path: string }
+  | { kind: 'remote'; url: string }
+  | { kind: 'skip' }
+
+/**
+ * 分类附件地址:
+ * - 非附件地址(data: 协议连图片都排除的口径一致, blob: 会话内有效但无法归档) → skip;
+ * - 同源本地 `/api/upload/attachments/...` → sign(换新签名后带 token 拉取, 丢弃旧签名查询);
+ * - 同源其它路径 → path(唯一允许带 token 的 http.get 分支, 复用 resolveSameOriginPath 防 token 外泄);
+ * - 跨域 http(s)(如 MinIO 直链) → remote(无凭据 fetch, 可能被 CORS 拒绝);
+ * - 其余 → skip。
+ */
+export function classifyAttachmentSrc(raw: string, origin = window.location.origin): AttachmentSrcPlan {
+  const src = String(raw || '').trim()
+  if (!src || isDataUrl(src) || isBlobUrl(src)) return { kind: 'skip' }
+  if (!parseAttachmentUrl(src)) return { kind: 'skip' }
+  let u: URL
+  try {
+    u = new URL(src, origin)
+  } catch {
+    return { kind: 'skip' }
+  }
+  if (u.origin === origin) {
+    const bare = stripBase(u.pathname)
+    if (bare.startsWith(ATTACHMENT_PREFIX)) return { kind: 'sign', path: bare }
+    const path = resolveSameOriginPath(u.pathname, origin)
+    return path ? { kind: 'path', path } : { kind: 'skip' }
+  }
+  if (u.protocol === 'http:' || u.protocol === 'https:') return { kind: 'remote', url: u.href }
+  return { kind: 'skip' }
+}
+
+/** 单个附件 → Blob(复用导出图片的签名/同源鉴权/跨域无凭据规则);失败返回 null, 不抛异常。 */
+export async function fetchAttachmentBlob(src: string, timeoutMs = 30000): Promise<Blob | null> {
+  const plan = classifyAttachmentSrc(src)
+  if (plan.kind === 'skip') return null
+  if (plan.kind === 'remote') {
+    try {
+      const resp = await fetch(plan.url, { mode: 'cors', credentials: 'omit' })
+      if (!resp.ok) return null
+      const blob = await resp.blob()
+      return blob.size ? blob : null
+    } catch {
+      return null
+    }
+  }
+  if (plan.kind === 'path') return fetchAuthedPathAsBlob(plan.path, timeoutMs)
+  // sign: 经签名接口换签名;后端返回的地址必须再次同源校验, 不合格直接跳过
+  try {
+    const res = await http.post<{ urls: string[] }>(
+      SIGN_ENDPOINT, { urls: [plan.path] }, { timeout: timeoutMs },
+    )
+    const signed = res.data?.urls?.[0]
+    const path = signed ? resolveSameOriginPath(signed) : null
+    if (!path) return null
+    return await fetchAuthedPathAsBlob(path, timeoutMs)
+  } catch {
+    return null
   }
 }

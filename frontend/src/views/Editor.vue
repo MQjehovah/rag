@@ -792,6 +792,9 @@
         <div class="zip-progress-bar"><div class="zip-progress-fill" :style="{ width: zipPercent + '%' }"></div></div>
         <div class="zip-progress-text">
           {{ zipExport.done }}/{{ zipExport.total }} 页<template v-if="zipExport.failed">（失败 {{ zipExport.failed }}）</template>
+          <template v-if="zipExport.attachTotal">
+            · 附件 {{ zipExport.attachDone }}/{{ zipExport.attachTotal }}<template v-if="zipExport.attachFailed">（失败 {{ zipExport.attachFailed }}）</template>
+          </template>
         </div>
       </div>
     </div>
@@ -815,10 +818,11 @@ import { diffLines, diffStats } from '../utils/diff'
 import { loadDraft, saveDraft, clearDraft, shouldOfferDraft } from '../utils/draft'
 import { extractTemplateVariables, renderTemplateContent } from '../utils/templateVars'
 import {
-  ARCHIVE_ERRORS_FILE, buildArchiveEntries, mapLimit, renderArchivePage, sanitizeFileSegment,
-  type ArchiveTreePage,
+  ARCHIVE_ERRORS_FILE, buildArchiveAttachments, buildArchiveEntries, extractAttachmentRefs,
+  mapLimit, renderArchivePage, rewriteAttachmentLinks, sanitizeFileSegment,
+  type ArchiveTreePage, type AttachmentRef,
 } from '../utils/pageArchive'
-import { inlineImagesInHtml } from '../utils/exportAssets'
+import { fetchAttachmentBlob, inlineImagesInHtml } from '../utils/exportAssets'
 import { extractHeadings } from '../utils/wikiAnchors'
 import { asBlob as htmlToDocxBlob } from 'html-docx-js-typescript'
 import JSZip from 'jszip'
@@ -2335,9 +2339,18 @@ const deleteTemplate = async (id: string) => {
 }
 
 // ---------------- 整本笔记本导出(zip) ----------------
-const zipExport = reactive({ running: false, notebook: '', done: 0, total: 0, failed: 0 })
+const zipExport = reactive({
+  running: false, notebook: '', done: 0, total: 0, failed: 0,
+  attachDone: 0, attachTotal: 0, attachFailed: 0,
+})
 const zipPercent = computed(() =>
   zipExport.total ? Math.round((zipExport.done / zipExport.total) * 100) : 0)
+
+interface ZipPageContent {
+  title?: string
+  content: string
+  updated_at?: string
+}
 
 const exportNotebookZip = async (nb: Notebook) => {
   if (zipExport.running) return
@@ -2346,6 +2359,9 @@ const exportNotebookZip = async (nb: Notebook) => {
   zipExport.done = 0
   zipExport.total = 0
   zipExport.failed = 0
+  zipExport.attachDone = 0
+  zipExport.attachTotal = 0
+  zipExport.attachFailed = 0
   try {
     const res = await http.get('/api/pages/tree', { params: { notebook_id: nb.id } })
     const pages: ArchiveTreePage[] = res.data.items || []
@@ -2354,15 +2370,19 @@ const exportNotebookZip = async (nb: Notebook) => {
     const paths = buildArchiveEntries(pages)
     const zip = new JSZip()
     const errors: string[] = []
+    const contents = new Map<string, ZipPageContent>()
+    const attachmentRefs: AttachmentRef[] = []
     await mapLimit(pages, 4, async (page) => {
       const path = paths.get(page.id) || `${sanitizeFileSegment(page.title || '无标题')}.md`
       try {
         const detail = (await http.get(`/api/pages/${page.id}`)).data
-        zip.file(path, renderArchivePage({
+        const content = String(detail.content || '')
+        contents.set(page.id, {
           title: detail.title || page.title,
-          content: detail.content,
+          content,
           updated_at: detail.updated_at || page.updated_at,
-        }))
+        })
+        attachmentRefs.push(...extractAttachmentRefs(content))
       } catch (e: any) {
         // 单页失败跳过(不阻断整本导出), 汇总写入 _errors.txt
         zipExport.failed++
@@ -2372,13 +2392,58 @@ const exportNotebookZip = async (nb: Notebook) => {
         zipExport.done++
       }
     })
-    if (errors.length) {
-      zip.file(ARCHIVE_ERRORS_FILE, `导出失败 ${errors.length} 页：\n${errors.join('\n')}\n`)
+
+    // 附件: 全部页面引用去重后并发 ≤4 拉取(同源走签名/带 token, 跨域无凭据), 失败不阻断
+    const attachments = buildArchiveAttachments(attachmentRefs)
+    const attachmentErrors: string[] = []
+    if (attachments.length) {
+      zipExport.attachTotal = attachments.length
+      await mapLimit(attachments, 4, async (att) => {
+        try {
+          const blob = await fetchAttachmentBlob(att.url)
+          if (blob) {
+            zip.file(att.path, blob)
+          } else {
+            zipExport.attachFailed++
+            attachmentErrors.push(`${att.path}\t下载失败或来源不可访问`)
+          }
+        } catch (e: any) {
+          zipExport.attachFailed++
+          attachmentErrors.push(`${att.path}\t${e?.message || '下载失败'}`)
+        } finally {
+          zipExport.attachDone++
+        }
+      })
+    }
+
+    // 页面 Markdown: frontmatter + 附件引用改写为相对路径 attachments/<file>
+    for (const page of pages) {
+      const detail = contents.get(page.id)
+      if (!detail) continue
+      const path = paths.get(page.id) || `${sanitizeFileSegment(page.title || '无标题')}.md`
+      zip.file(path, renderArchivePage({
+        title: detail.title,
+        content: rewriteAttachmentLinks(detail.content, attachments),
+        updated_at: detail.updated_at,
+      }))
+    }
+    if (errors.length || attachmentErrors.length) {
+      const sections: string[] = []
+      if (errors.length) sections.push(`导出失败 ${errors.length} 页：\n${errors.join('\n')}`)
+      if (attachmentErrors.length) {
+        sections.push(`附件失败 ${attachmentErrors.length} 个（正文引用保留原地址）：\n${attachmentErrors.join('\n')}`)
+      }
+      zip.file(ARCHIVE_ERRORS_FILE, sections.join('\n\n') + '\n')
     }
     const blob = await zip.generateAsync({ type: 'blob' })
     downloadBlob(blob, `${safeFilename(nb.name)}.zip`)
-    if (errors.length) ElMessage.warning(`导出完成：${errors.length} 页失败，详见 ${ARCHIVE_ERRORS_FILE}`)
-    else ElMessage.success(`已导出「${nb.name}」共 ${pages.length} 页`)
+    if (errors.length || attachmentErrors.length) {
+      const attHint = attachmentErrors.length ? `，附件失败 ${attachmentErrors.length} 个` : ''
+      ElMessage.warning(`导出完成：${errors.length} 页失败${attHint}，详见 ${ARCHIVE_ERRORS_FILE}`)
+    } else {
+      const attHint = attachments.length ? `，附件 ${attachments.length} 个` : ''
+      ElMessage.success(`已导出「${nb.name}」共 ${pages.length} 页${attHint}`)
+    }
   } catch (e: any) {
     ElMessage.error(e?.response?.data?.detail || '导出失败')
   } finally {
