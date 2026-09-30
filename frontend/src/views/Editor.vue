@@ -445,6 +445,7 @@
               @collab-unavailable="handleCollabUnavailable"
               @wiki-link="onWikiLink"
               @citation-open="onCitationOpen"
+              @global-search-locate="onGlobalSearchLocate"
             />
           </div>
           <div class="editor-footer">
@@ -798,7 +799,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from 'vue'
+import { ref, reactive, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElNotification, ElMessageBox } from 'element-plus'
 import type { UploadFile as ElUploadFile } from 'element-plus'
@@ -983,6 +984,7 @@ const editorRef = ref<{
   applyExternalContent?: (markdown: string) => void
   prepareForPrint?: () => void
   finishPrint?: () => void
+  findQuery?: (query: string) => void
 } | null>(null)
 const applyContentToEditor = (markdown: string) => {
   editorRef.value?.applyExternalContent?.(markdown || '')
@@ -1473,6 +1475,22 @@ const onCitationOpen = (payload: { id: string; kind: string }) => {
     return
   }
   void openPageById(payload.id)
+}
+
+/** 全库搜索结果定位: 当前页直接开查找条; 跨页打开后等编辑器就绪再填词定位 */
+const onGlobalSearchLocate = async (payload: { pageId: string; query: string }) => {
+  if (!payload?.pageId) return
+  if (currentPage.value?.id !== payload.pageId) {
+    await openPageById(payload.pageId)
+    await nextTick()
+  }
+  // 编辑器实例可能尚未挂载/挂载中: 有限重试, 失败则放弃定位(页面已打开)
+  const tryFocusFind = (attempts = 0) => {
+    const fn = editorRef.value?.findQuery
+    if (fn) { fn(payload.query); return }
+    if (attempts < 10) window.setTimeout(() => tryFocusFind(attempts + 1), 150)
+  }
+  tryFocusFind()
 }
 
 /** 切换页面时重置保存状态与在线列表(避免上一页状态残留)。 */

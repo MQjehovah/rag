@@ -57,6 +57,7 @@
       <span class="divider"></span>
 
       <button class="tb-btn" @click="openFind" :class="{ 'is-active': find.open }" title="查找/替换 (Ctrl+F)"><Search :size="16" /></button>
+      <button class="tb-btn" @click="openGlobalSearch" title="全库搜索"><FileSearch :size="16" /></button>
 
       <span class="divider"></span>
 
@@ -103,11 +104,31 @@
           ref="findInputEl"
           v-model="find.query"
           class="find-input"
+          :class="{ 'is-invalid': !!findError }"
+          :title="findError || '查找'"
           placeholder="查找"
           @input="onFindInput"
           @keydown.enter.exact.prevent="nextMatch"
           @keydown.shift.enter.prevent="prevMatch"
         />
+        <button
+          class="find-toggle"
+          :class="{ 'is-on': find.caseSensitive }"
+          :title="'区分大小写：' + (find.caseSensitive ? '开' : '关')"
+          @click="toggleFindOption('caseSensitive')"
+        >Aa</button>
+        <button
+          class="find-toggle"
+          :class="{ 'is-on': find.wholeWord }"
+          :title="'全词匹配：' + (find.wholeWord ? '开（中文按子串）' : '关')"
+          @click="toggleFindOption('wholeWord')"
+        ><WholeWord :size="14" /></button>
+        <button
+          class="find-toggle find-toggle-regex"
+          :class="{ 'is-on': find.regex }"
+          :title="'正则表达式：' + (find.regex ? '开' : '关')"
+          @click="toggleFindOption('regex')"
+        >.*</button>
         <input
           v-model="find.replacement"
           class="find-input"
@@ -115,10 +136,10 @@
           @keydown.enter.prevent="replaceCurrent"
         />
         <span v-if="findCountText" class="find-count">{{ findCountText }}</span>
-        <button class="find-btn" :disabled="!find.matches.length" title="上一个 (Shift+Enter)" @click="prevMatch"><ChevronUp :size="15" /></button>
-        <button class="find-btn" :disabled="!find.matches.length" title="下一个 (Enter)" @click="nextMatch"><ChevronDown :size="15" /></button>
-        <button class="find-btn" :disabled="!find.query.trim() || !find.matches.length" @click="replaceCurrent">替换</button>
-        <button class="find-btn" :disabled="!find.query.trim() || !find.matches.length" @click="replaceAll">全部替换</button>
+        <button class="find-btn" :disabled="!!findError || !find.matches.length" title="上一个 (Shift+Enter)" @click="prevMatch"><ChevronUp :size="15" /></button>
+        <button class="find-btn" :disabled="!!findError || !find.matches.length" title="下一个 (Enter)" @click="nextMatch"><ChevronDown :size="15" /></button>
+        <button class="find-btn" :disabled="!!findError || !find.query.trim() || !find.matches.length" @click="replaceCurrent">替换</button>
+        <button class="find-btn" :disabled="!!findError || !find.query.trim() || !find.matches.length" @click="replaceAll">全部替换</button>
         <button class="find-btn" title="关闭 (Esc)" @click="closeFind"><X :size="15" /></button>
       </div>
     </div>
@@ -426,6 +447,35 @@
         </button>
       </div>
     </el-dialog>
+
+    <!-- 全库搜索 → 打开结果页并定位关键词 -->
+    <el-dialog v-model="globalSearch.open" title="全库搜索" width="640px" append-to-body>
+      <div class="kb-search-bar">
+        <el-input
+          ref="globalSearchInputEl"
+          v-model="globalSearch.query"
+          placeholder="搜索全库笔记与知识库，回车检索；点击结果跳转并定位"
+          clearable
+          @keyup.enter="runGlobalSearch"
+        />
+        <el-button type="primary" :loading="globalSearch.loading" @click="runGlobalSearch">检索</el-button>
+      </div>
+      <div v-loading="globalSearch.loading" class="kb-result-list">
+        <div v-if="globalSearch.error" class="kb-hint kb-hint-error">{{ globalSearch.error }}</div>
+        <div v-else-if="globalSearch.searched && !globalSearch.results.length" class="kb-hint">未找到相关内容</div>
+        <button v-for="r in globalSearch.results" :key="r.id" class="kb-result" @click="openGlobalResult(r)">
+          <span class="kb-result-icon">{{ r.icon }}</span>
+          <span class="kb-result-main">
+            <span class="kb-result-title">{{ r.title }}</span>
+            <span class="kb-result-snippet">{{ r.snippet || '（无摘要）' }}</span>
+          </span>
+          <span class="kb-result-meta">
+            <span class="kb-result-source">{{ r.label }}</span>
+            <span class="kb-result-score">{{ r.score.toFixed(2) }}</span>
+          </span>
+        </button>
+      </div>
+    </el-dialog>
   </div>
 </template>
 
@@ -495,7 +545,7 @@ import CollaborationCursor from '@tiptap/extension-collaboration-cursor'
 import mermaid from 'mermaid'
 import MarkdownIt from 'markdown-it'
 import http from '../api/http'
-import { findMatchesInDoc, type FindMatch } from '../utils/findReplace'
+import { findMatchesInDoc, findQueryError, type FindMatch, type FindOptions } from '../utils/findReplace'
 import { sanitizePastedHTML } from '../utils/sanitizePaste'
 import { nextFootnoteLabel } from '../utils/markdownFootnotes'
 import { serializeTextMarkdown } from '../utils/markdownText'
@@ -517,7 +567,7 @@ import {
   Image as ImageIcon, Table as TableIcon, Workflow, Undo2, Redo2, Plus, Trash2, Copy,
   ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Pilcrow, GripVertical, Heading1, Heading2, Heading3, Eraser,
   Settings2, Keyboard, FileText, BetweenHorizontalEnd, Search, ChevronUp, ChevronDown, X, Sparkles, Paperclip,
-  Combine, Split, IndentIncrease, IndentDecrease, WandSparkles, Library,
+  Combine, Split, IndentIncrease, IndentDecrease, WandSparkles, Library, FileSearch, WholeWord,
 } from 'lucide-vue-next'
 
 const uploadAndInsert = (view: any, file: File) => {
@@ -657,6 +707,7 @@ const emit = defineEmits<{
   (e: 'collab-unavailable'): void
   (e: 'wiki-link', payload: { pageId: string; title: string; anchor: string }): void
   (e: 'citation-open', payload: { id: string; kind: 'note' | 'wiki' }): void
+  (e: 'global-search-locate', payload: { pageId: string; query: string }): void
 }>()
 
 let lastEmitted = props.modelValue
@@ -980,7 +1031,7 @@ function applyExternalContentNow(markdown: string) {
   nextTick(() => { scheduleMermaid(); disableSpellcheck() })
 }
 
-defineExpose({ applyExternalContent, prepareForPrint, finishPrint })
+defineExpose({ applyExternalContent, prepareForPrint, finishPrint, findQuery })
 
 /**
  * 打印/导出 PDF 兜底(Editor.vue 的 beforeprint 调用):
@@ -1601,9 +1652,21 @@ const find = reactive({
   replacement: '',
   matches: [] as FindMatch[],
   current: 0,
+  caseSensitive: false,
+  wholeWord: false,
+  regex: false,
 })
 
 const findInputEl = ref<HTMLInputElement>()
+
+const findOptions = computed<FindOptions>(() => ({
+  caseSensitive: find.caseSensitive,
+  wholeWord: find.wholeWord,
+  regex: find.regex,
+}))
+
+/** 非法正则即时提示(输入框红边 + 禁用查找/替换) */
+const findError = computed(() => findQueryError(find.query, findOptions.value))
 
 const findKey = new PluginKey('ragFindReplace')
 
@@ -1611,7 +1674,7 @@ const findPlugin = new Plugin({
   key: findKey,
   props: {
     decorations(state) {
-      if (!find.open || !find.query.trim()) return null
+      if (!find.open || !find.query.trim() || findError.value) return null
       const decos: Decoration[] = []
       find.matches.forEach((m, i) => {
         decos.push(Decoration.inline(m.from, m.to, {
@@ -1625,6 +1688,7 @@ const findPlugin = new Plugin({
 
 const findCountText = computed(() => {
   if (!find.query.trim()) return ''
+  if (findError.value) return '正则无效'
   if (!find.matches.length) return '无结果'
   return `第 ${find.current + 1}/${find.matches.length} 个`
 })
@@ -1632,7 +1696,7 @@ const findCountText = computed(() => {
 function collectFindMatches(): FindMatch[] {
   const e = editor.value
   if (!e) return []
-  return findMatchesInDoc(e.state.doc, find.query)
+  return findMatchesInDoc(e.state.doc, find.query, findOptions.value)
 }
 
 function redrawFind() {
@@ -1654,7 +1718,7 @@ function scrollToFindMatch() {
 }
 
 function refreshFind(resetIndex = false) {
-  find.matches = collectFindMatches()
+  find.matches = findError.value ? [] : collectFindMatches()
   if (resetIndex) find.current = 0
   if (find.matches.length === 0) find.current = 0
   else if (find.current >= find.matches.length) find.current = find.matches.length - 1
@@ -1672,23 +1736,86 @@ function openFind() {
 
 function closeFind() {
   find.open = false
+  stopLocateRetry()
   redrawFind()
 }
 
 function onFindInput() {
+  stopLocateRetry()
   refreshFind(true)
   scrollToFindMatch()
 }
 
+/** 切换 大小写敏感/全词/正则 选项后立即重算命中。 */
+function toggleFindOption(key: 'caseSensitive' | 'wholeWord' | 'regex') {
+  find[key] = !find[key]
+  refreshFind(true)
+  if (find.matches.length) scrollToFindMatch()
+}
+
+// ---------------- 跨页搜索定位: 打开查找条并等待内容就绪后选中首个命中 ----------------
+/** 内容异步加载(尤其协同播种)时轮询重算的间隔与上限 */
+const LOCATE_INTERVAL_MS = 200
+const LOCATE_MAX_ATTEMPTS = 25
+
+let locateTimer: number | null = null
+let pendingFindQuery: string | null = null
+
+function stopLocateRetry() {
+  if (locateTimer !== null) {
+    clearTimeout(locateTimer)
+    locateTimer = null
+  }
+}
+
+function startLocateRetry() {
+  stopLocateRetry()
+  let attempts = 0
+  const tick = () => {
+    locateTimer = null
+    if (!find.open || findError.value || !find.query.trim()) return
+    if (find.matches.length) {
+      scrollToFindMatch()
+      return
+    }
+    if (++attempts >= LOCATE_MAX_ATTEMPTS) return
+    refreshFind()
+    locateTimer = window.setTimeout(tick, LOCATE_INTERVAL_MS)
+  }
+  locateTimer = window.setTimeout(tick, LOCATE_INTERVAL_MS)
+}
+
+/**
+ * 外部(全库搜索/跨页定位)打开查找条并填入关键词:
+ * 编辑器尚未创建时挂起, onCreate 后执行; 内容未就绪时轮询重算(最多约 5s)。
+ */
+function findQuery(query: string) {
+  const q = String(query || '')
+  if (!q.trim()) return
+  if (!editor.value) {
+    pendingFindQuery = q
+    return
+  }
+  find.open = true
+  find.query = q
+  refreshFind(true)
+  if (find.matches.length) scrollToFindMatch()
+  else startLocateRetry()
+  nextTick(() => {
+    findInputEl.value?.focus()
+    findInputEl.value?.select()
+  })
+}
+
 function nextMatch() {
-  if (!find.matches.length) return
+  if (findError.value || !find.matches.length) return
   find.current = (find.current + 1) % find.matches.length
   redrawFind()
   scrollToFindMatch()
 }
 
 function prevMatch() {
-  if (!find.matches.length) return
+  if (findError.value || !find.matches.length) return
   find.current = (find.current - 1 + find.matches.length) % find.matches.length
   redrawFind()
   scrollToFindMatch()
@@ -1697,7 +1824,7 @@ function prevMatch() {
 function replaceCurrent() {
   const e = editor.value
   const m = find.matches[find.current]
-  if (!e || !m) return
+  if (!e || !m || findError.value) return
   const chain = e.chain()
   if (find.replacement) {
     chain.insertContentAt({ from: m.from, to: m.to }, { type: 'text', text: find.replacement })
@@ -1711,7 +1838,7 @@ function replaceCurrent() {
 
 function replaceAll() {
   const e = editor.value
-  if (!e || !find.matches.length) return
+  if (!e || !find.matches.length || findError.value) return
   const chain = e.chain()
   // 从后往前替换, 单条链单事务, undo 一步可回退
   for (let i = find.matches.length - 1; i >= 0; i--) {
@@ -1727,7 +1854,7 @@ function replaceAll() {
   refreshFind()
 }
 
-// ---------------- 知识库检索(引用卡片) ----------------
+// ---------------- 知识库检索(引用卡片) / 全库搜索 ----------------
 interface SearchHit {
   id: string
   kind: 'note' | 'wiki'
@@ -1809,6 +1936,52 @@ function insertCitation(hit: SearchHit) {
   citationPicker.open = false
   ElMessage.success(`已插入引用：${hit.title}`)
 }
+
+const globalSearch = reactive({
+  open: false,
+  query: '',
+  loading: false,
+  error: '',
+  searched: false,
+  results: [] as SearchHit[],
+})
+const globalSearchInputEl = ref<any>()
+
+function openGlobalSearch() {
+  globalSearch.open = true
+  nextTick(() => globalSearchInputEl.value?.focus?.())
+}
+
+async function runGlobalSearch() {
+  const q = globalSearch.query.trim()
+  if (!q || globalSearch.loading) return
+  globalSearch.loading = true
+  globalSearch.error = ''
+  try {
+    globalSearch.results = await runApiSearch(q, 20)
+    globalSearch.searched = true
+  } catch (err: any) {
+    globalSearch.results = []
+    globalSearch.searched = true
+    globalSearch.error = searchErrorMessage(err)
+  } finally {
+    globalSearch.loading = false
+  }
+}
+
+/**
+ * 点击全库搜索结果: 知识库 → 父级路由跳转 Wiki;
+ * 笔记 → 通知父级打开页面并定位关键词(当前页由父级直接开查找条)。
+ */
+function openGlobalResult(hit: SearchHit) {
+  globalSearch.open = false
+  if (hit.kind === 'wiki') {
+    emit('citation-open', { id: hit.id, kind: 'wiki' })
+    return
+  }
+  emit('global-search-locate', { pageId: hit.id, query: globalSearch.query.trim() })
+}
+
 
 // ---------------- AI 编辑 ----------------
 const API_BASE = (import.meta.env.BASE_URL || '/').replace(/\/$/, '')
@@ -2415,6 +2588,11 @@ const editor = useEditor({
     nextTick(() => { scheduleMermaid(); disableSpellcheck() })
   },
   onCreate: () => {
+    if (pendingFindQuery !== null) {
+      const q = pendingFindQuery
+      pendingFindQuery = null
+      nextTick(() => findQuery(q))
+    }
     nextTick(() => { scheduleMermaid(); disableSpellcheck() })
   },
   onBlur: () => {
@@ -3387,6 +3565,7 @@ onBeforeUnmount(() => {
   window.visualViewport?.removeEventListener('resize', onViewportResize)
   window.visualViewport?.removeEventListener('scroll', onViewportResize)
   cancelLongPress()
+  stopLocateRetry()
   if (mermaidTimer) {
     clearTimeout(mermaidTimer)
     mermaidTimer = null
@@ -4020,6 +4199,35 @@ onBeforeUnmount(() => {
 .find-btn:hover:not(:disabled) { background: var(--surface-hover); color: var(--text); }
 .find-btn:disabled { opacity: 0.45; cursor: default; }
 
+/* 查找选项: Aa 大小写 / W 全词 / .* 正则 */
+.find-toggle {
+  flex: 0 0 auto;
+  height: 28px;
+  min-width: 28px;
+  padding: 0 6px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  border-radius: var(--radius);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+
+.find-toggle:hover { background: var(--surface-hover); color: var(--text); }
+.find-toggle.is-on { background: var(--primary-weak); border-color: var(--primary); color: var(--primary); }
+.find-toggle-regex { font-size: 11px; letter-spacing: -0.5px; }
+
+/* 非法正则: 红边提示 */
+.find-input.is-invalid {
+  border-color: var(--danger);
+  box-shadow: 0 0 0 2px rgba(220, 38, 38, 0.12);
+}
+
 /* AI 行内补全 ghost: 半透明建议(本体为 ProseMirror 本地装饰, 不写入文档) */
 .editor-content :deep(.ai-ghost) {
   color: #9ca3af;
@@ -4104,6 +4312,7 @@ html.dark .editor-content :deep(.find-hit-current) {
   .tb-select { height: 40px; }
   .find-btn { min-height: 36px; }
   .find-input { height: 36px; }
+  .find-toggle { min-height: 36px; min-width: 36px; }
 }
 
 /* 窄屏: 查找条不溢出 */
