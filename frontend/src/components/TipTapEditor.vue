@@ -97,7 +97,7 @@
           placeholder="替换为"
           @keydown.enter.prevent="replaceCurrent"
         />
-        <span class="find-count">{{ findCountText }}</span>
+        <span v-if="findCountText" class="find-count">{{ findCountText }}</span>
         <button class="find-btn" :disabled="!find.matches.length" title="上一个 (Shift+Enter)" @click="prevMatch"><ChevronUp :size="15" /></button>
         <button class="find-btn" :disabled="!find.matches.length" title="下一个 (Enter)" @click="nextMatch"><ChevronDown :size="15" /></button>
         <button class="find-btn" :disabled="!find.query.trim() || !find.matches.length" @click="replaceCurrent">替换</button>
@@ -3170,6 +3170,9 @@ onBeforeUnmount(() => {
   pointer-events: auto;
   display: flex;
   align-items: center;
+  flex: 0 0 auto;
+  width: max-content;
+  max-width: min(100%, calc(100vw - 24px));
   gap: 6px;
   margin-top: 6px;
   padding: 6px 10px;
@@ -3180,6 +3183,7 @@ onBeforeUnmount(() => {
 }
 
 .find-input {
+  flex: 0 0 auto;
   width: 132px;
   height: 28px;
   padding: 4px 10px;
@@ -3200,7 +3204,7 @@ onBeforeUnmount(() => {
 }
 
 .find-count {
-  min-width: 64px;
+  flex: 0 0 auto;
   text-align: center;
   font-size: 12px;
   color: var(--text-3);
@@ -3208,6 +3212,7 @@ onBeforeUnmount(() => {
 }
 
 .find-btn {
+  flex: 0 0 auto;
   height: 28px;
   padding: 0 10px;
   border: 1px solid var(--border-strong);
