@@ -159,9 +159,6 @@
           </el-select>
           <div class="field-hint">留空 = 默认空间；产物按知识结构生成在该空间内（层级由 LLM 按管道指令决定）。</div>
         </el-form-item>
-        <el-form-item label="产出分类">
-          <el-input v-model="form.target_category" placeholder="可选：写入知识库的分类标签，如：接口文档" />
-        </el-form-item>
         <el-form-item label="自动编译">
           <el-switch v-model="form.auto_trigger" />
           <span class="field-hint inline">笔记变更时自动逐条编译（按笔记限流）</span>
@@ -253,7 +250,6 @@ interface Pipeline {
   compile_rules: string
   compile_template: string
   model: string
-  target_category: string
   target_space_id?: string | null
   auto_trigger: boolean
   incremental: boolean
@@ -281,7 +277,6 @@ const form = reactive({
   compiler_kind: 'wiki',
   template_id: '' as string | null,
   model: '',
-  target_category: '',
   target_space_id: '' as string | null,
   auto_trigger: false,
   incremental: true,
@@ -409,7 +404,6 @@ function openCreate() {
     compiler_kind: 'wiki',
     template_id: '',
     model: '',
-    target_category: '',
     target_space_id: '',
     auto_trigger: false,
     incremental: true,
@@ -427,7 +421,6 @@ function openEdit(p: Pipeline) {
     compiler_kind: p.compiler_kind,
     template_id: p.template_id || '',
     model: p.model,
-    target_category: p.target_category,
     target_space_id: p.target_space_id || '',
     auto_trigger: p.auto_trigger,
     incremental: p.incremental,
