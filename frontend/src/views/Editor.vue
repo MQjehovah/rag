@@ -139,7 +139,7 @@
               <span class="notebook-icon">{{ nb.icon || '📁' }}</span>
               <span class="notebook-name">{{ nb.name }}</span>
               <el-dropdown trigger="click" @command="(cmd: string) => handleNotebookCmd(cmd, nb)">
-                <el-button size="small" text>⋮</el-button>
+                <el-button size="small" text @click.stop>⋮</el-button>
                 <template #dropdown>
                   <el-dropdown-menu>
                     <el-dropdown-item command="newPage">新建笔记</el-dropdown-item>
@@ -164,13 +164,14 @@
                   'drop-inside': dropTarget?.id === row.page.id && dropTarget.zone === 'inside',
                 }"
                 :style="{ paddingLeft: (8 + row.depth * 16) + 'px' }"
+                @click="selectPage(row.page)"
                 draggable="true"
                 @dragstart="onPageDragStart(row.page, $event)"
                 @dragover="onPageDragOver(row.page, $event)"
                 @drop.stop="onPageDrop(row.page, $event)"
                 @dragend="onPageDragEnd"
               >
-                <div class="page-info" @click="selectPage(row.page)">
+                <div class="page-info">
                   <span
                     v-if="row.hasChildren"
                     class="page-chevron"
@@ -182,7 +183,7 @@
                   <span class="page-title">{{ row.page.title || '无标题' }}</span>
                 </div>
                 <el-dropdown trigger="click" @command="(cmd: string) => handlePageCmd(cmd, row.page)">
-                  <el-button size="small" text class="page-menu-btn">⋮</el-button>
+                  <el-button size="small" text class="page-menu-btn" @click.stop>⋮</el-button>
                   <template #dropdown>
                     <el-dropdown-menu>
                       <el-dropdown-item command="child">新建子页面</el-dropdown-item>
