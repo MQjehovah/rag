@@ -19,19 +19,27 @@ logger = logging.getLogger(__name__)
 
 
 def resolve_rule(db, pipeline: Pipeline) -> Dict[str, str]:
-    """解析管道的有效编译规则: 管道字段优先, 其次所选模板, 最后内置默认。"""
-    kind = pipeline.compiler_kind or "wiki"
-    prompt = pipeline.prompt_template or ""
-    rules = pipeline.compile_rules or ""
-    template = pipeline.compile_template or ""
+    """解析管道的有效编译规则: 模板优先(模板即编译方式), 无模板时用管道内联字段
+    (兼容旧数据); 空项由编译步按 kind 以内置默认兜底。
+
+    说明: 管道 UI 已不再选择编译方式, kind 由所选模板决定; 无模板时沿用管道
+    自身字段(历史数据), 再回退内置默认。
+    """
     if pipeline.template_id:
         t = db.query(CompileTemplate).filter(CompileTemplate.id == pipeline.template_id).first()
         if t is not None:
-            kind = t.compiler_kind or kind
-            prompt = prompt or (t.prompt or "")
-            rules = rules or (t.rules or "")
-            template = template or (t.template or "")
-    return {"kind": kind, "prompt": prompt, "rules": rules, "template": template}
+            return {
+                "kind": t.compiler_kind or "wiki",
+                "prompt": t.prompt or "",
+                "rules": t.rules or "",
+                "template": t.template or "",
+            }
+    return {
+        "kind": pipeline.compiler_kind or "wiki",
+        "prompt": pipeline.prompt_template or "",
+        "rules": pipeline.compile_rules or "",
+        "template": pipeline.compile_template or "",
+    }
 
 # 每个目标空间一把进程内锁, 序列化页面读写(后端单进程)
 _space_locks: Dict[str, asyncio.Lock] = {}

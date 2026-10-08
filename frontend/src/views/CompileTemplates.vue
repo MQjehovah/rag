@@ -32,11 +32,6 @@
             <div v-if="row.description" class="cell-sub">{{ row.description }}</div>
           </template>
         </el-table-column>
-        <el-table-column label="编译方式" width="130">
-          <template #default="{ row }">
-            <span class="kind">{{ KIND_LABELS[row.compiler_kind] || row.compiler_kind }}</span>
-          </template>
-        </el-table-column>
         <el-table-column label="规则构成" min-width="260">
           <template #default="{ row }">
             <div class="seg">
@@ -70,7 +65,6 @@
     <el-drawer v-model="viewDrawer" :title="viewing?.name" size="560px">
       <div v-if="viewing" class="view">
         <div class="view-meta">
-          <span class="kind">{{ KIND_LABELS[viewing.compiler_kind] || viewing.compiler_kind }}</span>
           <span v-if="viewing.description" class="view-desc">{{ viewing.description }}</span>
         </div>
         <div class="seg-block">
@@ -96,11 +90,6 @@
       <el-form label-width="100px">
         <el-form-item label="名称">
           <el-input v-model="form.name" placeholder="如：产品知识库（按产品分根页）" />
-        </el-form-item>
-        <el-form-item label="编译方式">
-          <el-select v-model="form.compiler_kind" style="width: 100%">
-            <el-option v-for="(label, key) in KIND_LABELS" :key="key" :label="label" :value="key" />
-          </el-select>
         </el-form-item>
         <el-form-item label="说明">
           <el-input v-model="form.description" placeholder="可选" />
@@ -138,14 +127,6 @@ interface Tpl {
   prompt: string
   rules: string
   template: string
-}
-
-const KIND_LABELS: Record<string, string> = {
-  wiki: '知识蒸馏',
-  api_doc: '接口文档',
-  markdown: '文档合集',
-  changelog: '变更记录',
-  custom: '自定义'
 }
 
 const templates = ref<Tpl[]>([])

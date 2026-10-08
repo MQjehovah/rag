@@ -42,10 +42,10 @@
           </template>
         </el-table-column>
 
-        <el-table-column label="编译方式" min-width="170">
+        <el-table-column label="编译模板" min-width="170">
           <template #default="{ row }">
-            <div class="cell-title">{{ KIND_LABELS[row.compiler_kind] || row.compiler_kind }}</div>
-            <div v-if="row.template_id" class="cell-sub">模板：{{ templateName(row.template_id) || '—' }}</div>
+            <div class="cell-title">{{ row.template_id ? (templateName(row.template_id) || '未知模板') : '内置默认' }}</div>
+            <div class="cell-sub">编译方式由模板决定</div>
           </template>
         </el-table-column>
 
@@ -124,11 +124,6 @@
         <el-form-item label="说明">
           <el-input v-model="form.description" placeholder="可选" />
         </el-form-item>
-        <el-form-item label="编译方式">
-          <el-select v-model="form.compiler_kind" style="width: 100%">
-            <el-option v-for="(label, key) in KIND_LABELS" :key="key" :label="label" :value="key" />
-          </el-select>
-        </el-form-item>
         <el-form-item label="编译模板">
           <div class="row-flex">
             <el-select
@@ -142,7 +137,7 @@
             </el-select>
             <el-button @click="router.push('/templates')">管理模板</el-button>
           </div>
-          <div class="field-hint">编译的提示词 / 规则 / 输出模板由所选模板决定；未选择时使用内置默认。</div>
+          <div class="field-hint">编译方式（提示词 / 规则 / 输出模板）由所选模板决定；未选择时使用内置默认。</div>
         </el-form-item>
         <el-form-item label="来源笔记本">
           <el-select
@@ -269,14 +264,6 @@ interface Pipeline {
 
 interface WikiSpaceItem { id: string; name: string; icon: string }
 
-const KIND_LABELS: Record<string, string> = {
-  wiki: '知识蒸馏',
-  api_doc: '接口文档',
-  markdown: '文档合集',
-  changelog: '变更记录',
-  custom: '自定义'
-}
-
 const pipelines = ref<Pipeline[]>([])
 const notebooks = ref<{ id: string; name: string }[]>([])
 const spaces = ref<WikiSpaceItem[]>([])
@@ -321,10 +308,10 @@ const runningCount = computed(() => pipelines.value.filter(p => p.running).lengt
 const filtered = computed(() => {
   const s = q.value.trim().toLowerCase()
   if (!s) return pipelines.value
-  return pipelines.value.filter(p =>
-    p.name.toLowerCase().includes(s) ||
-    (KIND_LABELS[p.compiler_kind] || p.compiler_kind).toLowerCase().includes(s)
-  )
+  return pipelines.value.filter(p => {
+    const tpl = p.template_id ? (templateName(p.template_id) || '未知模板') : '内置默认'
+    return p.name.toLowerCase().includes(s) || tpl.toLowerCase().includes(s)
+  })
 })
 
 function statusLabel(p: Pipeline) {
